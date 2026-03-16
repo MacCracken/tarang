@@ -104,9 +104,9 @@ impl<R: Read + Seek> OggDemuxer<R> {
 
         // Read segment table
         let mut segment_table = vec![0u8; num_segments as usize];
-        self.reader.read_exact(&mut segment_table).map_err(|e| {
-            TarangError::DemuxError(format!("failed to read segment table: {e}"))
-        })?;
+        self.reader
+            .read_exact(&mut segment_table)
+            .map_err(|e| TarangError::DemuxError(format!("failed to read segment table: {e}")))?;
 
         // Read page body (sum of all segment sizes)
         let body_size: usize = segment_table.iter().map(|&s| s as usize).sum();
@@ -157,12 +157,9 @@ impl<R: Read + Seek> OggDemuxer<R> {
         // Vorbis identification header: 0x01 + "vorbis" + version(4) + channels(1) + sample_rate(4)
         if packet.len() >= 30 && packet[0] == 0x01 && &packet[1..7] == b"vorbis" {
             let channels = packet[11] as u16;
-            let sample_rate =
-                u32::from_le_bytes(packet[12..16].try_into().unwrap());
-            let bitrate_max =
-                i32::from_le_bytes(packet[16..20].try_into().unwrap());
-            let bitrate_nominal =
-                i32::from_le_bytes(packet[20..24].try_into().unwrap());
+            let sample_rate = u32::from_le_bytes(packet[12..16].try_into().unwrap());
+            let bitrate_max = i32::from_le_bytes(packet[16..20].try_into().unwrap());
+            let bitrate_nominal = i32::from_le_bytes(packet[20..24].try_into().unwrap());
 
             let bitrate = if bitrate_nominal > 0 {
                 Some(bitrate_nominal as u32)
@@ -188,8 +185,7 @@ impl<R: Read + Seek> OggDemuxer<R> {
             let _version = packet[8];
             let channels = packet[9] as u16;
             let pre_skip = u16::from_le_bytes(packet[10..12].try_into().unwrap()) as u32;
-            let sample_rate =
-                u32::from_le_bytes(packet[12..16].try_into().unwrap());
+            let sample_rate = u32::from_le_bytes(packet[12..16].try_into().unwrap());
 
             return Ok(OggStream {
                 codec: AudioCodec::Opus,
@@ -590,14 +586,7 @@ mod tests {
         let data = vec![0x42u8; num_data_bytes];
         let granule = (sample_rate as i64) * 1; // 1 second of audio
 
-        write_ogg_page(
-            &mut buf,
-            HEADER_TYPE_EOS,
-            granule,
-            serial,
-            1,
-            &[&data],
-        );
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, granule, serial, 1, &[&data]);
 
         buf
     }
