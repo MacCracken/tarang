@@ -81,6 +81,16 @@
 - [ ] MCP tools registered in daimon
 - [ ] agnoshi intents ("play music", "probe file", "transcribe audio")
 
+## Engineering Backlog
+- [ ] Remove redundant `initialized` field from VpxDecoder/VpxEncoder (unconditionally destroy in Drop)
+- [ ] Implement `unsafe impl Send` for VpxDecoder/VpxEncoder (single-owner context is safe to move)
+- [ ] Normalize encoder API inconsistencies (bitrate units, chroma rounding, config field types)
+- [ ] Update tarang-video doc comment to cover both decoding and encoding
+- [ ] Add convenience `full` feature flag to tarang-video Cargo.toml
+- [ ] VpxEncoder: use frame.timestamp for PTS instead of monotonic counter
+- [ ] DecoderConfig::for_codec() should validate that the backend feature is enabled
+- [ ] dav1d_dec: document timestamp unit contract; clamp negative i64 timestamps to 0
+
 ## Downstream Consumers
 - **AGNOS Media Player** (new, Priority 1) — primary GUI player built on tarang
 - **Tazama** — video editor, migrate from GStreamer to tarang for decode/encode pipeline

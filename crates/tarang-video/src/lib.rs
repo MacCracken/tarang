@@ -202,15 +202,21 @@ impl VideoDecoder {
     }
 }
 
-/// List video codecs and their backends
+/// List video codecs and their backends (only includes compiled-in backends)
 pub fn supported_codecs() -> Vec<(VideoCodec, DecoderBackend)> {
-    vec![
-        (VideoCodec::Av1, DecoderBackend::Dav1d),
-        (VideoCodec::H264, DecoderBackend::OpenH264),
-        (VideoCodec::Vp8, DecoderBackend::LibVpx),
-        (VideoCodec::Vp9, DecoderBackend::LibVpx),
-        (VideoCodec::Theora, DecoderBackend::Software),
-    ]
+    let mut codecs = Vec::new();
+    if cfg!(feature = "dav1d") {
+        codecs.push((VideoCodec::Av1, DecoderBackend::Dav1d));
+    }
+    if cfg!(feature = "openh264") {
+        codecs.push((VideoCodec::H264, DecoderBackend::OpenH264));
+    }
+    if cfg!(feature = "vpx") {
+        codecs.push((VideoCodec::Vp8, DecoderBackend::LibVpx));
+        codecs.push((VideoCodec::Vp9, DecoderBackend::LibVpx));
+    }
+    codecs.push((VideoCodec::Theora, DecoderBackend::Software));
+    codecs
 }
 
 fn num_cpus() -> u32 {
@@ -331,9 +337,9 @@ mod tests {
     #[test]
     fn supported_codecs_list() {
         let codecs = supported_codecs();
-        assert!(codecs.contains(&(VideoCodec::Av1, DecoderBackend::Dav1d)));
-        assert!(codecs.contains(&(VideoCodec::H264, DecoderBackend::OpenH264)));
-        assert!(codecs.contains(&(VideoCodec::Vp9, DecoderBackend::LibVpx)));
+        // Theora software fallback is always present
+        assert!(codecs.contains(&(VideoCodec::Theora, DecoderBackend::Software)));
+        // H.265 is never supported
         assert!(!codecs.iter().any(|(c, _)| *c == VideoCodec::H265));
     }
 

@@ -8,6 +8,45 @@ use openh264::formats::YUVSource;
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoFrame};
 
+/// Extract tightly-packed YUV420p data from a decoded YUV frame.
+fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
+    let (width, height) = yuv.dimensions();
+    let width = width as u32;
+    let height = height as u32;
+    let (y_stride, u_stride, v_stride) = yuv.strides();
+
+    let chroma_w = ((width + 1) / 2) as usize;
+    let chroma_h = ((height + 1) / 2) as usize;
+    let y_size = width as usize * height as usize;
+    let mut yuv_data = Vec::with_capacity(y_size + chroma_w * chroma_h * 2);
+
+    let y_plane = yuv.y();
+    for row in 0..height as usize {
+        let start = row * y_stride;
+        yuv_data.extend_from_slice(&y_plane[start..start + width as usize]);
+    }
+
+    let u_plane = yuv.u();
+    for row in 0..chroma_h {
+        let start = row * u_stride;
+        yuv_data.extend_from_slice(&u_plane[start..start + chroma_w]);
+    }
+
+    let v_plane = yuv.v();
+    for row in 0..chroma_h {
+        let start = row * v_stride;
+        yuv_data.extend_from_slice(&v_plane[start..start + chroma_w]);
+    }
+
+    VideoFrame {
+        data: Bytes::from(yuv_data),
+        pixel_format: PixelFormat::Yuv420p,
+        width,
+        height,
+        timestamp,
+    }
+}
+
 /// H.264 decoder powered by openh264
 pub struct OpenH264Decoder {
     decoder: openh264::decoder::Decoder,
@@ -38,49 +77,26 @@ impl OpenH264Decoder {
             return Ok(None);
         };
 
-        let (width, height) = yuv.dimensions();
-        let width = width as u32;
-        let height = height as u32;
-        let (y_stride, u_stride, v_stride) = yuv.strides();
-
-        // Extract YUV420p planes tightly packed
-        let chroma_w = (width / 2) as usize;
-        let chroma_h = (height / 2) as usize;
-        let y_size = (width * height) as usize;
-        let total_size = y_size + chroma_w * chroma_h * 2;
-        let mut yuv_data = Vec::with_capacity(total_size);
-
-        // Y plane
-        let y_plane = yuv.y();
-        for row in 0..height as usize {
-            let start = row * y_stride;
-            let end = start + width as usize;
-            yuv_data.extend_from_slice(&y_plane[start..end]);
-        }
-
-        // U plane
-        let u_plane = yuv.u();
-        for row in 0..chroma_h {
-            let start = row * u_stride;
-            yuv_data.extend_from_slice(&u_plane[start..start + chroma_w]);
-        }
-
-        // V plane
-        let v_plane = yuv.v();
-        for row in 0..chroma_h {
-            let start = row * v_stride;
-            yuv_data.extend_from_slice(&v_plane[start..start + chroma_w]);
-        }
-
         self.frames_decoded += 1;
+        Ok(Some(extract_yuv420p(&yuv, timestamp)))
+    }
 
-        Ok(Some(VideoFrame {
-            data: Bytes::from(yuv_data),
-            pixel_format: PixelFormat::Yuv420p,
-            width,
-            height,
-            timestamp,
-        }))
+    /// Flush remaining buffered frames from the decoder.
+    pub fn flush(&mut self) -> Result<Vec<VideoFrame>> {
+        let remaining = self
+            .decoder
+            .flush_remaining()
+            .map_err(|e| TarangError::DecodeError(format!("openh264 flush: {e:?}")))?;
+
+        let mut frames = Vec::new();
+        for yuv in &remaining {
+            let ts_ms = yuv.timestamp().as_millis();
+            let timestamp = Duration::from_millis(ts_ms);
+            self.frames_decoded += 1;
+            frames.push(extract_yuv420p(yuv, timestamp));
+        }
+
+        Ok(frames)
     }
 
     pub fn frames_decoded(&self) -> u64 {

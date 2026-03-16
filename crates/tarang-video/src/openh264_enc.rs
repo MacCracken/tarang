@@ -3,7 +3,8 @@
 //! Safe Rust wrapper around openh264 for H.264 encoding.
 //! Requires the `openh264-enc` feature.
 
-use openh264::formats::YUVBuffer;
+use openh264::formats::YUVSlices;
+use openh264::Timestamp;
 use tarang_core::{Result, TarangError, VideoFrame};
 
 /// H.264 encoder configuration
@@ -36,6 +37,18 @@ pub struct OpenH264Encoder {
 
 impl OpenH264Encoder {
     pub fn new(config: &OpenH264EncoderConfig) -> Result<Self> {
+        if config.width == 0 || config.height == 0 {
+            return Err(TarangError::Pipeline(
+                "OpenH264Encoder: width and height must be non-zero".to_string(),
+            ));
+        }
+        if config.width % 2 != 0 || config.height % 2 != 0 {
+            return Err(TarangError::Pipeline(format!(
+                "OpenH264Encoder: dimensions must be even, got {}x{}",
+                config.width, config.height
+            )));
+        }
+
         let api = openh264::OpenH264API::from_source();
         let enc_config = openh264::encoder::EncoderConfig::new()
             .set_bitrate_bps(config.bitrate_bps)
@@ -54,20 +67,45 @@ impl OpenH264Encoder {
 
     /// Encode a YUV420p frame. Returns encoded H.264 NAL units.
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<u8>> {
-        // YUVBuffer::from_vec expects tightly packed I420 [Y][U][V]
-        let yuv = YUVBuffer::from_vec(
-            frame.data.to_vec(),
-            self.width as usize,
-            self.height as usize,
+        if frame.width != self.width || frame.height != self.height {
+            return Err(TarangError::Pipeline(format!(
+                "frame dimensions {}x{} do not match encoder {}x{}",
+                frame.width, frame.height, self.width, self.height
+            )));
+        }
+
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let y_size = w * h;
+        let chroma_w = w / 2;
+        let chroma_h = h / 2;
+        let expected_size = y_size + 2 * chroma_w * chroma_h;
+
+        if frame.data.len() < expected_size {
+            return Err(TarangError::Pipeline(format!(
+                "VideoFrame data too small: got {} bytes, expected {expected_size}",
+                frame.data.len()
+            )));
+        }
+
+        // Borrow slices from frame.data without copying
+        let y_data = &frame.data[..y_size];
+        let u_data = &frame.data[y_size..y_size + chroma_w * chroma_h];
+        let v_data = &frame.data[y_size + chroma_w * chroma_h..expected_size];
+
+        let yuv = YUVSlices::new(
+            (y_data, u_data, v_data),
+            (w, h),
+            (w, chroma_w, chroma_w),
         );
 
+        let ts = Timestamp::from_millis(frame.timestamp.as_millis() as u64);
         let bitstream = self
             .encoder
-            .encode(&yuv)
+            .encode_at(&yuv, ts)
             .map_err(|e| TarangError::Pipeline(format!("openh264 encode: {e:?}")))?;
 
-        let mut output = Vec::new();
-        bitstream.write_vec(&mut output);
+        let output = bitstream.to_vec();
         self.frames_encoded += 1;
 
         Ok(output)

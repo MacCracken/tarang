@@ -68,6 +68,12 @@ impl VpxDecoder {
 
     /// Decode a VP8/VP9 packet. Returns decoded frames (may be 0 or 1).
     pub fn decode(&mut self, data: &[u8], timestamp: Duration) -> Result<Vec<VideoFrame>> {
+        if data.len() > u32::MAX as usize {
+            return Err(TarangError::DecodeError(
+                "packet exceeds u32::MAX bytes".to_string(),
+            ));
+        }
+
         let res = unsafe {
             vpx_sys::vpx_codec_decode(
                 &mut self.ctx,
@@ -97,32 +103,46 @@ impl VpxDecoder {
             let width = img.d_w;
             let height = img.d_h;
 
-            // Copy YUV420p planes
-            let mut yuv_data = Vec::new();
+            if width == 0 || height == 0 {
+                continue;
+            }
 
+            // Verify I420 format — VP9 profile 1+ can produce 4:2:2/4:4:4
+            if img.fmt != vpx_sys::VPX_IMG_FMT_I420 {
+                return Err(TarangError::DecodeError(format!(
+                    "unsupported pixel format from libvpx: {}, expected I420",
+                    img.fmt
+                )));
+            }
+
+            // Pre-allocate output buffer
+            let chroma_w = ((width + 1) / 2) as usize;
+            let chroma_h = ((height + 1) / 2) as usize;
+            let y_size = width as usize * height as usize;
+            let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
+
+            // Copy YUV420p planes using isize stride arithmetic (handles negative strides)
             // Y plane
-            for row in 0..height {
-                let offset = (row * img.stride[0] as u32) as isize;
+            for row in 0..height as isize {
+                let offset = row * img.stride[0] as isize;
                 let ptr = unsafe { img.planes[0].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, width as usize) };
                 yuv_data.extend_from_slice(slice);
             }
 
             // U plane
-            let chroma_w = (width + 1) / 2;
-            let chroma_h = (height + 1) / 2;
-            for row in 0..chroma_h {
-                let offset = (row * img.stride[1] as u32) as isize;
+            for row in 0..chroma_h as isize {
+                let offset = row * img.stride[1] as isize;
                 let ptr = unsafe { img.planes[1].offset(offset) };
-                let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w as usize) };
+                let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };
                 yuv_data.extend_from_slice(slice);
             }
 
             // V plane
-            for row in 0..chroma_h {
-                let offset = (row * img.stride[2] as u32) as isize;
+            for row in 0..chroma_h as isize {
+                let offset = row * img.stride[2] as isize;
                 let ptr = unsafe { img.planes[2].offset(offset) };
-                let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w as usize) };
+                let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };
                 yuv_data.extend_from_slice(slice);
             }
 

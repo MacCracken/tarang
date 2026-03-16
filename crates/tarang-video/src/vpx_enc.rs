@@ -18,6 +18,17 @@ const ENCODER_ABI_VERSION: i32 = {
     parse_i32!()
 };
 
+/// RAII guard for `vpx_image_t` — ensures `vpx_img_free` is called even on panic.
+struct VpxImageGuard {
+    img: vpx_sys::vpx_image_t,
+}
+
+impl Drop for VpxImageGuard {
+    fn drop(&mut self) {
+        unsafe { vpx_sys::vpx_img_free(&mut self.img) };
+    }
+}
+
 /// VP8/VP9 encoder configuration
 #[derive(Debug, Clone)]
 pub struct VpxEncoderConfig {
@@ -59,6 +70,17 @@ pub struct VpxEncoder {
 
 impl VpxEncoder {
     pub fn new(config: &VpxEncoderConfig) -> Result<Self> {
+        if config.width == 0 || config.height == 0 {
+            return Err(TarangError::Pipeline(
+                "VpxEncoder: width and height must be non-zero".to_string(),
+            ));
+        }
+        if config.frame_rate_num > i32::MAX as u32 || config.frame_rate_den > i32::MAX as u32 {
+            return Err(TarangError::Pipeline(
+                "VpxEncoder: frame_rate_num/den must fit in i32".to_string(),
+            ));
+        }
+
         let iface = match config.codec {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_cx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_cx() },
@@ -105,12 +127,18 @@ impl VpxEncoder {
 
         // Set speed/quality tradeoff for VP9
         if config.codec == VideoCodec::Vp9 {
-            unsafe {
+            let ctl_res = unsafe {
                 vpx_sys::vpx_codec_control_(
                     &mut ctx,
                     vpx_sys::VP8E_SET_CPUUSED as i32,
                     config.speed,
-                );
+                )
+            };
+            if ctl_res != vpx_sys::VPX_CODEC_OK {
+                unsafe { vpx_sys::vpx_codec_destroy(&mut ctx) };
+                return Err(TarangError::Pipeline(format!(
+                    "vpx VP8E_SET_CPUUSED failed: {ctl_res}"
+                )));
             }
         }
 
@@ -127,10 +155,23 @@ impl VpxEncoder {
 
     /// Encode a YUV420p frame. Returns encoded packets (may be empty if encoder is buffering).
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<Vec<u8>>> {
-        let mut img: vpx_sys::vpx_image_t = unsafe { std::mem::zeroed() };
+        // Compute plane sizes in usize to avoid u32 overflow
+        let y_size = self.width as usize * self.height as usize;
+        let chroma_w = ((self.width + 1) / 2) as usize;
+        let chroma_h = ((self.height + 1) / 2) as usize;
+        let expected_size = y_size + 2 * chroma_w * chroma_h;
+
+        if frame.data.len() < expected_size {
+            return Err(TarangError::Pipeline(format!(
+                "VideoFrame data too small: got {} bytes, expected {expected_size}",
+                frame.data.len()
+            )));
+        }
+
+        let mut raw_img: vpx_sys::vpx_image_t = unsafe { std::mem::zeroed() };
         let alloc_result = unsafe {
             vpx_sys::vpx_img_alloc(
-                &mut img,
+                &mut raw_img,
                 vpx_sys::VPX_IMG_FMT_I420,
                 self.width,
                 self.height,
@@ -142,16 +183,16 @@ impl VpxEncoder {
             return Err(TarangError::Pipeline("vpx_img_alloc failed".to_string()));
         }
 
-        // Copy YUV420p planes from VideoFrame into vpx_image
-        let y_size = (self.width * self.height) as usize;
-        let chroma_w = ((self.width + 1) / 2) as usize;
-        let chroma_h = ((self.height + 1) / 2) as usize;
+        // RAII guard created only after successful alloc — no forget() needed
+        let guard = VpxImageGuard { img: raw_img };
 
+        // Copy YUV420p planes from VideoFrame into vpx_image
+        // Use isize arithmetic to correctly handle negative strides
         // Y plane
         for row in 0..self.height as usize {
             let src_start = row * self.width as usize;
-            let dst_offset = (row as u32 * img.stride[0] as u32) as isize;
-            let dst_ptr = unsafe { img.planes[0].offset(dst_offset) };
+            let dst_offset = row as isize * guard.img.stride[0] as isize;
+            let dst_ptr = unsafe { guard.img.planes[0].offset(dst_offset) };
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     frame.data[src_start..].as_ptr(),
@@ -165,8 +206,8 @@ impl VpxEncoder {
         let u_offset = y_size;
         for row in 0..chroma_h {
             let src_start = u_offset + row * chroma_w;
-            let dst_offset = (row as u32 * img.stride[1] as u32) as isize;
-            let dst_ptr = unsafe { img.planes[1].offset(dst_offset) };
+            let dst_offset = row as isize * guard.img.stride[1] as isize;
+            let dst_ptr = unsafe { guard.img.planes[1].offset(dst_offset) };
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     frame.data[src_start..].as_ptr(),
@@ -180,8 +221,8 @@ impl VpxEncoder {
         let v_offset = u_offset + chroma_w * chroma_h;
         for row in 0..chroma_h {
             let src_start = v_offset + row * chroma_w;
-            let dst_offset = (row as u32 * img.stride[2] as u32) as isize;
-            let dst_ptr = unsafe { img.planes[2].offset(dst_offset) };
+            let dst_offset = row as isize * guard.img.stride[2] as isize;
+            let dst_ptr = unsafe { guard.img.planes[2].offset(dst_offset) };
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     frame.data[src_start..].as_ptr(),
@@ -195,7 +236,7 @@ impl VpxEncoder {
         let res = unsafe {
             vpx_sys::vpx_codec_encode(
                 &mut self.ctx,
-                &img,
+                &guard.img,
                 self.pts,
                 1,
                 0,
@@ -203,7 +244,8 @@ impl VpxEncoder {
             )
         };
 
-        unsafe { vpx_sys::vpx_img_free(&mut img) };
+        // guard drops here, calling vpx_img_free
+        drop(guard);
 
         if res != vpx_sys::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(format!(
