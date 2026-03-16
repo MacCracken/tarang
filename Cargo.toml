@@ -12,7 +12,7 @@ members = [
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "io-std"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
@@ -30,10 +30,12 @@ env-libvpx-sys = { version = "5.1", features = ["generate"] }
 rav1e = { version = "0.8", features = ["asm"] }
 openh264 = "0.9"
 cros-libva = "0.0.13"
+rustfft = "6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [package]
 name = "tarang"
-version = "2026.3.16"
+version = "2026.3.16-1"
 edition = "2024"
 description = "AI-native Rust media framework for AGNOS — container parsing, audio/video decoding, media pipeline"
 license = "GPL-3.0"

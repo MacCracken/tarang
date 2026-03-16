@@ -3,6 +3,25 @@
 //! Media analysis, content classification, and transcription routing via hoosh.
 //! Connects to the AGNOS LLM gateway for AI-powered media understanding.
 
+pub mod fingerprint;
+pub mod scene;
+pub mod thumbnail;
+pub mod transcribe;
+
+pub use fingerprint::{
+    AudioFingerprint, FingerprintConfig, compute_fingerprint, fingerprint_match,
+};
+pub use scene::{
+    SceneBoundary, SceneBoundaryType, SceneDetectionConfig, SceneDetector, detect_scenes,
+};
+pub use thumbnail::{
+    Thumbnail, ThumbnailConfig, ThumbnailFormat, ThumbnailGenerator, generate_thumbnails,
+    luminance_variance, yuv420p_to_rgb24,
+};
+pub use transcribe::{
+    HooshClient, HooshConfig, WhisperModel, encode_wav_bytes, prepare_audio_for_transcription,
+};
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tarang_core::{AudioCodec, MediaInfo, VideoCodec};

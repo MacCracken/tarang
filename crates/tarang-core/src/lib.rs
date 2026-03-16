@@ -302,6 +302,12 @@ pub enum TarangError {
     Pipeline(String),
     #[error("hardware acceleration error: {0}")]
     HwAccelError(String),
+    #[error("AI feature error: {0}")]
+    AiError(String),
+    #[error("network error: {0}")]
+    NetworkError(String),
+    #[error("image error: {0}")]
+    ImageError(String),
 }
 
 pub type Result<T> = std::result::Result<T, TarangError>;

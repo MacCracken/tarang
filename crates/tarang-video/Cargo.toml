@@ -1,6 +1,6 @@
 [package]
 name = "tarang-video"
-version = "2026.3.16"
+version = "2026.3.16-1"
 edition = "2024"
 description = "Video decoding and encoding for Tarang — thin Rust FFI wrappers around dav1d, openh264, libvpx, rav1e"
 license = "GPL-3.0"

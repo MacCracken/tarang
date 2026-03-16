@@ -1,6 +1,6 @@
 [package]
 name = "tarang-ai"
-version = "2026.3.16"
+version = "2026.3.16-1"
 edition = "2024"
 description = "AI features for Tarang — media analysis, content classification, transcription routing via hoosh"
 license = "GPL-3.0"
@@ -16,4 +16,8 @@ reqwest = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+bytes = { workspace = true }
 uuid = { workspace = true }
+tokio = { workspace = true }
+rustfft = { workspace = true }
+image = { workspace = true }
