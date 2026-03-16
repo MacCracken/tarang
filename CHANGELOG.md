@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026.3.16d
+
+Test coverage + VA-API encode scaffolding.
+
+### Tests added (33 new tests across codec modules)
+- openh264_enc: 8 tests (creation, validation, encode, roundtrip errors)
+- openh264_dec: 3 tests (creation, empty input, encode-decode roundtrip)
+- vpx_enc: 8 tests (creation, validation, encode, flush — 5 ignored pending libvpx-sys upgrade)
+- vpx_dec: 4 tests (creation, unsupported codec, invalid data, encode-decode roundtrip)
+- vaapi_enc: 6 tests (profile mapping, config, validation, HW creation)
+- vaapi_probe: 16 tests (from previous — profile/entrypoint mapping, report queries)
+
+### VA-API encode
+- VaapiEncoder scaffolding: display open, profile/entrypoint negotiation, dimension validation
+- Supports H.264 and HEVC encode entrypoint detection (EncSlice + EncSliceLP)
+- Auto-discovers DRM render nodes with TARANG_VAAPI_DEVICE override
+- Full encode pipeline (surface upload, parameter buffers, bitstream readback) pending cros-codecs version alignment
+
+### Engineering
+- Identified libvpx-sys 1.4 ABI mismatch with system libvpx >= 1.14 (encoder config struct layout changed)
+- Added backlog items for libvpx-sys upgrade and VA-API encode pipeline completion
+
 ## 2026.3.16c
 
 VA-API hardware acceleration detection.

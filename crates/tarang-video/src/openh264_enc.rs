@@ -3,8 +3,8 @@
 //! Safe Rust wrapper around openh264 for H.264 encoding.
 //! Requires the `openh264-enc` feature.
 
-use openh264::formats::YUVSlices;
 use openh264::Timestamp;
+use openh264::formats::YUVSlices;
 use tarang_core::{Result, TarangError, VideoFrame};
 
 /// H.264 encoder configuration
@@ -100,11 +100,7 @@ impl OpenH264Encoder {
         let u_data = &frame.data[y_size..y_size + chroma_w * chroma_h];
         let v_data = &frame.data[y_size + chroma_w * chroma_h..expected_size];
 
-        let yuv = YUVSlices::new(
-            (y_data, u_data, v_data),
-            (w, h),
-            (w, chroma_w, chroma_w),
-        );
+        let yuv = YUVSlices::new((y_data, u_data, v_data), (w, h), (w, chroma_w, chroma_w));
 
         let ts = Timestamp::from_millis(frame.timestamp.as_millis() as u64);
         let bitstream = self
@@ -124,5 +120,145 @@ impl OpenH264Encoder {
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::time::Duration;
+    use tarang_core::PixelFormat;
+
+    fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
+        let y_size = (width * height) as usize;
+        let chroma_w = (width / 2) as usize;
+        let chroma_h = (height / 2) as usize;
+        let total = y_size + 2 * chroma_w * chroma_h;
+        // Gradient pattern for Y, flat 128 for U/V
+        let mut data = vec![0u8; total];
+        for i in 0..y_size {
+            data[i] = (i % 256) as u8;
+        }
+        for i in y_size..total {
+            data[i] = 128;
+        }
+        VideoFrame {
+            data: Bytes::from(data),
+            pixel_format: PixelFormat::Yuv420p,
+            width,
+            height,
+            timestamp: Duration::from_millis(33),
+        }
+    }
+
+    #[test]
+    fn encoder_creation() {
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let encoder = OpenH264Encoder::new(&config).unwrap();
+        assert_eq!(encoder.dimensions(), (320, 240));
+        assert_eq!(encoder.frames_encoded(), 0);
+    }
+
+    #[test]
+    fn encoder_rejects_zero_dimensions() {
+        let config = OpenH264EncoderConfig {
+            width: 0,
+            height: 240,
+            ..Default::default()
+        };
+        assert!(OpenH264Encoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn encoder_rejects_odd_dimensions() {
+        let config = OpenH264EncoderConfig {
+            width: 321,
+            height: 240,
+            ..Default::default()
+        };
+        assert!(OpenH264Encoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn encode_single_frame() {
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+        let frame = make_yuv420p_frame(320, 240);
+        let output = encoder.encode(&frame).unwrap();
+        assert!(!output.is_empty(), "encoder should produce output");
+        assert_eq!(encoder.frames_encoded(), 1);
+    }
+
+    #[test]
+    fn encode_multiple_frames() {
+        let config = OpenH264EncoderConfig {
+            width: 160,
+            height: 120,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+        for i in 0..5 {
+            let mut frame = make_yuv420p_frame(160, 120);
+            frame.timestamp = Duration::from_millis(i * 33);
+            encoder.encode(&frame).unwrap();
+        }
+        assert_eq!(encoder.frames_encoded(), 5);
+    }
+
+    #[test]
+    fn encode_rejects_wrong_dimensions() {
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+        let frame = make_yuv420p_frame(640, 480);
+        assert!(encoder.encode(&frame).is_err());
+    }
+
+    #[test]
+    fn encode_rejects_wrong_pixel_format() {
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 320 * 240 * 3]),
+            pixel_format: PixelFormat::Rgb24,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(encoder.encode(&frame).is_err());
+    }
+
+    #[test]
+    fn encode_rejects_short_data() {
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 100]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(encoder.encode(&frame).is_err());
     }
 }

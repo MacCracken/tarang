@@ -65,9 +65,7 @@ impl<W: Write + Seek> Muxer for WavMuxer<W> {
         self.writer
             .write_all(&16u32.to_le_bytes())
             .map_err(io_err)?;
-        self.writer
-            .write_all(&1u16.to_le_bytes())
-            .map_err(io_err)?; // PCM format
+        self.writer.write_all(&1u16.to_le_bytes()).map_err(io_err)?; // PCM format
         self.writer
             .write_all(&self.config.channels.to_le_bytes())
             .map_err(io_err)?;
@@ -150,12 +148,7 @@ impl<W: Write> OggMuxer<W> {
     }
 
     /// Write a single OGG page containing the given packets.
-    fn write_page(
-        &mut self,
-        header_type: u8,
-        granule: i64,
-        packets: &[&[u8]],
-    ) -> Result<()> {
+    fn write_page(&mut self, header_type: u8, granule: i64, packets: &[&[u8]]) -> Result<()> {
         // Build segment table
         let mut segment_table = Vec::new();
         for packet in packets {
@@ -181,9 +174,7 @@ impl<W: Write> OggMuxer<W> {
         self.writer
             .write_all(&self.page_sequence.to_le_bytes())
             .map_err(io_err)?;
-        self.writer
-            .write_all(&0u32.to_le_bytes())
-            .map_err(io_err)?; // CRC (0 for now)
+        self.writer.write_all(&0u32.to_le_bytes()).map_err(io_err)?; // CRC (0 for now)
         self.writer
             .write_all(&[segment_table.len() as u8])
             .map_err(io_err)?;
@@ -318,9 +309,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
         let size = (8 + data.len()) as u32;
-        self.writer
-            .write_all(&size.to_be_bytes())
-            .map_err(io_err)?;
+        self.writer.write_all(&size.to_be_bytes()).map_err(io_err)?;
         self.writer.write_all(box_type).map_err(io_err)?;
         self.writer.write_all(data).map_err(io_err)?;
         Ok(())
@@ -364,9 +353,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
         buf.extend_from_slice(&[0u8; 10]); // reserved
         // Matrix (identity)
-        for &v in &[
-            0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-        ] {
+        for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
             buf.extend_from_slice(&v.to_be_bytes());
         }
         buf.extend_from_slice(&[0u8; 24]); // pre_defined
@@ -403,9 +390,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
         buf.extend_from_slice(&0u16.to_be_bytes()); // reserved
         // Matrix (identity)
-        for &v in &[
-            0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-        ] {
+        for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
             buf.extend_from_slice(&v.to_be_bytes());
         }
         buf.extend_from_slice(&0u32.to_be_bytes()); // width
@@ -556,10 +541,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
 
         // Check if all samples are the same size
-        let all_same = self
-            .sample_sizes
-            .windows(2)
-            .all(|w| w[0] == w[1]);
+        let all_same = self.sample_sizes.windows(2).all(|w| w[0] == w[1]);
 
         if all_same && !self.sample_sizes.is_empty() {
             buf.extend_from_slice(&self.sample_sizes[0].to_be_bytes());
@@ -606,10 +588,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
         let total_data: usize = self.samples.iter().map(|s| s.len()).sum();
         let mdat_size = (8 + total_data) as u32;
 
-        let mdat_offset = self
-            .writer
-            .stream_position()
-            .map_err(io_err)?;
+        let mdat_offset = self.writer.stream_position().map_err(io_err)?;
 
         self.writer
             .write_all(&mdat_size.to_be_bytes())

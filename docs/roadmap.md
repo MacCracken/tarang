@@ -66,7 +66,8 @@
 
 ### F2: Remaining Video Encoding
 - [x] openh264 bindings (H.264 encoding, behind `openh264-enc` feature flag)
-- [ ] VA-API hardware-accelerated encode (H.264/HEVC via cros-codecs)
+- [x] VA-API hardware-accelerated encode scaffolding (H.264/HEVC, surface lifecycle, entrypoint selection)
+- [ ] VA-API encode pipeline completion (surface upload, parameter buffers, bitstream readback — blocked on cros-codecs version alignment)
 
 ### F3: AI Features
 - [ ] Transcription routing to hoosh (Whisper models)
@@ -84,6 +85,8 @@
 
 ## Engineering Backlog
 - [ ] Normalize encoder API inconsistencies (bitrate units across vpx/openh264/rav1e configs)
+- [ ] Upgrade libvpx-sys to a version ABI-compatible with libvpx >= 1.14 (encoder config struct mismatch)
+- [ ] Wire full VA-API encode pipeline when cros-codecs aligns with cros-libva 0.0.13
 
 ## Downstream Consumers
 - **AGNOS Media Player** (new, Priority 1) — primary GUI player built on tarang

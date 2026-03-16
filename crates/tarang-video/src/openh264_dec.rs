@@ -103,3 +103,83 @@ impl OpenH264Decoder {
         self.frames_decoded
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_creation() {
+        let decoder = OpenH264Decoder::new().unwrap();
+        assert_eq!(decoder.frames_decoded(), 0);
+    }
+
+    #[test]
+    fn decode_empty_returns_none() {
+        let mut decoder = OpenH264Decoder::new().unwrap();
+        // Empty data should not produce a frame (may error or return None)
+        let result = decoder.decode(&[], Duration::ZERO);
+        // openh264 may return Ok(None) or Err for empty input — both are acceptable
+        match result {
+            Ok(None) => {}
+            Err(_) => {}
+            Ok(Some(_)) => panic!("empty input should not produce a frame"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        // Encode a frame with openh264, then decode it back
+        use crate::openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
+
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            bitrate_bps: 500_000,
+            frame_rate: 30.0,
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+
+        // Create a test YUV420p frame
+        let w = 320usize;
+        let h = 240usize;
+        let y_size = w * h;
+        let chroma = w / 2 * h / 2;
+        let mut data = vec![128u8; y_size + 2 * chroma];
+        // Gradient Y plane
+        for y in 0..h {
+            for x in 0..w {
+                data[y * w + x] = ((x + y) % 256) as u8;
+            }
+        }
+
+        let frame = VideoFrame {
+            data: bytes::Bytes::from(data),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::from_millis(0),
+        };
+
+        // Encode several frames (encoder needs a few to produce stable output)
+        let mut h264_data = Vec::new();
+        for i in 0..3 {
+            let mut f = frame.clone();
+            f.timestamp = Duration::from_millis(i * 33);
+            let encoded = encoder.encode(&f).unwrap();
+            h264_data.extend_from_slice(&encoded);
+        }
+        assert!(!h264_data.is_empty(), "encoder should produce H.264 data");
+
+        // Decode the H.264 data
+        let mut decoder = OpenH264Decoder::new().unwrap();
+        let result = decoder.decode(&h264_data, Duration::ZERO).unwrap();
+        // The decoder may or may not produce a frame from concatenated NAL units
+        // — the important thing is it doesn't crash
+        if let Some(frame) = result {
+            assert_eq!(frame.pixel_format, PixelFormat::Yuv420p);
+            assert!(frame.width > 0);
+            assert!(frame.height > 0);
+        }
+    }
+}

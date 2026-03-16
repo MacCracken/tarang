@@ -46,13 +46,7 @@ impl VpxDecoder {
         let cfg: *const vpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
 
         let res = unsafe {
-            vpx_sys::vpx_codec_dec_init_ver(
-                &mut ctx,
-                iface,
-                cfg,
-                0,
-                DECODER_ABI_VERSION,
-            )
+            vpx_sys::vpx_codec_dec_init_ver(&mut ctx, iface, cfg, 0, DECODER_ABI_VERSION)
         };
 
         if res != vpx_sys::VPX_CODEC_OK {
@@ -168,6 +162,100 @@ impl VpxDecoder {
 
     pub fn frames_decoded(&self) -> u64 {
         self.frames_decoded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_creation_vp8() {
+        let decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
+        assert_eq!(decoder.codec(), VideoCodec::Vp8);
+        assert_eq!(decoder.frames_decoded(), 0);
+    }
+
+    #[test]
+    fn decoder_creation_vp9() {
+        let decoder = VpxDecoder::new(VideoCodec::Vp9).unwrap();
+        assert_eq!(decoder.codec(), VideoCodec::Vp9);
+    }
+
+    #[test]
+    fn decoder_rejects_unsupported_codec() {
+        assert!(VpxDecoder::new(VideoCodec::H264).is_err());
+        assert!(VpxDecoder::new(VideoCodec::Av1).is_err());
+    }
+
+    #[test]
+    fn decode_invalid_data_returns_error() {
+        let mut decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
+        // Random bytes are not valid VP8 — should error
+        let result = decoder.decode(&[0xDE, 0xAD, 0xBE, 0xEF], Duration::ZERO);
+        // libvpx may return error or empty frames for invalid data
+        match result {
+            Err(_) => {} // Expected
+            Ok(frames) => assert!(frames.is_empty(), "invalid data should not produce frames"),
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires ABI-compatible libvpx for encoder
+    fn vp8_encode_decode_roundtrip() {
+        use crate::vpx_enc::{VpxEncoder, VpxEncoderConfig};
+
+        // Encode VP8 frames
+        let enc_config = VpxEncoderConfig {
+            codec: VideoCodec::Vp8,
+            width: 320,
+            height: 240,
+            bitrate_kbps: 500,
+            threads: 1,
+            ..Default::default()
+        };
+        let mut encoder = VpxEncoder::new(&enc_config).unwrap();
+
+        let y_size = 320 * 240;
+        let chroma = 160 * 120;
+        let mut data = vec![128u8; y_size + 2 * chroma];
+        for i in 0..y_size {
+            data[i] = (i % 256) as u8;
+        }
+
+        let frame = tarang_core::VideoFrame {
+            data: bytes::Bytes::from(data),
+            pixel_format: tarang_core::PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+
+        // Encode 3 frames
+        let mut encoded_packets = Vec::new();
+        for i in 0..3 {
+            let mut f = frame.clone();
+            f.timestamp = Duration::from_millis(i * 33);
+            let packets = encoder.encode(&f).unwrap();
+            encoded_packets.extend(packets);
+        }
+        let flushed = encoder.flush().unwrap();
+        encoded_packets.extend(flushed);
+        assert!(!encoded_packets.is_empty());
+
+        // Decode them back
+        let mut decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
+        let mut decoded_count = 0;
+        for packet in &encoded_packets {
+            let frames = decoder.decode(packet, Duration::ZERO).unwrap();
+            for f in &frames {
+                assert_eq!(f.width, 320);
+                assert_eq!(f.height, 240);
+                assert_eq!(f.pixel_format, tarang_core::PixelFormat::Yuv420p);
+                decoded_count += 1;
+            }
+        }
+        assert!(decoded_count > 0, "should decode at least one frame");
     }
 }
 

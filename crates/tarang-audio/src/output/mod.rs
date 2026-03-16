@@ -110,9 +110,8 @@ mod tests {
 
     fn make_buffer(num_samples: usize, channels: u16, sample_rate: u32) -> AudioBuffer {
         let data = vec![0.5f32; num_samples * channels as usize];
-        let byte_data = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
-        };
+        let byte_data =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4) };
         AudioBuffer {
             data: Bytes::copy_from_slice(byte_data),
             sample_format: SampleFormat::F32,

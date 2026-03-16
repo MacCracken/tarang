@@ -199,8 +199,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         while buf.last() == Some(&0) {
             buf.pop();
         }
-        String::from_utf8(buf)
-            .map_err(|e| TarangError::DemuxError(format!("invalid UTF-8: {e}")))
+        String::from_utf8(buf).map_err(|e| TarangError::DemuxError(format!("invalid UTF-8: {e}")))
     }
 
     /// Parse the EBML header to identify MKV vs WebM.

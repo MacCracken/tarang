@@ -7,8 +7,8 @@ fn main() {
     println!("cargo::rerun-if-env-changed=VPX_ENCODER_ABI_VERSION");
     println!("cargo::rerun-if-env-changed=CC");
 
-    let need_vpx = env::var("CARGO_FEATURE_VPX").is_ok()
-        || env::var("CARGO_FEATURE_VPX_ENC").is_ok();
+    let need_vpx =
+        env::var("CARGO_FEATURE_VPX").is_ok() || env::var("CARGO_FEATURE_VPX_ENC").is_ok();
 
     if need_vpx {
         // Allow manual override for cross-compilation

@@ -118,13 +118,7 @@ impl VpxEncoder {
 
         let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
         let res = unsafe {
-            vpx_sys::vpx_codec_enc_init_ver(
-                &mut ctx,
-                iface,
-                &cfg,
-                0,
-                ENCODER_ABI_VERSION,
-            )
+            vpx_sys::vpx_codec_enc_init_ver(&mut ctx, iface, &cfg, 0, ENCODER_ABI_VERSION)
         };
 
         if res != vpx_sys::VPX_CODEC_OK {
@@ -217,11 +211,7 @@ impl VpxEncoder {
             let dst_offset = row as isize * guard.img.stride[1] as isize;
             let dst_ptr = unsafe { guard.img.planes[1].offset(dst_offset) };
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    frame.data[src_start..].as_ptr(),
-                    dst_ptr,
-                    chroma_w,
-                );
+                std::ptr::copy_nonoverlapping(frame.data[src_start..].as_ptr(), dst_ptr, chroma_w);
             }
         }
 
@@ -232,11 +222,7 @@ impl VpxEncoder {
             let dst_offset = row as isize * guard.img.stride[2] as isize;
             let dst_ptr = unsafe { guard.img.planes[2].offset(dst_offset) };
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    frame.data[src_start..].as_ptr(),
-                    dst_ptr,
-                    chroma_w,
-                );
+                std::ptr::copy_nonoverlapping(frame.data[src_start..].as_ptr(), dst_ptr, chroma_w);
             }
         }
 
@@ -244,16 +230,8 @@ impl VpxEncoder {
         let pts = frame.timestamp.as_millis() as i64;
 
         // VPX_DL_GOOD_QUALITY = 1000000
-        let res = unsafe {
-            vpx_sys::vpx_codec_encode(
-                &mut self.ctx,
-                &guard.img,
-                pts,
-                1,
-                0,
-                1_000_000,
-            )
-        };
+        let res =
+            unsafe { vpx_sys::vpx_codec_encode(&mut self.ctx, &guard.img, pts, 1, 0, 1_000_000) };
 
         // guard drops here, calling vpx_img_free
         drop(guard);
@@ -273,14 +251,7 @@ impl VpxEncoder {
     /// Flush the encoder — signal end of stream and drain remaining packets.
     pub fn flush(&mut self) -> Result<Vec<Vec<u8>>> {
         let res = unsafe {
-            vpx_sys::vpx_codec_encode(
-                &mut self.ctx,
-                std::ptr::null(),
-                self.pts,
-                1,
-                0,
-                1_000_000,
-            )
+            vpx_sys::vpx_codec_encode(&mut self.ctx, std::ptr::null(), self.pts, 1, 0, 1_000_000)
         };
 
         if res != vpx_sys::VPX_CODEC_OK {
@@ -305,8 +276,9 @@ impl VpxEncoder {
             let pkt = unsafe { &*pkt };
             if pkt.kind == vpx_sys::VPX_CODEC_CX_FRAME_PKT {
                 let frame_data = unsafe { &*pkt.data.frame_ref() };
-                let buf =
-                    unsafe { std::slice::from_raw_parts(frame_data.buf as *const u8, frame_data.sz) };
+                let buf = unsafe {
+                    std::slice::from_raw_parts(frame_data.buf as *const u8, frame_data.sz)
+                };
                 packets.push(buf.to_vec());
             }
         }
@@ -324,6 +296,163 @@ impl VpxEncoder {
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::time::Duration;
+    use tarang_core::PixelFormat;
+
+    fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
+        let y_size = (width as usize) * (height as usize);
+        let chroma_w = ((width + 1) / 2) as usize;
+        let chroma_h = ((height + 1) / 2) as usize;
+        let total = y_size + 2 * chroma_w * chroma_h;
+        let mut data = vec![128u8; total];
+        for i in 0..y_size {
+            data[i] = (i % 256) as u8;
+        }
+        VideoFrame {
+            data: Bytes::from(data),
+            pixel_format: PixelFormat::Yuv420p,
+            width,
+            height,
+            timestamp: Duration::from_millis(33),
+        }
+    }
+
+    // Note: VPX encoder tests require that libvpx-sys 1.4 is ABI-compatible with the
+    // system's libvpx. On systems with libvpx >= 1.14, the encoder config struct layout
+    // has changed and these tests will fail with ABI mismatch. Upgrade to a newer
+    // libvpx-sys when available, or pin the system libvpx version.
+
+    #[test]
+    #[ignore] // Requires ABI-compatible libvpx (libvpx-sys 1.4 vs system libvpx)
+    fn encoder_creation_vp9() {
+        let config = VpxEncoderConfig {
+            codec: VideoCodec::Vp9,
+            width: 320,
+            height: 240,
+            bitrate_kbps: 500,
+            speed: 9,
+            threads: 1,
+            ..Default::default()
+        };
+        let encoder = VpxEncoder::new(&config).unwrap();
+        assert_eq!(encoder.codec(), VideoCodec::Vp9);
+        assert_eq!(encoder.dimensions(), (320, 240));
+        assert_eq!(encoder.frames_encoded(), 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn encoder_creation_vp8() {
+        let config = VpxEncoderConfig {
+            codec: VideoCodec::Vp8,
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let encoder = VpxEncoder::new(&config).unwrap();
+        assert_eq!(encoder.codec(), VideoCodec::Vp8);
+    }
+
+    #[test]
+    fn encoder_rejects_zero_dimensions() {
+        let config = VpxEncoderConfig {
+            width: 0,
+            height: 240,
+            ..Default::default()
+        };
+        assert!(VpxEncoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn encoder_rejects_zero_framerate() {
+        let config = VpxEncoderConfig {
+            frame_rate_num: 0,
+            ..Default::default()
+        };
+        assert!(VpxEncoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn encoder_rejects_unsupported_codec() {
+        let config = VpxEncoderConfig {
+            codec: VideoCodec::H264,
+            ..Default::default()
+        };
+        assert!(VpxEncoder::new(&config).is_err());
+    }
+
+    #[test]
+    #[ignore]
+    fn encode_single_frame_vp8() {
+        let config = VpxEncoderConfig {
+            codec: VideoCodec::Vp8,
+            width: 320,
+            height: 240,
+            bitrate_kbps: 500,
+            threads: 1,
+            ..Default::default()
+        };
+        let mut encoder = VpxEncoder::new(&config).unwrap();
+        let frame = make_yuv420p_frame(320, 240);
+        let packets = encoder.encode(&frame).unwrap();
+        // First frame should produce at least one packet (keyframe)
+        assert!(!packets.is_empty(), "VP8 encoder should produce output for first frame");
+        assert_eq!(encoder.frames_encoded(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn encode_and_flush_vp9() {
+        let config = VpxEncoderConfig {
+            codec: VideoCodec::Vp9,
+            width: 160,
+            height: 120,
+            bitrate_kbps: 200,
+            speed: 9,
+            threads: 1,
+            ..Default::default()
+        };
+        let mut encoder = VpxEncoder::new(&config).unwrap();
+
+        let mut total_packets = 0;
+        for i in 0..3 {
+            let mut frame = make_yuv420p_frame(160, 120);
+            frame.timestamp = Duration::from_millis(i * 33);
+            let packets = encoder.encode(&frame).unwrap();
+            total_packets += packets.len();
+        }
+
+        let flushed = encoder.flush().unwrap();
+        total_packets += flushed.len();
+
+        assert!(total_packets > 0, "should produce packets after encode + flush");
+        assert_eq!(encoder.frames_encoded(), 3);
+    }
+
+    #[test]
+    #[ignore]
+    fn encode_rejects_short_data() {
+        let config = VpxEncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = VpxEncoder::new(&config).unwrap();
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 100]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(encoder.encode(&frame).is_err());
     }
 }
 

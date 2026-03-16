@@ -95,9 +95,7 @@ fn profile_to_codec(profile: VAProfile::Type) -> Option<VideoCodec> {
 
         VAProfile::VAProfileVP8Version0_3 => Some(VideoCodec::Vp8),
 
-        VAProfile::VAProfileVP9Profile0 | VAProfile::VAProfileVP9Profile2 => {
-            Some(VideoCodec::Vp9)
-        }
+        VAProfile::VAProfileVP9Profile0 | VAProfile::VAProfileVP9Profile2 => Some(VideoCodec::Vp9),
 
         VAProfile::VAProfileAV1Profile0 => Some(VideoCodec::Av1),
 

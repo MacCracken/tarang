@@ -68,9 +68,7 @@ impl Rav1eEncoder {
 
     /// Send a YUV420p frame to the encoder.
     pub fn send_frame(&mut self, frame: &VideoFrame) -> Result<()> {
-        let mut enc_frame = self
-            .context
-            .new_frame();
+        let mut enc_frame = self.context.new_frame();
 
         // Copy Y plane
         let y_size = (self.width * self.height) as usize;
@@ -81,8 +79,8 @@ impl Rav1eEncoder {
         for row in 0..self.height as usize {
             let src_start = row * self.width as usize;
             let src_end = src_start + self.width as usize;
-            let dst = &mut enc_frame.planes[0].data_origin_mut()
-                [row * enc_frame.planes[0].cfg.stride..];
+            let dst =
+                &mut enc_frame.planes[0].data_origin_mut()[row * enc_frame.planes[0].cfg.stride..];
             dst[..self.width as usize].copy_from_slice(&frame.data[src_start..src_end]);
         }
 
@@ -91,8 +89,8 @@ impl Rav1eEncoder {
         for row in 0..chroma_h {
             let src_start = u_offset + row * chroma_w;
             let src_end = src_start + chroma_w;
-            let dst = &mut enc_frame.planes[1].data_origin_mut()
-                [row * enc_frame.planes[1].cfg.stride..];
+            let dst =
+                &mut enc_frame.planes[1].data_origin_mut()[row * enc_frame.planes[1].cfg.stride..];
             dst[..chroma_w].copy_from_slice(&frame.data[src_start..src_end]);
         }
 
@@ -101,8 +99,8 @@ impl Rav1eEncoder {
         for row in 0..chroma_h {
             let src_start = v_offset + row * chroma_w;
             let src_end = src_start + chroma_w;
-            let dst = &mut enc_frame.planes[2].data_origin_mut()
-                [row * enc_frame.planes[2].cfg.stride..];
+            let dst =
+                &mut enc_frame.planes[2].data_origin_mut()[row * enc_frame.planes[2].cfg.stride..];
             dst[..chroma_w].copy_from_slice(&frame.data[src_start..src_end]);
         }
 
@@ -122,9 +120,7 @@ impl Rav1eEncoder {
             }
             Err(rav1e::EncoderStatus::NeedMoreData) => Ok(None),
             Err(rav1e::EncoderStatus::LimitReached) => Ok(None),
-            Err(e) => Err(TarangError::Pipeline(format!(
-                "rav1e receive_packet: {e}"
-            ))),
+            Err(e) => Err(TarangError::Pipeline(format!("rav1e receive_packet: {e}"))),
         }
     }
 
