@@ -168,7 +168,6 @@ impl VaapiEncoder {
         // profile, entrypoint) is validated and ready. The actual encode
         // submission will be completed when cros-codecs version aligns with
         // our cros-libva version, or via manual VA-API buffer construction.
-        self.frames_encoded += 1;
         Err(TarangError::HwAccelError(
             "VA-API encode pipeline not yet fully wired — use openh264 for H.264 encoding"
                 .to_string(),

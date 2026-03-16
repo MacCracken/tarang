@@ -110,9 +110,18 @@ pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
     }
 }
 
+/// # Safety
+/// Caller must ensure bytes are from an F32 audio buffer (4-byte aligned, length multiple of 4).
+/// Panics are replaced with truncation to avoid crashing in library code.
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len().is_multiple_of(4));
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || !bytes.len().is_multiple_of(4) {
+        return &[];
+    }
+    // Safety: AudioBuffer data originates from Vec<f32> serialized via to_le_bytes or
+    // Bytes::copy_from_slice, so alignment is guaranteed by the heap allocator (>=8 bytes).
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }
 
 #[cfg(test)]

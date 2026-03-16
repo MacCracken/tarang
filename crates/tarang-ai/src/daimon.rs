@@ -47,8 +47,7 @@ impl Default for HooshLlmConfig {
             endpoint: std::env::var("HOOSH_URL")
                 .unwrap_or_else(|_| "http://localhost:8088".to_string()),
             api_key: std::env::var("HOOSH_API_KEY").ok(),
-            model: std::env::var("HOOSH_MODEL")
-                .unwrap_or_else(|_| "llama3".to_string()),
+            model: std::env::var("HOOSH_MODEL").unwrap_or_else(|_| "llama3".to_string()),
         }
     }
 }
@@ -89,7 +88,9 @@ impl DaimonClient {
     ) -> Result<String> {
         let embedding = fingerprint_to_embedding(fingerprint);
         if embedding.is_empty() {
-            return Err(TarangError::AiError("empty fingerprint — nothing to index".to_string()));
+            return Err(TarangError::AiError(
+                "empty fingerprint — nothing to index".to_string(),
+            ));
         }
 
         let body = serde_json::json!({
@@ -107,15 +108,17 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("vector insert failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(TarangError::NetworkError(
-                format!("vector insert returned {status}: {body}")
-            ));
+            return Err(TarangError::NetworkError(format!(
+                "vector insert returned {status}: {body}"
+            )));
         }
 
         info!(path = %file_path, hashes = fingerprint.hashes.len(), "Indexed fingerprint in vector store");
@@ -145,7 +148,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("vector search failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -153,14 +158,20 @@ impl DaimonClient {
             return Ok(Vec::new());
         }
 
-        let result: VectorSearchResponse = resp.json().await
+        let result: VectorSearchResponse = resp
+            .json()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("parse search response: {e}")))?;
 
-        Ok(result.results.into_iter().map(|r| SimilarMedia {
-            path: r.content,
-            score: r.score,
-            metadata: r.metadata,
-        }).collect())
+        Ok(result
+            .results
+            .into_iter()
+            .map(|r| SimilarMedia {
+                path: r.content,
+                score: r.score,
+                metadata: r.metadata,
+            })
+            .collect())
     }
 
     // -----------------------------------------------------------------------
@@ -192,7 +203,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("RAG ingest failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -219,14 +232,19 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("RAG query failed: {e}")))?;
 
         if !resp.status().is_success() {
+            warn!(status = %resp.status(), "RAG query returned non-success");
             return Ok(Vec::new());
         }
 
-        let result: RagQueryResponse = resp.json().await
+        let result: RagQueryResponse = resp
+            .json()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("parse RAG response: {e}")))?;
 
         Ok(result.results)
@@ -257,7 +275,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("agent registration failed: {e}")))?;
 
         if resp.status().is_success() {
@@ -282,7 +302,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("collection create failed: {e}")))?;
 
         // 409 = already exists, which is fine
@@ -340,23 +362,36 @@ impl HooshLlmClient {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req.send().await
+        let resp = req
+            .send()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("hoosh LLM request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            return Err(TarangError::NetworkError(
-                format!("hoosh LLM returned {status}")
-            ));
+            return Err(TarangError::NetworkError(format!(
+                "hoosh LLM returned {status}"
+            )));
         }
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| TarangError::NetworkError(format!("parse LLM response: {e}")))?;
 
-        let content = result["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let content = result
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+
+        if content.is_empty() {
+            warn!("LLM response had no content in choices[0].message.content");
+        }
+
+        let content = content.to_string();
 
         parse_description_response(&content, analysis)
     }
@@ -420,7 +455,10 @@ fn fingerprint_to_embedding(fp: &AudioFingerprint) -> Vec<f32> {
 
     // Use hash bit patterns as embedding dimensions.
     // Normalize each u32 to [0, 1] range.
-    fp.hashes.iter().map(|&h| h as f32 / u32::MAX as f32).collect()
+    fp.hashes
+        .iter()
+        .map(|&h| h as f32 / u32::MAX as f32)
+        .collect()
 }
 
 /// Format media metadata as text for RAG ingestion.
@@ -448,13 +486,22 @@ fn format_metadata_for_rag(path: &str, info: &MediaInfo, analysis: &MediaAnalysi
     for stream in &info.streams {
         match stream {
             tarang_core::StreamInfo::Audio(a) => {
-                parts.push(format!("Audio: {} {}Hz {}ch", a.codec, a.sample_rate, a.channels));
+                parts.push(format!(
+                    "Audio: {} {}Hz {}ch",
+                    a.codec, a.sample_rate, a.channels
+                ));
             }
             tarang_core::StreamInfo::Video(v) => {
-                parts.push(format!("Video: {} {}x{} {:.1}fps", v.codec, v.width, v.height, v.frame_rate));
+                parts.push(format!(
+                    "Video: {} {}x{} {:.1}fps",
+                    v.codec, v.width, v.height, v.frame_rate
+                ));
             }
             tarang_core::StreamInfo::Subtitle { language } => {
-                parts.push(format!("Subtitle: {}", language.as_deref().unwrap_or("unknown")));
+                parts.push(format!(
+                    "Subtitle: {}",
+                    language.as_deref().unwrap_or("unknown")
+                ));
             }
         }
     }
@@ -490,10 +537,16 @@ fn build_description_prompt(info: &MediaInfo, analysis: &MediaAnalysis) -> Strin
     for stream in &info.streams {
         match stream {
             tarang_core::StreamInfo::Audio(a) => {
-                ctx.push(format!("Audio: {} {}Hz {}ch", a.codec, a.sample_rate, a.channels));
+                ctx.push(format!(
+                    "Audio: {} {}Hz {}ch",
+                    a.codec, a.sample_rate, a.channels
+                ));
             }
             tarang_core::StreamInfo::Video(v) => {
-                ctx.push(format!("Video: {} {}x{} {:.1}fps", v.codec, v.width, v.height, v.frame_rate));
+                ctx.push(format!(
+                    "Video: {} {}x{} {:.1}fps",
+                    v.codec, v.width, v.height, v.frame_rate
+                ));
             }
             _ => {}
         }
@@ -527,10 +580,10 @@ fn parse_description_response(
         .find('{')
         .and_then(|start| response.rfind('}').map(|end| &response[start..=end]));
 
-    if let Some(json) = json_str {
-        if let Ok(desc) = serde_json::from_str::<ContentDescription>(json) {
-            return Ok(desc);
-        }
+    if let Some(json) = json_str
+        && let Ok(desc) = serde_json::from_str::<ContentDescription>(json)
+    {
+        return Ok(desc);
     }
 
     // Fallback: use the raw response as summary
@@ -577,16 +630,14 @@ mod tests {
         let info = MediaInfo {
             id: Uuid::new_v4(),
             format: ContainerFormat::Mp4,
-            streams: vec![
-                StreamInfo::Audio(AudioStreamInfo {
-                    codec: AudioCodec::Aac,
-                    sample_rate: 44100,
-                    channels: 2,
-                    sample_format: SampleFormat::F32,
-                    bitrate: None,
-                    duration: Some(Duration::from_secs(180)),
-                }),
-            ],
+            streams: vec![StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Aac,
+                sample_rate: 44100,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                bitrate: None,
+                duration: Some(Duration::from_secs(180)),
+            })],
             duration: Some(Duration::from_secs(180)),
             file_size: None,
             title: Some("Test Song".to_string()),

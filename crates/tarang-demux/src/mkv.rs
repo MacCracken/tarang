@@ -635,6 +635,11 @@ impl<R: Read + Seek> MkvDemuxer<R> {
 
         // Header size: vint_len + 2 (timecode) + 1 (flags)
         let header_size = vint_len as u64 + 3;
+        if size < header_size {
+            return Err(TarangError::DemuxError(format!(
+                "SimpleBlock size {size} smaller than header {header_size}"
+            )));
+        }
         let data_size = size - header_size;
 
         let mut data = vec![0u8; data_size as usize];

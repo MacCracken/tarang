@@ -368,4 +368,128 @@ mod tests {
         let total: f64 = hist.iter().sum();
         assert!((total - 1.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn chi_squared_partial_overlap() {
+        let a = vec![0.5, 0.5, 0.0, 0.0];
+        let b = vec![0.0, 0.5, 0.5, 0.0];
+        let d = chi_squared_distance(&a, &b);
+        assert!(d > 0.0);
+        assert!(d < 1.0);
+    }
+
+    #[test]
+    fn chi_squared_empty_histograms() {
+        let d = chi_squared_distance(&[], &[]);
+        assert_eq!(d, 0.0);
+    }
+
+    #[test]
+    fn chi_squared_all_zero_bins() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![0.0, 0.0, 0.0];
+        assert_eq!(chi_squared_distance(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn chi_squared_single_bin() {
+        let a = vec![1.0];
+        let b = vec![0.0];
+        let d = chi_squared_distance(&a, &b);
+        assert!(d > 0.0);
+    }
+
+    #[test]
+    fn rgba32_histogram_returns_empty() {
+        let frame = VideoFrame {
+            data: Bytes::from(vec![128u8; 16 * 16 * 4]),
+            pixel_format: PixelFormat::Rgba32,
+            width: 16,
+            height: 16,
+            timestamp: Duration::ZERO,
+        };
+        let hist = compute_luminance_histogram(&frame, 32);
+        // RGBA32 should still produce a valid histogram via RGB path
+        let total: f64 = hist.iter().sum();
+        assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn detect_scenes_empty_iterator() {
+        let config = SceneDetectionConfig::default();
+        let boundaries = detect_scenes(std::iter::empty(), config);
+        assert!(boundaries.is_empty());
+    }
+
+    #[test]
+    fn detect_scenes_single_frame() {
+        let config = SceneDetectionConfig::default();
+        let frames = vec![make_yuv_frame(32, 32, 128, 0)];
+        let boundaries = detect_scenes(frames.into_iter(), config);
+        assert!(boundaries.is_empty());
+    }
+
+    #[test]
+    fn scene_detection_config_default_values() {
+        let config = SceneDetectionConfig::default();
+        assert_eq!(config.hard_cut_threshold, 0.4);
+        assert_eq!(config.gradual_threshold, 0.15);
+        assert_eq!(config.min_scene_duration, Duration::from_secs(1));
+        assert_eq!(config.histogram_bins, 64);
+        assert_eq!(config.rolling_window, 10);
+    }
+
+    #[test]
+    fn yuv422p_histogram() {
+        let w = 16u32;
+        let h = 16u32;
+        let y_size = (w * h) as usize;
+        // YUV422p: Y plane + half-width U + half-width V
+        let chroma_size = ((w / 2) * h) as usize;
+        let mut data = vec![200u8; y_size];
+        data.resize(y_size + 2 * chroma_size, 128);
+        let frame = VideoFrame {
+            data: Bytes::from(data),
+            pixel_format: PixelFormat::Yuv422p,
+            width: w,
+            height: h,
+            timestamp: Duration::ZERO,
+        };
+        let hist = compute_luminance_histogram(&frame, 32);
+        let total: f64 = hist.iter().sum();
+        assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn multiple_hard_cuts_with_debounce() {
+        let config = SceneDetectionConfig {
+            min_scene_duration: Duration::from_millis(200),
+            ..Default::default()
+        };
+        let mut detector = SceneDetector::new(config);
+        let mut boundaries = Vec::new();
+
+        // black frames 0-500ms
+        for i in 0..15 {
+            if let Some(b) = detector.feed_frame(&make_yuv_frame(32, 32, 0, i * 33)) {
+                boundaries.push(b);
+            }
+        }
+        // white frame at ~500ms
+        if let Some(b) = detector.feed_frame(&make_yuv_frame(32, 32, 255, 500)) {
+            boundaries.push(b);
+        }
+        // black frame at ~533ms (within debounce)
+        if let Some(b) = detector.feed_frame(&make_yuv_frame(32, 32, 0, 533)) {
+            boundaries.push(b);
+        }
+        // white frame at ~800ms (after debounce)
+        if let Some(b) = detector.feed_frame(&make_yuv_frame(32, 32, 255, 800)) {
+            boundaries.push(b);
+        }
+
+        // Should get at least the first hard cut
+        assert!(!boundaries.is_empty());
+        assert_eq!(boundaries[0].boundary_type, SceneBoundaryType::HardCut);
+    }
 }

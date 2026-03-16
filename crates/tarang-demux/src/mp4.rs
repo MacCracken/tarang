@@ -130,9 +130,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         }
 
         let data_offset = offset + header_size;
+        // Limit size-0 boxes (extends to EOF) to a reasonable max to prevent OOM
+        const MAX_BOX_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4 GB
         let data_size = if size == 0 {
-            // Box extends to EOF — we don't know the exact size
-            u64::MAX - data_offset
+            // Box extends to EOF — cap at MAX_BOX_SIZE to prevent unbounded reads
+            MAX_BOX_SIZE
         } else {
             size.saturating_sub(header_size)
         };

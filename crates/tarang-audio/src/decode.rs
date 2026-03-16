@@ -259,12 +259,12 @@ fn bytemuck_f32_to_bytes(samples: &[f32]) -> &[u8] {
 
 /// Safe cast from &[u8] to &[f32]
 fn bytemuck_bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(
-        bytes.len().is_multiple_of(4),
-        "byte slice not aligned to f32"
-    );
-    let ptr = bytes.as_ptr() as *const f32;
     let len = bytes.len() / 4;
+    if len == 0 || !bytes.len().is_multiple_of(4) {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    let ptr = bytes.as_ptr() as *const f32;
     unsafe { std::slice::from_raw_parts(ptr, len) }
 }
 
@@ -412,5 +412,54 @@ mod tests {
             "after seeking to 0.5s, timestamp was {:?}",
             buf.timestamp
         );
+    }
+
+    #[test]
+    fn decode_all_combines_buffers() {
+        // Verify decode_all returns a single combined buffer
+        let wav = make_wav_samples(8820, 44100, 1);
+        let cursor = Cursor::new(wav);
+        let mut decoder = FileDecoder::open(Box::new(cursor), Some("wav")).unwrap();
+        let buf = decoder.decode_all().unwrap();
+        assert_eq!(buf.num_samples, 8820);
+        assert_eq!(buf.channels, 1);
+        assert_eq!(buf.sample_format, SampleFormat::F32);
+    }
+
+    #[test]
+    fn decode_wav_high_sample_rate() {
+        let wav = make_wav_samples(960, 96000, 1);
+        let cursor = Cursor::new(wav);
+        let mut decoder = FileDecoder::open(Box::new(cursor), Some("wav")).unwrap();
+        assert_eq!(decoder.sample_rate(), 96000);
+        let buf = decoder.decode_all().unwrap();
+        assert_eq!(buf.sample_rate, 96000);
+    }
+
+    #[test]
+    fn open_path_nonexistent() {
+        let result = FileDecoder::open_path(std::path::Path::new("/nonexistent/audio.wav"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bytemuck_roundtrip() {
+        let samples = [0.5f32, -0.25, 1.0, 0.0];
+        let bytes = bytemuck_f32_to_bytes(&samples);
+        let back = bytemuck_bytes_to_f32(bytes);
+        assert_eq!(back, &samples);
+    }
+
+    #[test]
+    fn bytemuck_empty() {
+        let empty: &[u8] = &[];
+        assert!(bytemuck_bytes_to_f32(empty).is_empty());
+    }
+
+    #[test]
+    fn bytemuck_odd_bytes() {
+        // Not a multiple of 4 — should return empty
+        let odd = &[1u8, 2, 3, 4, 5];
+        assert!(bytemuck_bytes_to_f32(odd).is_empty());
     }
 }

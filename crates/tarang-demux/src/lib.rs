@@ -82,4 +82,62 @@ mod tests {
         assert_eq!(packet.data.len(), 3);
         assert!(!packet.is_keyframe);
     }
+
+    #[test]
+    fn detect_mp4() {
+        let header = b"\x00\x00\x00\x20ftypisom\x00\x00\x00\x00";
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Mp4);
+    }
+
+    #[test]
+    fn detect_flac() {
+        let header = b"fLaC\x00\x00\x00\x22\x00\x00\x00\x00";
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Flac);
+    }
+
+    #[test]
+    fn detect_mkv() {
+        let header = &[
+            0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23,
+        ];
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Mkv);
+    }
+
+    #[test]
+    fn detect_mp3_id3() {
+        let header = b"ID3\x04\x00\x00\x00\x00\x00\x00\x00\x00";
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Mp3);
+    }
+
+    #[test]
+    fn detect_mp3_sync() {
+        let header = &[
+            0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Mp3);
+    }
+
+    #[test]
+    fn detect_avi() {
+        let header = b"RIFF\x00\x00\x00\x00AVI \x00\x00";
+        assert_eq!(detect_format(header).unwrap(), ContainerFormat::Avi);
+    }
+
+    #[test]
+    fn detect_too_short() {
+        assert!(detect_format(b"RIFF").is_err());
+    }
+
+    #[test]
+    fn packet_keyframe() {
+        let packet = Packet {
+            stream_index: 0,
+            data: Bytes::from(vec![0xFF; 1024]),
+            timestamp: Duration::ZERO,
+            duration: None,
+            is_keyframe: true,
+        };
+        assert!(packet.is_keyframe);
+        assert_eq!(packet.duration, None);
+    }
 }

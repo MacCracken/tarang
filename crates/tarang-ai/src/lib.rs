@@ -9,6 +9,10 @@ pub mod scene;
 pub mod thumbnail;
 pub mod transcribe;
 
+pub use daimon::{
+    ContentDescription, DaimonClient, DaimonConfig, HooshLlmClient, HooshLlmConfig, RagResult,
+    SimilarMedia,
+};
 pub use fingerprint::{
     AudioFingerprint, FingerprintConfig, compute_fingerprint, fingerprint_match,
 };
@@ -21,10 +25,6 @@ pub use thumbnail::{
 };
 pub use transcribe::{
     HooshClient, HooshConfig, WhisperModel, encode_wav_bytes, prepare_audio_for_transcription,
-};
-pub use daimon::{
-    ContentDescription, DaimonClient, DaimonConfig, HooshLlmClient, HooshLlmConfig, RagResult,
-    SimilarMedia,
 };
 
 use serde::{Deserialize, Serialize};
@@ -422,5 +422,229 @@ mod tests {
         let json = serde_json::to_string(&ContentType::Music).unwrap();
         let parsed: ContentType = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, ContentType::Music);
+    }
+
+    #[test]
+    fn content_type_display_all() {
+        assert_eq!(ContentType::Speech.to_string(), "speech");
+        assert_eq!(ContentType::Clip.to_string(), "clip");
+        assert_eq!(ContentType::Screencast.to_string(), "screencast");
+        assert_eq!(ContentType::Animation.to_string(), "animation");
+    }
+
+    #[test]
+    fn content_type_serialization_all() {
+        for ct in [
+            ContentType::Music,
+            ContentType::Speech,
+            ContentType::Podcast,
+            ContentType::Movie,
+            ContentType::Clip,
+            ContentType::Screencast,
+            ContentType::Animation,
+            ContentType::Unknown,
+        ] {
+            let json = serde_json::to_string(&ct).unwrap();
+            let parsed: ContentType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, ct);
+        }
+    }
+
+    #[test]
+    fn classify_boundary_music_podcast_600s() {
+        // Exactly 600s should be Music (not >600)
+        let info = make_audio_info(AudioCodec::Mp3, 600);
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Music);
+    }
+
+    #[test]
+    fn classify_boundary_podcast_601s() {
+        let info = make_audio_info(AudioCodec::Mp3, 601);
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Podcast);
+    }
+
+    #[test]
+    fn classify_boundary_clip_movie_3600s() {
+        // Exactly 3600s should be Clip (not >3600)
+        let info = make_video_info(1920, 1080, VideoCodec::H264, 3600);
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Clip);
+    }
+
+    #[test]
+    fn classify_boundary_movie_3601s() {
+        let info = make_video_info(1920, 1080, VideoCodec::H264, 3601);
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Movie);
+    }
+
+    #[test]
+    fn classify_animation_video_only() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![StreamInfo::Video(VideoStreamInfo {
+                codec: VideoCodec::H264,
+                width: 1920,
+                height: 1080,
+                pixel_format: PixelFormat::Yuv420p,
+                frame_rate: 24.0,
+                bitrate: None,
+                duration: None,
+            })],
+            duration: Some(Duration::from_secs(60)),
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Animation);
+        assert!(analysis.tags.contains(&"video".to_string()));
+        assert!(!analysis.tags.contains(&"audio".to_string()));
+    }
+
+    #[test]
+    fn classify_unknown_no_streams() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: Vec::new(),
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let analysis = analyze_media(&info);
+        assert_eq!(analysis.content_type, ContentType::Unknown);
+        assert!(analysis.tags.is_empty());
+        assert_eq!(analysis.estimated_complexity, 0.0);
+    }
+
+    #[test]
+    fn suggest_vp9_for_vp8() {
+        let info = make_video_info(640, 480, VideoCodec::Vp8, 60);
+        let analysis = analyze_media(&info);
+        assert!(analysis.codec_recommendation.is_some());
+        assert!(analysis.codec_recommendation.unwrap().contains("VP9"));
+    }
+
+    #[test]
+    fn no_suggestion_for_h265() {
+        let info = make_video_info(3840, 2160, VideoCodec::H265, 60);
+        let analysis = analyze_media(&info);
+        assert!(analysis.codec_recommendation.is_none());
+    }
+
+    #[test]
+    fn quality_score_high_sample_rate_audio() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Flac,
+            streams: vec![StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Flac,
+                sample_rate: 96000,
+                channels: 2,
+                sample_format: SampleFormat::I32,
+                bitrate: None,
+                duration: None,
+            })],
+            duration: Some(Duration::from_secs(60)),
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let analysis = analyze_media(&info);
+        // base 50 + sample_rate>=48k bonus 5 + lossless bonus 5 = 60
+        assert!(analysis.quality_score >= 60.0);
+    }
+
+    #[test]
+    fn quality_score_capped_at_100() {
+        // 4K H265 60fps + lossless high-rate audio should cap at 100
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mkv,
+            streams: vec![
+                StreamInfo::Video(VideoStreamInfo {
+                    codec: VideoCodec::H265,
+                    width: 3840,
+                    height: 2160,
+                    pixel_format: PixelFormat::Yuv420p,
+                    frame_rate: 120.0,
+                    bitrate: None,
+                    duration: None,
+                }),
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Flac,
+                    sample_rate: 96000,
+                    channels: 2,
+                    sample_format: SampleFormat::I32,
+                    bitrate: None,
+                    duration: None,
+                }),
+            ],
+            duration: Some(Duration::from_secs(60)),
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let analysis = analyze_media(&info);
+        assert!(analysis.quality_score <= 100.0);
+    }
+
+    #[test]
+    fn estimated_complexity_capped() {
+        // Very high resolution + fps should cap at 100
+        let info = make_video_info(7680, 4320, VideoCodec::Av1, 60);
+        let analysis = analyze_media(&info);
+        assert!(analysis.estimated_complexity <= 100.0);
+    }
+
+    #[test]
+    fn no_suggestion_for_sd_h264() {
+        // H264 below 1920 should not trigger AV1 suggestion
+        let info = make_video_info(1280, 720, VideoCodec::H264, 60);
+        let analysis = analyze_media(&info);
+        assert!(analysis.codec_recommendation.is_none());
+    }
+
+    #[test]
+    fn prepare_transcription_no_duration() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Opus,
+                sample_rate: 48000,
+                channels: 1,
+                sample_format: SampleFormat::F32,
+                bitrate: None,
+                duration: None,
+            })],
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let req = prepare_transcription(&info, None);
+        assert!(req.is_some());
+        assert_eq!(req.unwrap().duration_secs, 0.0);
+    }
+
+    #[test]
+    fn media_analysis_serialization() {
+        let info = make_video_info(1920, 1080, VideoCodec::H264, 60);
+        let analysis = analyze_media(&info);
+        let json = serde_json::to_string(&analysis).unwrap();
+        let parsed: MediaAnalysis = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.content_type, analysis.content_type);
+        assert_eq!(parsed.tags, analysis.tags);
     }
 }

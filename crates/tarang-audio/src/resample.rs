@@ -148,11 +148,16 @@ fn hann_window(x: f64, half_width: f64) -> f64 {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len().is_multiple_of(4));
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || !bytes.len().is_multiple_of(4) {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }
 
 fn f32_to_bytes(samples: &[f32]) -> &[u8] {
+    // Safety: f32 has no invalid bit patterns, reinterpreting as bytes is always safe.
     unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) }
 }
 
@@ -267,5 +272,60 @@ mod tests {
     fn rms(samples: &[f32]) -> f32 {
         let sum: f64 = samples.iter().map(|s| (*s as f64) * (*s as f64)).sum();
         (sum / samples.len() as f64).sqrt() as f32
+    }
+
+    #[test]
+    fn resample_sinc_noop() {
+        let samples = make_sine(440.0, 48000, 1000, 1);
+        let buf = make_buffer(&samples, 1, 48000);
+        let out = resample_sinc(&buf, 48000, 16).unwrap();
+        assert_eq!(out.sample_rate, 48000);
+        assert_eq!(out.data, buf.data);
+    }
+
+    #[test]
+    fn resample_sinc_zero_rate_error() {
+        let samples = make_sine(440.0, 44100, 100, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        assert!(resample_sinc(&buf, 0, 16).is_err());
+    }
+
+    #[test]
+    fn resample_invalid_source() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![]),
+            sample_format: SampleFormat::F32,
+            channels: 0,
+            sample_rate: 0,
+            num_samples: 0,
+            timestamp: std::time::Duration::ZERO,
+        };
+        assert!(resample(&buf, 44100).is_err());
+    }
+
+    #[test]
+    fn resample_large_ratio() {
+        // 8000 → 48000 (6x upsample)
+        let samples = make_sine(440.0, 8000, 800, 1);
+        let buf = make_buffer(&samples, 1, 8000);
+        let out = resample(&buf, 48000).unwrap();
+        assert_eq!(out.sample_rate, 48000);
+        assert!((out.num_samples as f64 / 4800.0 - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resample_preserves_channels() {
+        let samples = make_sine(440.0, 44100, 1000, 2);
+        let buf = make_buffer(&samples, 2, 44100);
+        let out = resample(&buf, 22050).unwrap();
+        assert_eq!(out.channels, 2);
+    }
+
+    #[test]
+    fn resample_preserves_format() {
+        let samples = make_sine(440.0, 44100, 1000, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let out = resample(&buf, 48000).unwrap();
+        assert_eq!(out.sample_format, SampleFormat::F32);
     }
 }

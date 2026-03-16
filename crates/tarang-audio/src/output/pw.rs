@@ -103,7 +103,7 @@ impl AudioOutput for PipeWireOutput {
         let ch = config.channels as usize;
 
         let handle = std::thread::Builder::new()
-            .name("jalwa-pipewire".into())
+            .name("tarang-pipewire".into())
             .spawn(move || {
                 pw_thread_main(ring_ref, running_ref, rate, channels, ch);
             })
@@ -123,9 +123,16 @@ impl AudioOutput for PipeWireOutput {
             return Err(TarangError::Pipeline("output not opened".to_string()));
         }
 
-        let samples = unsafe {
-            std::slice::from_raw_parts(buf.data.as_ptr() as *const f32, buf.data.len() / 4)
-        };
+        let byte_len = buf.data.len();
+        if byte_len % 4 != 0 {
+            return Err(TarangError::Pipeline(
+                "audio buffer size not aligned to f32".to_string(),
+            ));
+        }
+        // Safety: AudioBuffer data originates from F32 serialization; heap alignment >= 8 bytes.
+        debug_assert!(buf.data.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+        let samples =
+            unsafe { std::slice::from_raw_parts(buf.data.as_ptr() as *const f32, byte_len / 4) };
 
         let mut written = 0;
         while written < samples.len() {

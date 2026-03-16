@@ -415,4 +415,81 @@ mod tests {
         }
         assert_eq!(decoder.frames_decoded(), 5);
     }
+
+    #[test]
+    fn decoder_status_transitions() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::Ready);
+
+        decoder.send_packet(&[1, 2, 3], Duration::ZERO).unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::HasOutput);
+
+        let _ = decoder.receive_frame().unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::NeedsInput);
+
+        decoder.flush().unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::Flushed);
+    }
+
+    #[test]
+    fn receive_without_send_errors() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        assert!(decoder.receive_frame().is_err());
+    }
+
+    #[test]
+    fn decoder_default_dimensions() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        assert_eq!(decoder.dimensions(), (0, 0));
+
+        // Without init, receive_frame uses default 320x240
+        decoder.send_packet(&[0xFF], Duration::ZERO).unwrap();
+        let frame = decoder.receive_frame().unwrap();
+        assert_eq!(frame.width, 320);
+        assert_eq!(frame.height, 240);
+        assert_eq!(frame.pixel_format, PixelFormat::Rgb24);
+    }
+
+    #[test]
+    fn decoder_frame_timestamps_increase() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+
+        let mut prev_ts = Duration::ZERO;
+        for i in 0..3 {
+            decoder.send_packet(&[i as u8], Duration::ZERO).unwrap();
+            let frame = decoder.receive_frame().unwrap();
+            if i > 0 {
+                assert!(frame.timestamp > prev_ts);
+            }
+            prev_ts = frame.timestamp;
+        }
+    }
+
+    #[test]
+    fn decoder_config_thread_count() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        assert!(config.thread_count >= 1);
+        assert!(!config.hw_accel);
+    }
+
+    #[test]
+    fn decoder_status_equality() {
+        assert_eq!(DecoderStatus::Ready, DecoderStatus::Ready);
+        assert_ne!(DecoderStatus::Ready, DecoderStatus::Flushed);
+        assert_ne!(DecoderStatus::HasOutput, DecoderStatus::NeedsInput);
+    }
+
+    #[test]
+    fn supported_codecs_no_duplicates() {
+        let codecs = supported_codecs();
+        for (i, a) in codecs.iter().enumerate() {
+            for b in &codecs[i + 1..] {
+                assert_ne!(a, b, "duplicate codec entry");
+            }
+        }
+    }
 }

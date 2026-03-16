@@ -277,8 +277,12 @@ impl BitWriter {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len().is_multiple_of(4));
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || !bytes.len().is_multiple_of(4) {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }
 
 #[cfg(test)]
@@ -449,5 +453,70 @@ mod tests {
         bw.write_bits(0b0101, 4);
         let bytes = bw.into_bytes();
         assert_eq!(bytes, vec![0b10100101]);
+    }
+
+    #[test]
+    fn flac_flush_empty() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let flushed = enc.flush().unwrap();
+        assert!(flushed.is_empty());
+    }
+
+    #[test]
+    fn flac_encode_high_sample_rate() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 96000,
+            channels: 2,
+            bits_per_sample: 24,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let samples = make_sine(4096, 2);
+        let buf = make_buffer(&samples, 2, 96000);
+        let packets = enc.encode(&buf).unwrap();
+        assert!(!packets.is_empty());
+        // First packet should be fLaC stream header
+        assert_eq!(&packets[0][..4], b"fLaC");
+    }
+
+    #[test]
+    fn flac_encode_small_buffer() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        // Fewer than block_size samples
+        let samples = make_sine(100, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let packets = enc.encode(&buf).unwrap();
+        // Should still produce streaminfo + 1 padded frame
+        assert!(packets.len() >= 2);
+    }
+
+    #[test]
+    fn bit_writer_multi_byte() {
+        let mut bw = BitWriter::new();
+        bw.write_bits(0xABCD, 16);
+        let bytes = bw.into_bytes();
+        assert_eq!(bytes, vec![0xAB, 0xCD]);
+    }
+
+    #[test]
+    fn bit_writer_cross_byte_boundary() {
+        let mut bw = BitWriter::new();
+        bw.write_bits(0b111, 3);
+        bw.write_bits(0b00000, 5);
+        bw.write_bits(0b11111111, 8);
+        let bytes = bw.into_bytes();
+        assert_eq!(bytes, vec![0b11100000, 0xFF]);
     }
 }

@@ -393,4 +393,100 @@ mod tests {
         let fp = compute_fingerprint(&buf, &config).unwrap();
         assert!(!fp.hashes.is_empty());
     }
+
+    #[test]
+    fn unsupported_format_returns_error() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 1000]),
+            sample_format: SampleFormat::F64,
+            channels: 1,
+            sample_rate: 16000,
+            num_samples: 125,
+            timestamp: Duration::ZERO,
+        };
+        let config = FingerprintConfig::default();
+        assert!(compute_fingerprint(&buf, &config).is_err());
+    }
+
+    #[test]
+    fn one_empty_one_nonempty_zero_match() {
+        let empty = AudioFingerprint {
+            hashes: Vec::new(),
+            duration_secs: 0.0,
+        };
+        let nonempty = AudioFingerprint {
+            hashes: vec![0x12345678, 0xDEADBEEF],
+            duration_secs: 1.0,
+        };
+        assert_eq!(fingerprint_match(&empty, &nonempty), 0.0);
+        assert_eq!(fingerprint_match(&nonempty, &empty), 0.0);
+    }
+
+    #[test]
+    fn stereo_f32_input() {
+        let num_samples = 8000;
+        let channels = 2u16;
+        let mut data = Vec::with_capacity(num_samples * channels as usize * 4);
+        for i in 0..num_samples {
+            let t = i as f32 / 16000.0;
+            let sample = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
+            // Write same sample to both channels
+            data.extend_from_slice(&sample.to_le_bytes());
+            data.extend_from_slice(&sample.to_le_bytes());
+        }
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::F32,
+            channels,
+            sample_rate: 16000,
+            num_samples,
+            timestamp: Duration::ZERO,
+        };
+        let config = FingerprintConfig::default();
+        let fp = compute_fingerprint(&buf, &config).unwrap();
+        // Should extract first channel only and still produce fingerprint
+        assert!(!fp.hashes.is_empty());
+    }
+
+    #[test]
+    fn fingerprint_config_default() {
+        let config = FingerprintConfig::default();
+        assert_eq!(config.sample_rate, 16000);
+        assert_eq!(config.frame_size, 4096);
+        assert_eq!(config.hop_size, 2048);
+        assert_eq!(config.num_bands, 12);
+    }
+
+    #[test]
+    fn different_noise_seeds_different_fingerprints() {
+        let config = FingerprintConfig::default();
+        let fp1 = compute_fingerprint(&make_noise_buffer(2.0, 16000, 1), &config).unwrap();
+        let fp2 = compute_fingerprint(&make_noise_buffer(2.0, 16000, 999), &config).unwrap();
+        // Different seeds should produce different hashes
+        assert_ne!(fp1.hashes, fp2.hashes);
+    }
+
+    #[test]
+    fn stereo_i16_input() {
+        let num_samples = 8000;
+        let channels = 2u16;
+        let mut data = Vec::with_capacity(num_samples * channels as usize * 2);
+        for i in 0..num_samples {
+            let t = i as f32 / 16000.0;
+            let sample = ((t * 440.0 * std::f32::consts::TAU).sin() * 16000.0) as i16;
+            data.extend_from_slice(&sample.to_le_bytes());
+            data.extend_from_slice(&sample.to_le_bytes());
+        }
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::I16,
+            channels,
+            sample_rate: 16000,
+            num_samples,
+            timestamp: Duration::ZERO,
+        };
+        let config = FingerprintConfig::default();
+        let fp = compute_fingerprint(&buf, &config).unwrap();
+        assert!(!fp.hashes.is_empty());
+    }
 }

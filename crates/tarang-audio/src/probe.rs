@@ -43,7 +43,7 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
             sample_format: SampleFormat::F32,
             bitrate: params
                 .bits_per_coded_sample
-                .map(|b| sample_rate * channels as u32 * b),
+                .and_then(|b| sample_rate.checked_mul(channels as u32)?.checked_mul(b)),
             duration,
         }));
     }

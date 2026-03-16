@@ -101,7 +101,7 @@ impl<W: Write + Seek> Muxer for WavMuxer<W> {
 
     fn finalize(&mut self) -> Result<()> {
         // Patch RIFF size (file_size - 8)
-        let riff_size = 36 + self.data_bytes_written;
+        let riff_size = 36u32.saturating_add(self.data_bytes_written);
         self.writer
             .seek(std::io::SeekFrom::Start(4))
             .map_err(io_err)?;

@@ -132,6 +132,7 @@ pub fn prepare_audio_for_transcription(buf: &AudioBuffer) -> AudioBuffer {
         if buf.sample_format == SampleFormat::F32 {
             for i in 0..sample_count {
                 let mut sum = 0.0f32;
+                let mut count = 0u32;
                 for ch in 0..channels {
                     let offset = (i * channels + ch) * 4;
                     if offset + 4 <= buf.data.len() {
@@ -142,9 +143,11 @@ pub fn prepare_audio_for_transcription(buf: &AudioBuffer) -> AudioBuffer {
                             buf.data[offset + 3],
                         ]);
                         sum += sample;
+                        count += 1;
                     }
                 }
-                mono_data.extend_from_slice(&(sum / channels as f32).to_le_bytes());
+                let avg = if count > 0 { sum / count as f32 } else { 0.0 };
+                mono_data.extend_from_slice(&avg.to_le_bytes());
             }
         } else {
             // For non-F32, just take the first channel
@@ -399,5 +402,137 @@ mod tests {
         let parsed: TranscriptionResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.text, "hello world");
         assert_eq!(parsed.segments.len(), 1);
+    }
+
+    #[test]
+    fn whisper_model_display_all() {
+        assert_eq!(WhisperModel::Small.to_string(), "small");
+        assert_eq!(WhisperModel::Medium.to_string(), "medium");
+        assert_eq!(WhisperModel::Large.to_string(), "large");
+        assert_eq!(WhisperModel::Base.to_string(), "base");
+    }
+
+    #[test]
+    fn pcm16_from_i32() {
+        let mut data = Vec::new();
+        // i32 max >> 16 should give i16 max range
+        data.extend_from_slice(&(0x7FFF0000i32).to_le_bytes());
+        data.extend_from_slice(&(0i32).to_le_bytes());
+        data.extend_from_slice(&(-0x7FFF0000i32).to_le_bytes());
+
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::I32,
+            channels: 1,
+            sample_rate: 16000,
+            num_samples: 3,
+            timestamp: Duration::ZERO,
+        };
+
+        let pcm = samples_to_pcm16(&buf).unwrap();
+        assert_eq!(pcm.len(), 6);
+        let s0 = i16::from_le_bytes([pcm[0], pcm[1]]);
+        let s1 = i16::from_le_bytes([pcm[2], pcm[3]]);
+        let s2 = i16::from_le_bytes([pcm[4], pcm[5]]);
+        assert_eq!(s0, 0x7FFF);
+        assert_eq!(s1, 0);
+        assert_eq!(s2, -0x7FFF);
+    }
+
+    #[test]
+    fn pcm16_unsupported_format() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 64]),
+            sample_format: SampleFormat::F64,
+            channels: 1,
+            sample_rate: 16000,
+            num_samples: 8,
+            timestamp: Duration::ZERO,
+        };
+        assert!(samples_to_pcm16(&buf).is_err());
+    }
+
+    #[test]
+    fn encode_wav_stereo() {
+        let buf = make_f32_buffer(2, 44100, 1000);
+        let wav = encode_wav_bytes(&buf).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        // 2 channels
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 2);
+        // 44100 Hz
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            44100
+        );
+    }
+
+    #[test]
+    fn prepare_i16_stereo_takes_first_channel() {
+        let num_samples = 100;
+        let mut data = Vec::with_capacity(num_samples * 2 * 2);
+        for i in 0..num_samples {
+            // Left channel: ascending
+            let left = (i as i16) * 100;
+            // Right channel: descending
+            let right = -((i as i16) * 100);
+            data.extend_from_slice(&left.to_le_bytes());
+            data.extend_from_slice(&right.to_le_bytes());
+        }
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::I16,
+            channels: 2,
+            sample_rate: 16000,
+            num_samples,
+            timestamp: Duration::ZERO,
+        };
+        let mono = prepare_audio_for_transcription(&buf);
+        assert_eq!(mono.channels, 1);
+        // Non-F32 takes first channel, so first sample should be 0
+        let first = i16::from_le_bytes([mono.data[0], mono.data[1]]);
+        assert_eq!(first, 0);
+    }
+
+    #[test]
+    fn prepare_multichannel_f32_averages() {
+        let num_samples = 10;
+        let channels = 4u16;
+        let mut data = Vec::with_capacity(num_samples * channels as usize * 4);
+        for _ in 0..num_samples {
+            // All channels = 0.4, so average should be 0.4
+            for _ in 0..channels {
+                data.extend_from_slice(&(0.4f32).to_le_bytes());
+            }
+        }
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::F32,
+            channels,
+            sample_rate: 16000,
+            num_samples,
+            timestamp: Duration::ZERO,
+        };
+        let mono = prepare_audio_for_transcription(&buf);
+        assert_eq!(mono.channels, 1);
+        // Check first sample is ~0.4
+        let first = f32::from_le_bytes([mono.data[0], mono.data[1], mono.data[2], mono.data[3]]);
+        assert!((first - 0.4).abs() < 0.01);
+    }
+
+    #[test]
+    fn transcription_request_serde() {
+        use crate::TranscriptionRequest;
+        let req = TranscriptionRequest {
+            audio_codec: "Opus".to_string(),
+            sample_rate: 48000,
+            channels: 1,
+            duration_secs: 120.5,
+            language_hint: Some("es".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: TranscriptionRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.audio_codec, "Opus");
+        assert_eq!(parsed.language_hint, Some("es".to_string()));
     }
 }

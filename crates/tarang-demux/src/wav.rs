@@ -126,9 +126,10 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
                 sample_rate: self.sample_rate,
                 channels: self.channels,
                 sample_format,
-                bitrate: Some(
-                    self.sample_rate * self.channels as u32 * self.bits_per_sample as u32,
-                ),
+                bitrate: self
+                    .sample_rate
+                    .checked_mul(self.channels as u32)
+                    .and_then(|v| v.checked_mul(self.bits_per_sample as u32)),
                 duration,
             })],
             duration,

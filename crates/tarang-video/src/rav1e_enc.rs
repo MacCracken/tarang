@@ -43,7 +43,7 @@ impl Rav1eEncoder {
         enc_config.width = config.width as usize;
         enc_config.height = config.height as usize;
         enc_config.speed_settings = rav1e::SpeedSettings::from_preset(config.speed as usize);
-        enc_config.bitrate = config.bitrate_bps as i32;
+        enc_config.bitrate = (config.bitrate_bps).min(i32::MAX as u32) as i32;
         enc_config.time_base = rav1e::data::Rational {
             num: config.frame_rate_den as u64,
             den: config.frame_rate_num as u64,
@@ -67,11 +67,26 @@ impl Rav1eEncoder {
 
     /// Send a YUV420p frame to the encoder.
     pub fn send_frame(&mut self, frame: &VideoFrame) -> Result<()> {
+        if frame.width != self.width || frame.height != self.height {
+            return Err(TarangError::Pipeline(format!(
+                "frame dimensions {}x{} don't match encoder {}x{}",
+                frame.width, frame.height, self.width, self.height
+            )));
+        }
+
         let mut enc_frame = self.context.new_frame();
 
         let y_size = (self.width * self.height) as usize;
         let chroma_w = (self.width / 2) as usize;
         let chroma_h = (self.height / 2) as usize;
+        let expected_size = y_size + 2 * chroma_w * chroma_h;
+        if frame.data.len() < expected_size {
+            return Err(TarangError::Pipeline(format!(
+                "frame data too small: {} bytes, expected at least {}",
+                frame.data.len(),
+                expected_size
+            )));
+        }
 
         // Y
         for row in 0..self.height as usize {

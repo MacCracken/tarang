@@ -115,7 +115,9 @@ impl ContainerFormat {
             return Some(Self::Flac);
         }
         // ID3 or sync word for MP3
-        if bytes.starts_with(b"ID3") || (bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0) {
+        if bytes.starts_with(b"ID3")
+            || (bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)
+        {
             return Some(Self::Mp3);
         }
         // RIFF....AVI
@@ -142,7 +144,7 @@ impl std::fmt::Display for ContainerFormat {
 }
 
 /// Sample format for decoded audio
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SampleFormat {
     I16,
     I32,
@@ -162,7 +164,7 @@ impl SampleFormat {
 }
 
 /// Pixel format for decoded video frames
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PixelFormat {
     Yuv420p,
     Yuv422p,
@@ -573,5 +575,211 @@ mod tests {
         let json = serde_json::to_string(&VideoCodec::Av1).unwrap();
         let parsed: VideoCodec = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, VideoCodec::Av1);
+    }
+
+    #[test]
+    fn audio_codec_display_all_variants() {
+        assert_eq!(AudioCodec::Pcm.to_string(), "PCM");
+        assert_eq!(AudioCodec::Aac.to_string(), "AAC");
+        assert_eq!(AudioCodec::Alac.to_string(), "ALAC");
+        assert_eq!(AudioCodec::Wma.to_string(), "WMA");
+    }
+
+    #[test]
+    fn video_codec_display_all_variants() {
+        assert_eq!(VideoCodec::H265.to_string(), "H.265");
+        assert_eq!(VideoCodec::Vp8.to_string(), "VP8");
+        assert_eq!(VideoCodec::Theora.to_string(), "Theora");
+    }
+
+    #[test]
+    fn container_format_display_all_variants() {
+        assert_eq!(ContainerFormat::Ogg.to_string(), "OGG");
+        assert_eq!(ContainerFormat::Wav.to_string(), "WAV");
+        assert_eq!(ContainerFormat::Flac.to_string(), "FLAC");
+        assert_eq!(ContainerFormat::Mp3.to_string(), "MP3");
+        assert_eq!(ContainerFormat::Avi.to_string(), "AVI");
+    }
+
+    #[test]
+    fn container_extensions_all_formats() {
+        assert!(ContainerFormat::WebM.extensions().contains(&"webm"));
+        assert!(ContainerFormat::Wav.extensions().contains(&"wav"));
+        assert!(ContainerFormat::Flac.extensions().contains(&"flac"));
+        assert!(ContainerFormat::Mp3.extensions().contains(&"mp3"));
+        assert!(ContainerFormat::Avi.extensions().contains(&"avi"));
+        assert!(ContainerFormat::Ogg.extensions().contains(&"oga"));
+        assert!(ContainerFormat::Ogg.extensions().contains(&"ogv"));
+        assert!(ContainerFormat::Mp4.extensions().contains(&"m4v"));
+        assert!(ContainerFormat::Mkv.extensions().contains(&"mka"));
+    }
+
+    #[test]
+    fn media_info_no_streams() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: Vec::new(),
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        assert!(!info.has_video());
+        assert!(!info.has_audio());
+        assert!(info.video_streams().is_empty());
+        assert!(info.audio_streams().is_empty());
+    }
+
+    #[test]
+    fn media_info_subtitle_only() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mkv,
+            streams: vec![StreamInfo::Subtitle {
+                language: Some("fr".to_string()),
+            }],
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        assert!(!info.has_video());
+        assert!(!info.has_audio());
+    }
+
+    #[test]
+    fn tarang_error_all_variants_display() {
+        assert_eq!(
+            TarangError::UnsupportedFormat("X".to_string()).to_string(),
+            "unsupported container format: X"
+        );
+        assert_eq!(
+            TarangError::DecodeError("bad".to_string()).to_string(),
+            "decode error: bad"
+        );
+        assert_eq!(
+            TarangError::DemuxError("fail".to_string()).to_string(),
+            "demux error: fail"
+        );
+        assert_eq!(
+            TarangError::Pipeline("broken".to_string()).to_string(),
+            "pipeline error: broken"
+        );
+        assert_eq!(
+            TarangError::HwAccelError("no gpu".to_string()).to_string(),
+            "hardware acceleration error: no gpu"
+        );
+        assert_eq!(
+            TarangError::AiError("oops".to_string()).to_string(),
+            "AI feature error: oops"
+        );
+        assert_eq!(
+            TarangError::NetworkError("timeout".to_string()).to_string(),
+            "network error: timeout"
+        );
+        assert_eq!(
+            TarangError::ImageError("corrupt".to_string()).to_string(),
+            "image error: corrupt"
+        );
+    }
+
+    #[test]
+    fn pipeline_state_serialization() {
+        for state in [
+            PipelineState::Idle,
+            PipelineState::Opening,
+            PipelineState::Playing,
+            PipelineState::Paused,
+            PipelineState::Seeking,
+            PipelineState::Error,
+            PipelineState::Finished,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let parsed: PipelineState = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn sample_format_serialization() {
+        for fmt in [
+            SampleFormat::I16,
+            SampleFormat::I32,
+            SampleFormat::F32,
+            SampleFormat::F64,
+        ] {
+            let json = serde_json::to_string(&fmt).unwrap();
+            let parsed: SampleFormat = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, fmt);
+        }
+    }
+
+    #[test]
+    fn pixel_format_serialization() {
+        for fmt in [
+            PixelFormat::Yuv420p,
+            PixelFormat::Yuv422p,
+            PixelFormat::Yuv444p,
+            PixelFormat::Rgb24,
+            PixelFormat::Rgba32,
+            PixelFormat::Nv12,
+        ] {
+            let json = serde_json::to_string(&fmt).unwrap();
+            let parsed: PixelFormat = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, fmt);
+        }
+    }
+
+    #[test]
+    fn media_info_multiple_audio_streams() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mkv,
+            streams: vec![
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Aac,
+                    sample_rate: 48000,
+                    channels: 2,
+                    sample_format: SampleFormat::F32,
+                    bitrate: Some(128_000),
+                    duration: None,
+                }),
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Opus,
+                    sample_rate: 48000,
+                    channels: 6,
+                    sample_format: SampleFormat::F32,
+                    bitrate: Some(320_000),
+                    duration: None,
+                }),
+                StreamInfo::Video(VideoStreamInfo {
+                    codec: VideoCodec::H265,
+                    width: 3840,
+                    height: 2160,
+                    pixel_format: PixelFormat::Yuv420p,
+                    frame_rate: 60.0,
+                    bitrate: None,
+                    duration: None,
+                }),
+            ],
+            duration: Some(Duration::from_secs(7200)),
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        assert_eq!(info.audio_streams().len(), 2);
+        assert_eq!(info.video_streams().len(), 1);
+        assert_eq!(info.audio_streams()[1].channels, 6);
+    }
+
+    #[test]
+    fn io_error_conversion() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let tarang_err: TarangError = io_err.into();
+        assert!(tarang_err.to_string().contains("file missing"));
     }
 }

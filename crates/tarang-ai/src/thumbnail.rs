@@ -78,8 +78,7 @@ impl ThumbnailGenerator {
 
         // Insert and keep only top candidates
         self.candidates.push((frame.clone(), score));
-        self.candidates
-            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        self.candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         self.candidates.truncate(self.config.max_thumbnails);
     }
 
@@ -424,5 +423,155 @@ mod tests {
         let (w, h) = generator.compute_target_dims(640, 480);
         assert_eq!(w, 160);
         assert_eq!(h, 120);
+    }
+
+    #[test]
+    fn aspect_ratio_from_height_only() {
+        let config = ThumbnailConfig {
+            width: 0,
+            height: 120,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(640, 480);
+        assert_eq!(h, 120);
+        assert_eq!(w, 160);
+    }
+
+    #[test]
+    fn target_dims_zero_zero_passthrough() {
+        let config = ThumbnailConfig {
+            width: 0,
+            height: 0,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(1920, 1080);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+    }
+
+    #[test]
+    fn target_dims_both_specified() {
+        let config = ThumbnailConfig {
+            width: 200,
+            height: 100,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(1920, 1080);
+        assert_eq!(w, 200);
+        assert_eq!(h, 100);
+    }
+
+    #[test]
+    fn luminance_variance_rgb24() {
+        // Varying RGB data should produce non-zero variance
+        let w = 16u32;
+        let h = 16u32;
+        let mut data = Vec::with_capacity((w * h * 3) as usize);
+        for i in 0..(w * h) as usize {
+            let v = (i * 7) as u8;
+            data.push(v);
+            data.push(v);
+            data.push(v);
+        }
+        let frame = VideoFrame {
+            data: Bytes::from(data),
+            pixel_format: PixelFormat::Rgb24,
+            width: w,
+            height: h,
+            timestamp: Duration::ZERO,
+        };
+        assert!(luminance_variance(&frame) > 100.0);
+    }
+
+    #[test]
+    fn luminance_variance_rgba32_returns_zero() {
+        // RGBA32 hits the catch-all branch returning 0.0
+        let frame = VideoFrame {
+            data: Bytes::from(vec![128u8; 16 * 16 * 4]),
+            pixel_format: PixelFormat::Rgba32,
+            width: 16,
+            height: 16,
+            timestamp: Duration::ZERO,
+        };
+        assert_eq!(luminance_variance(&frame), 0.0);
+    }
+
+    #[test]
+    fn yuv420p_to_rgb24_rejects_unsupported_format() {
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 100]),
+            pixel_format: PixelFormat::Yuv422p,
+            width: 10,
+            height: 10,
+            timestamp: Duration::ZERO,
+        };
+        assert!(yuv420p_to_rgb24(&frame).is_err());
+    }
+
+    #[test]
+    fn yuv420p_to_rgb24_passthrough_rgb() {
+        let data = vec![42u8; 4 * 4 * 3];
+        let frame = VideoFrame {
+            data: Bytes::from(data.clone()),
+            pixel_format: PixelFormat::Rgb24,
+            width: 4,
+            height: 4,
+            timestamp: Duration::ZERO,
+        };
+        let rgb = yuv420p_to_rgb24(&frame).unwrap();
+        assert_eq!(rgb, data);
+    }
+
+    #[test]
+    fn yuv420p_to_rgb24_too_small() {
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 10]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 64,
+            height: 64,
+            timestamp: Duration::ZERO,
+        };
+        assert!(yuv420p_to_rgb24(&frame).is_err());
+    }
+
+    #[test]
+    fn generate_thumbnails_convenience() {
+        let frames: Vec<VideoFrame> = (0..5)
+            .map(|i| make_yuv_frame(32, 32, (i * 17 + 3) as u8, i * 100))
+            .collect();
+        let config = ThumbnailConfig {
+            width: 16,
+            height: 0,
+            min_variance: 10.0,
+            max_thumbnails: 2,
+            format: ThumbnailFormat::Jpeg,
+            quality: 75,
+        };
+        let thumbs = generate_thumbnails(frames.into_iter(), &[], config).unwrap();
+        assert!(thumbs.len() <= 2);
+    }
+
+    #[test]
+    fn generate_thumbnails_empty_frames() {
+        let config = ThumbnailConfig::default();
+        let thumbs = generate_thumbnails(std::iter::empty(), &[], config).unwrap();
+        assert!(thumbs.is_empty());
+    }
+
+    #[test]
+    fn thumbnail_config_default() {
+        let config = ThumbnailConfig::default();
+        assert_eq!(config.width, 320);
+        assert_eq!(config.height, 0);
+        assert_eq!(config.quality, 85);
+        assert_eq!(config.format, ThumbnailFormat::Jpeg);
+        assert_eq!(config.max_thumbnails, 5);
+        assert_eq!(config.min_variance, 500.0);
     }
 }

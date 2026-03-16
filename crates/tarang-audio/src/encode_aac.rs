@@ -101,6 +101,10 @@ impl AudioEncoder for AacEncoder {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len() % 4 == 0);
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || bytes.len() % 4 != 0 {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }

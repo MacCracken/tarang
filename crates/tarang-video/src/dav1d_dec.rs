@@ -64,6 +64,12 @@ impl Dav1dDecoder {
                 for row in 0..height as usize {
                     let start = row * stride;
                     let end = start + width as usize;
+                    if end > plane.len() {
+                        return Err(TarangError::DecodeError(format!(
+                            "Y plane too small: need {end}, have {}",
+                            plane.len()
+                        )));
+                    }
                     yuv_data.extend_from_slice(&plane[start..end]);
                 }
 
@@ -75,11 +81,25 @@ impl Dav1dDecoder {
 
                 for row in 0..chroma_h {
                     let start = row * u_stride;
-                    yuv_data.extend_from_slice(&u_plane[start..start + chroma_w]);
+                    let end = start + chroma_w;
+                    if end > u_plane.len() {
+                        return Err(TarangError::DecodeError(format!(
+                            "U plane too small: need {end}, have {}",
+                            u_plane.len()
+                        )));
+                    }
+                    yuv_data.extend_from_slice(&u_plane[start..end]);
                 }
                 for row in 0..chroma_h {
                     let start = row * v_stride;
-                    yuv_data.extend_from_slice(&v_plane[start..start + chroma_w]);
+                    let end = start + chroma_w;
+                    if end > v_plane.len() {
+                        return Err(TarangError::DecodeError(format!(
+                            "V plane too small: need {end}, have {}",
+                            v_plane.len()
+                        )));
+                    }
+                    yuv_data.extend_from_slice(&v_plane[start..end]);
                 }
 
                 let timestamp_ns = pic.timestamp().unwrap_or(0).max(0) as u64;

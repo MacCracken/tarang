@@ -71,6 +71,9 @@ impl AudioEncoder for OpusEncoder {
         while offset + self.frame_size <= num_frames {
             let start = offset * ch;
             let end = start + samples_per_frame;
+            if end > float_samples.len() {
+                break;
+            }
             let frame = &float_samples[start..end];
 
             // Opus can produce up to 4000 bytes per frame
@@ -95,6 +98,10 @@ impl AudioEncoder for OpusEncoder {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len() % 4 == 0);
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || bytes.len() % 4 != 0 {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }

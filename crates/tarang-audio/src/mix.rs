@@ -127,8 +127,12 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len().is_multiple_of(4));
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
+    let len = bytes.len() / 4;
+    if len == 0 || !bytes.len().is_multiple_of(4) {
+        return &[];
+    }
+    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }
 
 fn f32_to_bytes(samples: &[f32]) -> &[u8] {
@@ -257,5 +261,87 @@ mod tests {
         let buf = make_buffer(&samples, 2, 44100);
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
         assert_eq!(out.num_samples, frames);
+    }
+
+    #[test]
+    fn zero_channels_error() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 16]),
+            sample_format: SampleFormat::F32,
+            channels: 0,
+            sample_rate: 44100,
+            num_samples: 0,
+            timestamp: Duration::ZERO,
+        };
+        assert!(mix_channels(&buf, ChannelLayout::Mono).is_err());
+    }
+
+    #[test]
+    fn three_channel_to_mono() {
+        // 3ch → mono via generic N→1 path: average all
+        let samples = vec![0.3f32, 0.6, 0.9];
+        let buf = make_buffer(&samples, 3, 44100);
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.channels, 1);
+        let dst = bytes_to_f32(&out.data);
+        assert!((dst[0] - 0.6).abs() < 1e-5); // (0.3 + 0.6 + 0.9) / 3
+    }
+
+    #[test]
+    fn three_channel_to_stereo() {
+        // 3ch → stereo via generic N→2 path
+        let samples = vec![1.0f32, 0.0, 0.5];
+        let buf = make_buffer(&samples, 3, 44100);
+        let out = mix_channels(&buf, ChannelLayout::Stereo).unwrap();
+        assert_eq!(out.channels, 2);
+        let dst = bytes_to_f32(&out.data);
+        // L = first_ch + extra*gain, R = second_ch + extra*gain
+        // extra_gain = 0.5 / (3-2) = 0.5
+        // L = 1.0 + 0.5*0.5 = 1.25, R = 0.0 + 0.5*0.5 = 0.25
+        assert!((dst[0] - 1.25).abs() < 1e-5);
+        assert!((dst[1] - 0.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn eight_channel_to_mono() {
+        let samples = vec![1.0f32; 8]; // 8ch, 1 frame, all 1.0
+        let buf = make_buffer(&samples, 8, 48000);
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.channels, 1);
+        let dst = bytes_to_f32(&out.data);
+        assert!((dst[0] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn mono_to_mono_noop() {
+        let samples = vec![0.42f32, 0.84, 0.21];
+        let buf = make_buffer(&samples, 1, 44100);
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.channels, 1);
+        assert_eq!(out.data, buf.data);
+    }
+
+    #[test]
+    fn preserves_timestamp() {
+        let buf = AudioBuffer {
+            data: Bytes::copy_from_slice(f32_to_bytes(&[1.0f32, -1.0])),
+            sample_format: SampleFormat::F32,
+            channels: 2,
+            sample_rate: 44100,
+            num_samples: 1,
+            timestamp: Duration::from_millis(500),
+        };
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.timestamp, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn single_sample_stereo_to_mono() {
+        let samples = vec![0.8f32, 0.2];
+        let buf = make_buffer(&samples, 2, 44100);
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.num_samples, 1);
+        let dst = bytes_to_f32(&out.data);
+        assert!((dst[0] - 0.5).abs() < 1e-6);
     }
 }

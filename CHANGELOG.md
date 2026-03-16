@@ -2,7 +2,7 @@
 
 ## 2026.3.16-1
 
-F3 AI features — all four items complete.
+F3 AI features — all four items complete. Security audit, bug fixes, and test coverage hardening.
 
 ### Scene detection (`scene.rs`)
 - SceneDetector: stateful feed-frame API with hard-cut and gradual-transition detection
@@ -36,7 +36,43 @@ F3 AI features — all four items complete.
 - `image = "0.25"` (JPEG/PNG encoding for thumbnails)
 - `reqwest` multipart feature (for hoosh client)
 
-### Version bumped to 2026.3.16-1
+### Security & correctness fixes (2 audit rounds, 18 HIGH + 8 MEDIUM)
+
+#### HIGH severity
+- **tarang-core**: MP3 magic byte detection panicked on short buffers — added `bytes.len() >= 2` guard
+- **tarang-audio**: `bytes_to_f32` panicked via `assert!()` in 7 files — replaced with graceful empty-slice return
+- **tarang-audio/pw.rs**: Unsafe `from_raw_parts` without alignment check — added validation and error return
+- **tarang-video/vaapi_enc.rs**: `frames_encoded` counter incremented before error return — removed
+- **tarang-video/rav1e_enc.rs**: No frame dimension or data size validation — added both
+- **tarang-ai/daimon.rs**: Unchecked `["choices"][0]` JSON indexing — replaced with safe `.get()` chain
+- **tarang-ai/daimon.rs**: RAG query silently swallowed HTTP errors — added warning log
+- **tarang-ai/thumbnail.rs**: `partial_cmp().unwrap()` on f64 (NaN panic) — replaced with `total_cmp()`
+- **src/main.rs**: 7 MCP tool handlers silently accepted empty paths — extracted `require_path()` with error return
+- **src/main.rs**: `let _ =` swallowed async errors — now logs warnings
+- **tarang-demux/mkv.rs**: `size - header_size` underflow on malformed SimpleBlock — added bounds check
+- **tarang-audio/encode_opus.rs**: Unchecked slice on truncated buffers — added bounds guard
+- **tarang-demux/mp4.rs**: Size-0 boxes set `data_size = u64::MAX` (OOM) — capped at 4 GB
+- **tarang-video/dav1d_dec.rs**: Plane slicing trusted FFI stride — added bounds validation on all 3 planes
+
+#### MEDIUM severity
+- **tarang-core**: Added `Hash` derive to `SampleFormat` and `PixelFormat`
+- **tarang-video/rav1e_enc.rs**: `bitrate_bps as i32` overflow — clamped to `i32::MAX`
+- **tarang-audio/probe.rs**: Bitrate calculation overflowed u32 — switched to `checked_mul()`
+- **tarang-demux/wav.rs**: Same bitrate overflow — switched to `checked_mul()`
+- **tarang-demux/mux.rs**: WAV muxer RIFF size overflowed at 4 GB — switched to `saturating_add()`
+- **tarang-ai/transcribe.rs**: Stereo→mono downmix divided by total channels even when truncated — now divides by actual count
+- **tarang-audio/pw.rs**: Thread name `jalwa-pipewire` → `tarang-pipewire`
+
+### Test coverage: 303 tests (was 200)
+- **tarang-core**: +12 (error variants, Display completeness, serialization, edge-case MediaInfo)
+- **tarang-ai**: +54 (boundary conditions, edge cases, error paths, serde roundtrips)
+- **tarang-audio**: +25 (mix edge cases, decode helpers, resample validation, FLAC encoding, bytemuck safety)
+- **tarang-video**: +7 (status transitions, default dimensions, timestamps, config validation)
+- **tarang-demux**: +8 (all format detection variants, keyframe packets)
+
+### Engineering
+- Low-severity audit items (30) added to `docs/roadmap.md` backlog section
+- Downstream consumers (Jalwa, Tazama, Shruti) marked as integrated in roadmap
 
 ## 2026.3.16e
 
