@@ -12,15 +12,27 @@
 pub mod dav1d_dec;
 #[cfg(feature = "vpx")]
 pub mod vpx_dec;
+#[cfg(feature = "vpx-enc")]
+pub mod vpx_enc;
 #[cfg(feature = "rav1e")]
 pub mod rav1e_enc;
+#[cfg(feature = "openh264")]
+pub mod openh264_dec;
+#[cfg(feature = "openh264-enc")]
+pub mod openh264_enc;
 
 #[cfg(feature = "dav1d")]
 pub use dav1d_dec::Dav1dDecoder;
 #[cfg(feature = "vpx")]
 pub use vpx_dec::VpxDecoder;
+#[cfg(feature = "vpx-enc")]
+pub use vpx_enc::{VpxEncoder, VpxEncoderConfig};
 #[cfg(feature = "rav1e")]
 pub use rav1e_enc::{Rav1eConfig, Rav1eEncoder};
+#[cfg(feature = "openh264")]
+pub use openh264_dec::OpenH264Decoder;
+#[cfg(feature = "openh264-enc")]
+pub use openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
 
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};

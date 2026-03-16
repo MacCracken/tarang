@@ -7,10 +7,22 @@ use bytes::Bytes;
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
 
+const DECODER_ABI_VERSION: i32 = {
+    macro_rules! parse_i32 {
+        () => {
+            match i32::from_str_radix(env!("VPX_DECODER_ABI_VERSION"), 10) {
+                Ok(v) => v,
+                Err(_) => panic!("invalid VPX_DECODER_ABI_VERSION"),
+            }
+        };
+    }
+    parse_i32!()
+};
+
 /// VP8/VP9 decoder powered by libvpx
 pub struct VpxDecoder {
     codec: VideoCodec,
-    ctx: libvpx_sys::vpx_codec_ctx_t,
+    ctx: vpx_sys::vpx_codec_ctx_t,
     frames_decoded: u64,
     initialized: bool,
 }
@@ -18,8 +30,8 @@ pub struct VpxDecoder {
 impl VpxDecoder {
     pub fn new(codec: VideoCodec) -> Result<Self> {
         let iface = match codec {
-            VideoCodec::Vp8 => unsafe { libvpx_sys::vpx_codec_vp8_dx() },
-            VideoCodec::Vp9 => unsafe { libvpx_sys::vpx_codec_vp9_dx() },
+            VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_dx() },
+            VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_dx() },
             other => {
                 return Err(TarangError::UnsupportedCodec(format!(
                     "VpxDecoder does not support {other}"
@@ -27,20 +39,20 @@ impl VpxDecoder {
             }
         };
 
-        let mut ctx: libvpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
-        let cfg: *const libvpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
+        let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
+        let cfg: *const vpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
 
         let res = unsafe {
-            libvpx_sys::vpx_codec_dec_init_ver(
+            vpx_sys::vpx_codec_dec_init_ver(
                 &mut ctx,
                 iface,
                 cfg,
                 0,
-                libvpx_sys::VPX_DECODER_ABI_VERSION as i32,
+                DECODER_ABI_VERSION,
             )
         };
 
-        if res != libvpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::VPX_CODEC_OK {
             return Err(TarangError::DecodeError(format!(
                 "vpx_codec_dec_init failed: {res}"
             )));
@@ -57,7 +69,7 @@ impl VpxDecoder {
     /// Decode a VP8/VP9 packet. Returns decoded frames (may be 0 or 1).
     pub fn decode(&mut self, data: &[u8], timestamp: Duration) -> Result<Vec<VideoFrame>> {
         let res = unsafe {
-            libvpx_sys::vpx_codec_decode(
+            vpx_sys::vpx_codec_decode(
                 &mut self.ctx,
                 data.as_ptr(),
                 data.len() as u32,
@@ -66,17 +78,17 @@ impl VpxDecoder {
             )
         };
 
-        if res != libvpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::VPX_CODEC_OK {
             return Err(TarangError::DecodeError(format!(
                 "vpx_codec_decode failed: {res}"
             )));
         }
 
         let mut frames = Vec::new();
-        let mut iter: libvpx_sys::vpx_codec_iter_t = std::ptr::null();
+        let mut iter: vpx_sys::vpx_codec_iter_t = std::ptr::null();
 
         loop {
-            let img = unsafe { libvpx_sys::vpx_codec_get_frame(&mut self.ctx, &mut iter) };
+            let img = unsafe { vpx_sys::vpx_codec_get_frame(&mut self.ctx, &mut iter) };
             if img.is_null() {
                 break;
             }
@@ -137,7 +149,7 @@ impl Drop for VpxDecoder {
     fn drop(&mut self) {
         if self.initialized {
             unsafe {
-                libvpx_sys::vpx_codec_destroy(&mut self.ctx);
+                vpx_sys::vpx_codec_destroy(&mut self.ctx);
             }
         }
     }

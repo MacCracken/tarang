@@ -24,7 +24,7 @@ impl Default for OutputConfig {
 }
 
 /// Trait for audio output backends
-pub trait AudioOutput: Send {
+pub trait AudioOutput {
     /// Open the output stream with the given configuration.
     fn open(&mut self, config: &OutputConfig) -> Result<()>;
 

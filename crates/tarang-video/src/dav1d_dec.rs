@@ -40,7 +40,7 @@ impl Dav1dDecoder {
                 let height = pic.height() as u32;
 
                 // Extract Y plane data (for now, just Y — full YUV conversion can come later)
-                let stride = pic.stride(dav1d::PlanarImageComponent::Y);
+                let stride = pic.stride(dav1d::PlanarImageComponent::Y) as usize;
                 let plane = pic.plane(dav1d::PlanarImageComponent::Y);
 
                 // Copy Y plane tightly packed
@@ -52,9 +52,9 @@ impl Dav1dDecoder {
                 }
 
                 // Also copy U and V planes for full YUV420p
-                let u_stride = pic.stride(dav1d::PlanarImageComponent::U);
+                let u_stride = pic.stride(dav1d::PlanarImageComponent::U) as usize;
                 let u_plane = pic.plane(dav1d::PlanarImageComponent::U);
-                let v_stride = pic.stride(dav1d::PlanarImageComponent::V);
+                let v_stride = pic.stride(dav1d::PlanarImageComponent::V) as usize;
                 let v_plane = pic.plane(dav1d::PlanarImageComponent::V);
 
                 let chroma_h = height as usize / 2;

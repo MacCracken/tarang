@@ -1,0 +1,285 @@
+//! VP8/VP9 encoding via libvpx FFI
+//!
+//! Safe Rust wrapper around libvpx for VP8 and VP9 encoding.
+//! Requires the `vpx-enc` feature and libvpx system library.
+
+use tarang_core::{Result, TarangError, VideoCodec, VideoFrame};
+
+const ENCODER_ABI_VERSION: i32 = {
+    // Set by build.rs from system headers
+    macro_rules! parse_i32 {
+        () => {
+            match i32::from_str_radix(env!("VPX_ENCODER_ABI_VERSION"), 10) {
+                Ok(v) => v,
+                Err(_) => panic!("invalid VPX_ENCODER_ABI_VERSION"),
+            }
+        };
+    }
+    parse_i32!()
+};
+
+/// VP8/VP9 encoder configuration
+#[derive(Debug, Clone)]
+pub struct VpxEncoderConfig {
+    pub codec: VideoCodec,
+    pub width: u32,
+    pub height: u32,
+    pub bitrate_kbps: u32,
+    pub frame_rate_num: u32,
+    pub frame_rate_den: u32,
+    pub threads: u32,
+    pub speed: i32,
+}
+
+impl Default for VpxEncoderConfig {
+    fn default() -> Self {
+        Self {
+            codec: VideoCodec::Vp9,
+            width: 1920,
+            height: 1080,
+            bitrate_kbps: 4000,
+            frame_rate_num: 30,
+            frame_rate_den: 1,
+            threads: 4,
+            speed: 6,
+        }
+    }
+}
+
+/// VP8/VP9 encoder powered by libvpx
+pub struct VpxEncoder {
+    codec: VideoCodec,
+    ctx: vpx_sys::vpx_codec_ctx_t,
+    width: u32,
+    height: u32,
+    frames_encoded: u64,
+    pts: i64,
+    initialized: bool,
+}
+
+impl VpxEncoder {
+    pub fn new(config: &VpxEncoderConfig) -> Result<Self> {
+        let iface = match config.codec {
+            VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_cx() },
+            VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_cx() },
+            other => {
+                return Err(TarangError::UnsupportedCodec(format!(
+                    "VpxEncoder does not support {other}"
+                )));
+            }
+        };
+
+        // Get default encoder config
+        let mut cfg: vpx_sys::vpx_codec_enc_cfg_t = unsafe { std::mem::zeroed() };
+        let res = unsafe { vpx_sys::vpx_codec_enc_config_default(iface, &mut cfg, 0) };
+        if res != vpx_sys::VPX_CODEC_OK {
+            return Err(TarangError::Pipeline(format!(
+                "vpx_codec_enc_config_default failed: {res}"
+            )));
+        }
+
+        cfg.g_w = config.width;
+        cfg.g_h = config.height;
+        cfg.rc_target_bitrate = config.bitrate_kbps;
+        cfg.g_timebase.num = config.frame_rate_den as i32;
+        cfg.g_timebase.den = config.frame_rate_num as i32;
+        cfg.g_threads = config.threads;
+        cfg.g_error_resilient = 0;
+
+        let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
+        let res = unsafe {
+            vpx_sys::vpx_codec_enc_init_ver(
+                &mut ctx,
+                iface,
+                &cfg,
+                0,
+                ENCODER_ABI_VERSION,
+            )
+        };
+
+        if res != vpx_sys::VPX_CODEC_OK {
+            return Err(TarangError::Pipeline(format!(
+                "vpx_codec_enc_init failed: {res}"
+            )));
+        }
+
+        // Set speed/quality tradeoff for VP9
+        if config.codec == VideoCodec::Vp9 {
+            unsafe {
+                vpx_sys::vpx_codec_control_(
+                    &mut ctx,
+                    vpx_sys::VP8E_SET_CPUUSED as i32,
+                    config.speed,
+                );
+            }
+        }
+
+        Ok(Self {
+            codec: config.codec,
+            ctx,
+            width: config.width,
+            height: config.height,
+            frames_encoded: 0,
+            pts: 0,
+            initialized: true,
+        })
+    }
+
+    /// Encode a YUV420p frame. Returns encoded packets (may be empty if encoder is buffering).
+    pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<Vec<u8>>> {
+        let mut img: vpx_sys::vpx_image_t = unsafe { std::mem::zeroed() };
+        let alloc_result = unsafe {
+            vpx_sys::vpx_img_alloc(
+                &mut img,
+                vpx_sys::VPX_IMG_FMT_I420,
+                self.width,
+                self.height,
+                1,
+            )
+        };
+
+        if alloc_result.is_null() {
+            return Err(TarangError::Pipeline("vpx_img_alloc failed".to_string()));
+        }
+
+        // Copy YUV420p planes from VideoFrame into vpx_image
+        let y_size = (self.width * self.height) as usize;
+        let chroma_w = ((self.width + 1) / 2) as usize;
+        let chroma_h = ((self.height + 1) / 2) as usize;
+
+        // Y plane
+        for row in 0..self.height as usize {
+            let src_start = row * self.width as usize;
+            let dst_offset = (row as u32 * img.stride[0] as u32) as isize;
+            let dst_ptr = unsafe { img.planes[0].offset(dst_offset) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    frame.data[src_start..].as_ptr(),
+                    dst_ptr,
+                    self.width as usize,
+                );
+            }
+        }
+
+        // U plane
+        let u_offset = y_size;
+        for row in 0..chroma_h {
+            let src_start = u_offset + row * chroma_w;
+            let dst_offset = (row as u32 * img.stride[1] as u32) as isize;
+            let dst_ptr = unsafe { img.planes[1].offset(dst_offset) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    frame.data[src_start..].as_ptr(),
+                    dst_ptr,
+                    chroma_w,
+                );
+            }
+        }
+
+        // V plane
+        let v_offset = u_offset + chroma_w * chroma_h;
+        for row in 0..chroma_h {
+            let src_start = v_offset + row * chroma_w;
+            let dst_offset = (row as u32 * img.stride[2] as u32) as isize;
+            let dst_ptr = unsafe { img.planes[2].offset(dst_offset) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    frame.data[src_start..].as_ptr(),
+                    dst_ptr,
+                    chroma_w,
+                );
+            }
+        }
+
+        // VPX_DL_GOOD_QUALITY = 1000000
+        let res = unsafe {
+            vpx_sys::vpx_codec_encode(
+                &mut self.ctx,
+                &img,
+                self.pts,
+                1,
+                0,
+                1_000_000,
+            )
+        };
+
+        unsafe { vpx_sys::vpx_img_free(&mut img) };
+
+        if res != vpx_sys::VPX_CODEC_OK {
+            return Err(TarangError::Pipeline(format!(
+                "vpx_codec_encode failed: {res}"
+            )));
+        }
+
+        self.pts += 1;
+        let packets = self.drain_packets();
+        self.frames_encoded += 1;
+        Ok(packets)
+    }
+
+    /// Flush the encoder — signal end of stream and drain remaining packets.
+    pub fn flush(&mut self) -> Result<Vec<Vec<u8>>> {
+        let res = unsafe {
+            vpx_sys::vpx_codec_encode(
+                &mut self.ctx,
+                std::ptr::null(),
+                self.pts,
+                1,
+                0,
+                1_000_000,
+            )
+        };
+
+        if res != vpx_sys::VPX_CODEC_OK {
+            return Err(TarangError::Pipeline(format!(
+                "vpx_codec_encode flush failed: {res}"
+            )));
+        }
+
+        Ok(self.drain_packets())
+    }
+
+    fn drain_packets(&mut self) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        let mut iter: vpx_sys::vpx_codec_iter_t = std::ptr::null();
+
+        loop {
+            let pkt = unsafe { vpx_sys::vpx_codec_get_cx_data(&mut self.ctx, &mut iter) };
+            if pkt.is_null() {
+                break;
+            }
+
+            let pkt = unsafe { &*pkt };
+            if pkt.kind == vpx_sys::VPX_CODEC_CX_FRAME_PKT {
+                let frame_data = unsafe { &*pkt.data.frame_ref() };
+                let buf =
+                    unsafe { std::slice::from_raw_parts(frame_data.buf as *const u8, frame_data.sz) };
+                packets.push(buf.to_vec());
+            }
+        }
+
+        packets
+    }
+
+    pub fn codec(&self) -> VideoCodec {
+        self.codec
+    }
+
+    pub fn frames_encoded(&self) -> u64 {
+        self.frames_encoded
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+impl Drop for VpxEncoder {
+    fn drop(&mut self) {
+        if self.initialized {
+            unsafe {
+                vpx_sys::vpx_codec_destroy(&mut self.ctx);
+            }
+        }
+    }
+}

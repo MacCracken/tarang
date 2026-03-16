@@ -54,17 +54,17 @@
 
 ### V3: Video Encoding
 - [x] rav1e bindings (AV1 encoding — pure Rust, behind `rav1e` feature flag)
-- [ ] libvpx-enc bindings (VP8/VP9 encoding)
+- [x] libvpx-enc bindings (VP8/VP9 encoding, behind `vpx-enc` feature flag)
 - [x] MKV/WebM muxer (pure Rust — EBML writer, roundtrip-verified with MkvDemuxer)
 
 ## v1.0 — Full Media Engine
 
 ### F1: Remaining Video Codecs (Decode)
-- [ ] openh264 bindings (H.264 decoding)
+- [x] openh264 bindings (H.264 decoding, behind `openh264` feature flag)
 - [ ] Hardware acceleration detection (VA-API, VDPAU)
 
 ### F2: Remaining Video Encoding
-- [ ] openh264 bindings (H.264 encoding)
+- [x] openh264 bindings (H.264 encoding, behind `openh264-enc` feature flag)
 - [ ] Hardware-accelerated encode (VA-API)
 
 ### F3: AI Features
