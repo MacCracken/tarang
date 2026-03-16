@@ -45,17 +45,17 @@
 ## v0.2 — Container Coverage + Video Bootstrap
 
 ### V1: MKV/WebM Demuxer
-- [ ] Matroska/WebM demuxer (pure Rust — EBML parser)
+- [x] Matroska/WebM demuxer (pure Rust — EBML parser, audio + video tracks, SimpleBlock packets)
 
 ### V2: FOSS Video Codecs (Decode)
-- [ ] dav1d bindings (AV1 decoding)
-- [ ] libvpx bindings (VP8/VP9 decoding)
-- [ ] Safe wrapper types with lifetime management
+- [x] dav1d bindings (AV1 decoding, behind `dav1d` feature flag)
+- [x] libvpx bindings (VP8/VP9 decoding, behind `vpx` feature flag)
+- [x] Safe wrapper types with lifetime management
 
 ### V3: Video Encoding
-- [ ] rav1e bindings (AV1 encoding — pure Rust)
+- [x] rav1e bindings (AV1 encoding — pure Rust, behind `rav1e` feature flag)
 - [ ] libvpx-enc bindings (VP8/VP9 encoding)
-- [ ] MKV/WebM muxer (pure Rust — EBML writer)
+- [x] MKV/WebM muxer (pure Rust — EBML writer, roundtrip-verified with MkvDemuxer)
 
 ## v1.0 — Full Media Engine
 

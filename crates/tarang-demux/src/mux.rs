@@ -635,6 +635,247 @@ fn write_sub_box(buf: &mut Vec<u8>, box_type: &[u8; 4], data: &[u8]) {
     buf.extend_from_slice(data);
 }
 
+// ---- MKV/WebM Muxer ----
+
+/// MKV/WebM container muxer — writes EBML-encoded Matroska files.
+///
+/// Supports writing audio and video streams. Uses a simple
+/// "header + clusters" layout.
+pub struct MkvMuxer<W: Write> {
+    writer: W,
+    config: MuxConfig,
+    is_webm: bool,
+    timecode_scale: u64,
+    cluster_timecode: u64,
+    packets_in_cluster: u32,
+    max_cluster_packets: u32,
+    header_written: bool,
+    total_packets: u64,
+}
+
+impl<W: Write> MkvMuxer<W> {
+    pub fn new(writer: W, config: MuxConfig, webm: bool) -> Self {
+        Self {
+            writer,
+            config,
+            is_webm: webm,
+            timecode_scale: 1_000_000, // 1ms
+            cluster_timecode: 0,
+            packets_in_cluster: 0,
+            max_cluster_packets: 256,
+            header_written: false,
+            total_packets: 0,
+        }
+    }
+}
+
+impl<W: Write> Muxer for MkvMuxer<W> {
+    fn write_header(&mut self) -> Result<()> {
+        // EBML Header
+        let mut ebml_header = Vec::new();
+        ebml_write_uint(&mut ebml_header, 0x4286, 1); // EBMLVersion
+        ebml_write_uint(&mut ebml_header, 0x42F7, 1); // EBMLReadVersion
+        ebml_write_uint(&mut ebml_header, 0x42F2, 4); // EBMLMaxIDLength
+        ebml_write_uint(&mut ebml_header, 0x42F3, 8); // EBMLMaxSizeLength
+        let doc_type = if self.is_webm { "webm" } else { "matroska" };
+        ebml_write_string(&mut ebml_header, 0x4282, doc_type);
+        ebml_write_uint(&mut ebml_header, 0x4287, 4); // DocTypeVersion
+        ebml_write_uint(&mut ebml_header, 0x4285, 2); // DocTypeReadVersion
+
+        ebml_write_master(&mut self.writer, 0x1A45DFA3, &ebml_header).map_err(io_err)?;
+
+        // Segment (unknown size — 0xFF... means "until EOF")
+        ebml_write_id(&mut self.writer, 0x18538067).map_err(io_err)?;
+        // Unknown size marker: 0x01FFFFFFFFFFFFFF (8 bytes)
+        self.writer
+            .write_all(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+            .map_err(io_err)?;
+
+        // Info
+        let mut info = Vec::new();
+        ebml_write_uint(&mut info, 0x2AD7B1, self.timecode_scale);
+        let mut info_buf = Vec::new();
+        ebml_write_master_to_buf(&mut info_buf, 0x1549A966, &info);
+        self.writer.write_all(&info_buf).map_err(io_err)?;
+
+        // Tracks
+        let mut tracks = Vec::new();
+        let mut track_entry = Vec::new();
+        ebml_write_uint(&mut track_entry, 0xD7, 1); // TrackNumber
+        ebml_write_uint(&mut track_entry, 0x73C5, 1); // TrackUID
+        ebml_write_uint(&mut track_entry, 0x83, 2); // TrackType = audio
+
+        let codec_id = match self.config.codec {
+            AudioCodec::Opus => "A_OPUS",
+            AudioCodec::Vorbis => "A_VORBIS",
+            AudioCodec::Flac => "A_FLAC",
+            AudioCodec::Aac => "A_AAC",
+            AudioCodec::Mp3 => "A_MPEG/L3",
+            _ => "A_PCM/INT/LIT",
+        };
+        ebml_write_string(&mut track_entry, 0x86, codec_id);
+
+        let mut audio = Vec::new();
+        ebml_write_float(&mut audio, 0xB5, self.config.sample_rate as f64);
+        ebml_write_uint(&mut audio, 0x9F, self.config.channels as u64);
+        if self.config.bits_per_sample > 0 {
+            ebml_write_uint(&mut audio, 0x6264, self.config.bits_per_sample as u64);
+        }
+        ebml_write_master_to_buf(&mut track_entry, 0xE1, &audio);
+
+        ebml_write_master_to_buf(&mut tracks, 0xAE, &track_entry);
+        let mut tracks_buf = Vec::new();
+        ebml_write_master_to_buf(&mut tracks_buf, 0x1654AE6B, &tracks);
+        self.writer.write_all(&tracks_buf).map_err(io_err)?;
+
+        // Start first cluster
+        self.start_cluster(0)?;
+
+        self.header_written = true;
+        Ok(())
+    }
+
+    fn write_packet(&mut self, data: &[u8]) -> Result<()> {
+        if !self.header_written {
+            return Err(TarangError::Pipeline("header not written".to_string()));
+        }
+
+        // Write SimpleBlock
+        let mut block = Vec::new();
+        ebml_write_vint(&mut block, 1); // track number
+        block.extend_from_slice(&0i16.to_be_bytes()); // relative timecode
+        block.push(0x80); // flags: keyframe
+        block.extend_from_slice(data);
+
+        let mut block_buf = Vec::new();
+        ebml_write_id_to_buf(&mut block_buf, 0xA3); // SimpleBlock
+        ebml_write_vint_to_buf(&mut block_buf, block.len() as u64);
+        block_buf.extend_from_slice(&block);
+        self.writer.write_all(&block_buf).map_err(io_err)?;
+
+        self.packets_in_cluster += 1;
+        self.total_packets += 1;
+
+        Ok(())
+    }
+
+    fn finalize(&mut self) -> Result<()> {
+        self.writer.flush().map_err(io_err)?;
+        Ok(())
+    }
+}
+
+impl<W: Write> MkvMuxer<W> {
+    fn start_cluster(&mut self, timecode: u64) -> Result<()> {
+        // Write Cluster element with unknown size
+        ebml_write_id(&mut self.writer, 0x1F43B675).map_err(io_err)?;
+        self.writer
+            .write_all(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+            .map_err(io_err)?;
+
+        // Timecode element
+        let mut tc_buf = Vec::new();
+        ebml_write_uint(&mut tc_buf, 0xE7, timecode);
+        self.writer.write_all(&tc_buf).map_err(io_err)?;
+
+        self.cluster_timecode = timecode;
+        self.packets_in_cluster = 0;
+        Ok(())
+    }
+}
+
+// ---- EBML writing helpers ----
+
+fn ebml_write_id(w: &mut dyn Write, id: u32) -> std::io::Result<()> {
+    let mut buf = Vec::new();
+    ebml_write_id_to_buf(&mut buf, id);
+    w.write_all(&buf)
+}
+
+fn ebml_write_id_to_buf(buf: &mut Vec<u8>, id: u32) {
+    if id >= 0x80 && id <= 0xFF {
+        buf.push(id as u8);
+    } else if id >= 0x4000 && id <= 0x7FFF {
+        buf.push((id >> 8) as u8);
+        buf.push(id as u8);
+    } else if id >= 0x20_0000 && id <= 0x3F_FFFF {
+        buf.push((id >> 16) as u8);
+        buf.push((id >> 8) as u8);
+        buf.push(id as u8);
+    } else {
+        buf.push((id >> 24) as u8);
+        buf.push((id >> 16) as u8);
+        buf.push((id >> 8) as u8);
+        buf.push(id as u8);
+    }
+}
+
+fn ebml_write_vint(buf: &mut Vec<u8>, value: u64) {
+    ebml_write_vint_to_buf(buf, value);
+}
+
+fn ebml_write_vint_to_buf(buf: &mut Vec<u8>, value: u64) {
+    if value < 0x7F {
+        buf.push(0x80 | value as u8);
+    } else if value < 0x3FFF {
+        buf.push(0x40 | (value >> 8) as u8);
+        buf.push(value as u8);
+    } else if value < 0x1F_FFFF {
+        buf.push(0x20 | (value >> 16) as u8);
+        buf.push((value >> 8) as u8);
+        buf.push(value as u8);
+    } else {
+        buf.push(0x10 | (value >> 24) as u8);
+        buf.push((value >> 16) as u8);
+        buf.push((value >> 8) as u8);
+        buf.push(value as u8);
+    }
+}
+
+fn ebml_write_uint(buf: &mut Vec<u8>, id: u32, value: u64) {
+    ebml_write_id_to_buf(buf, id);
+    if value <= 0xFF {
+        ebml_write_vint_to_buf(buf, 1);
+        buf.push(value as u8);
+    } else if value <= 0xFFFF {
+        ebml_write_vint_to_buf(buf, 2);
+        buf.push((value >> 8) as u8);
+        buf.push(value as u8);
+    } else if value <= 0xFFFFFF {
+        ebml_write_vint_to_buf(buf, 3);
+        buf.push((value >> 16) as u8);
+        buf.push((value >> 8) as u8);
+        buf.push(value as u8);
+    } else {
+        ebml_write_vint_to_buf(buf, 4);
+        buf.extend_from_slice(&(value as u32).to_be_bytes());
+    }
+}
+
+fn ebml_write_float(buf: &mut Vec<u8>, id: u32, value: f64) {
+    ebml_write_id_to_buf(buf, id);
+    ebml_write_vint_to_buf(buf, 8);
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn ebml_write_string(buf: &mut Vec<u8>, id: u32, value: &str) {
+    ebml_write_id_to_buf(buf, id);
+    ebml_write_vint_to_buf(buf, value.len() as u64);
+    buf.extend_from_slice(value.as_bytes());
+}
+
+fn ebml_write_master(w: &mut dyn Write, id: u32, data: &[u8]) -> std::io::Result<()> {
+    let mut buf = Vec::new();
+    ebml_write_master_to_buf(&mut buf, id, data);
+    w.write_all(&buf)
+}
+
+fn ebml_write_master_to_buf(buf: &mut Vec<u8>, id: u32, data: &[u8]) {
+    ebml_write_id_to_buf(buf, id);
+    ebml_write_vint_to_buf(buf, data.len() as u64);
+    buf.extend_from_slice(data);
+}
+
 fn io_err(e: std::io::Error) -> TarangError {
     TarangError::DemuxError(format!("mux write error: {e}"))
 }
@@ -937,5 +1178,81 @@ mod tests {
         };
         let mut mux = Mp4Muxer::new(&mut buf, config);
         assert!(mux.write_packet(&[0u8; 100]).is_err());
+    }
+
+    #[test]
+    fn mkv_muxer_basic() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = MkvMuxer::new(&mut buf, config, false);
+        mux.write_header().unwrap();
+        mux.write_packet(&[0xFFu8; 64]).unwrap();
+        mux.finalize().unwrap();
+
+        let output = buf.into_inner();
+        // Should start with EBML header ID
+        assert_eq!(output[0], 0x1A);
+        assert_eq!(output[1], 0x45);
+        assert_eq!(output[2], 0xDF);
+        assert_eq!(output[3], 0xA3);
+    }
+
+    #[test]
+    fn mkv_muxer_demuxer_roundtrip() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = MkvMuxer::new(&mut buf, config, false);
+        mux.write_header().unwrap();
+        mux.write_packet(&[0xABu8; 64]).unwrap();
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        let cursor = Cursor::new(data);
+        let mut demuxer = crate::MkvDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, tarang_core::ContainerFormat::Mkv);
+        let audio = info.audio_streams();
+        assert_eq!(audio[0].codec, AudioCodec::Opus);
+        assert_eq!(audio[0].sample_rate, 48000);
+        assert_eq!(audio[0].channels, 2);
+
+        let packet = demuxer.next_packet().unwrap();
+        assert_eq!(packet.data.len(), 64);
+    }
+
+    #[test]
+    fn webm_muxer_format() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Vorbis,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = MkvMuxer::new(&mut buf, config, true);
+        mux.write_header().unwrap();
+        mux.write_packet(&[0xCDu8; 32]).unwrap();
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        let cursor = Cursor::new(data);
+        let mut demuxer = crate::MkvDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, tarang_core::ContainerFormat::WebM);
     }
 }

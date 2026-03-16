@@ -8,6 +8,20 @@
 //! The Rust layer owns the pipeline, memory management, and error handling.
 //! C codecs are called through safe FFI boundaries.
 
+#[cfg(feature = "dav1d")]
+pub mod dav1d_dec;
+#[cfg(feature = "vpx")]
+pub mod vpx_dec;
+#[cfg(feature = "rav1e")]
+pub mod rav1e_enc;
+
+#[cfg(feature = "dav1d")]
+pub use dav1d_dec::Dav1dDecoder;
+#[cfg(feature = "vpx")]
+pub use vpx_dec::VpxDecoder;
+#[cfg(feature = "rav1e")]
+pub use rav1e_enc::{Rav1eConfig, Rav1eEncoder};
+
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};
 

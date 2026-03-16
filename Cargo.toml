@@ -25,6 +25,9 @@ bytes = "1"
 pipewire = "0.9"
 opus = "0.3"
 fdk-aac = "0.8"
+dav1d = "0.11"
+libvpx-sys = "1.4"
+rav1e = { version = "0.8", features = ["asm"] }
 
 [package]
 name = "tarang"

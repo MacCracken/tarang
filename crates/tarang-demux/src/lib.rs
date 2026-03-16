@@ -3,13 +3,15 @@
 //! Pure Rust container parsers for MP4, MKV/WebM, OGG, WAV, and FLAC.
 //! Extracts stream metadata and produces raw codec packets for downstream decoders.
 
+mod mkv;
 mod mp4;
 mod mux;
 mod ogg;
 mod wav;
 
+pub use mkv::MkvDemuxer;
 pub use mp4::Mp4Demuxer;
-pub use mux::{Mp4Muxer, MuxConfig, Muxer, OggMuxer, WavMuxer};
+pub use mux::{MkvMuxer, Mp4Muxer, MuxConfig, Muxer, OggMuxer, WavMuxer};
 pub use ogg::OggDemuxer;
 pub use wav::WavDemuxer;
 
