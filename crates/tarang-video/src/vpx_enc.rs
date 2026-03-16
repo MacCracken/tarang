@@ -75,6 +75,11 @@ impl VpxEncoder {
                 "VpxEncoder: width and height must be non-zero".to_string(),
             ));
         }
+        if config.frame_rate_num == 0 || config.frame_rate_den == 0 {
+            return Err(TarangError::Pipeline(
+                "VpxEncoder: frame_rate_num and frame_rate_den must be non-zero".to_string(),
+            ));
+        }
         if config.frame_rate_num > i32::MAX as u32 || config.frame_rate_den > i32::MAX as u32 {
             return Err(TarangError::Pipeline(
                 "VpxEncoder: frame_rate_num/den must fit in i32".to_string(),

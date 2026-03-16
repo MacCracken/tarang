@@ -90,6 +90,9 @@
 - [ ] VpxEncoder: use frame.timestamp for PTS instead of monotonic counter
 - [ ] DecoderConfig::for_codec() should validate that the backend feature is enabled
 - [ ] dav1d_dec: document timestamp unit contract; clamp negative i64 timestamps to 0
+- [ ] dav1d_dec: guard against negative stride from dav1d (currently cast `as usize`)
+- [ ] build.rs: mention env-var workaround in probe execution failure message
+- [ ] openh264_enc: add comment explaining why floor division is safe (even dims enforced)
 
 ## Downstream Consumers
 - **AGNOS Media Player** (new, Priority 1) — primary GUI player built on tarang

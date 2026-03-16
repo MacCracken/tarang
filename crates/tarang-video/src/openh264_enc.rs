@@ -73,6 +73,12 @@ impl OpenH264Encoder {
                 frame.width, frame.height, self.width, self.height
             )));
         }
+        if frame.pixel_format != tarang_core::PixelFormat::Yuv420p {
+            return Err(TarangError::Pipeline(format!(
+                "expected YUV420p frame, got {:?}",
+                frame.pixel_format
+            )));
+        }
 
         let w = self.width as usize;
         let h = self.height as usize;

@@ -39,6 +39,14 @@ impl Dav1dDecoder {
                 let width = pic.width() as u32;
                 let height = pic.height() as u32;
 
+                // Only YUV420p is supported; reject other layouts
+                if pic.pixel_layout() != dav1d::PixelLayout::I420 {
+                    return Err(TarangError::DecodeError(format!(
+                        "unsupported pixel layout {:?}, expected I420",
+                        pic.pixel_layout()
+                    )));
+                }
+
                 let stride = pic.stride(dav1d::PlanarImageComponent::Y) as usize;
                 let plane = pic.plane(dav1d::PlanarImageComponent::Y);
 
