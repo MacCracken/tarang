@@ -61,11 +61,12 @@
 
 ### F1: Remaining Video Codecs (Decode)
 - [x] openh264 bindings (H.264 decoding, behind `openh264` feature flag)
-- [ ] Hardware acceleration detection (VA-API, VDPAU)
+- [x] VA-API hardware acceleration detection (behind `vaapi` feature flag, probes DRM render nodes)
+- ~~VDPAU~~ — dropped (Mesa removed VDPAU from all open-source drivers)
 
 ### F2: Remaining Video Encoding
 - [x] openh264 bindings (H.264 encoding, behind `openh264-enc` feature flag)
-- [ ] Hardware-accelerated encode (VA-API)
+- [ ] VA-API hardware-accelerated encode (H.264/HEVC via cros-codecs)
 
 ### F3: AI Features
 - [ ] Transcription routing to hoosh (Whisper models)

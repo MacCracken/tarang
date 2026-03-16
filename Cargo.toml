@@ -29,6 +29,7 @@ dav1d = "0.11"
 libvpx-sys = "1.4"
 rav1e = { version = "0.8", features = ["asm"] }
 openh264 = "0.6"
+cros-libva = "0.0.13"
 
 [package]
 name = "tarang"

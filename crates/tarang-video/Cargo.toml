@@ -7,13 +7,14 @@ license = "GPL-3.0"
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi"]
 dav1d = ["dep:dav1d"]
 vpx = ["dep:libvpx-sys"]
 vpx-enc = ["dep:libvpx-sys"]
 rav1e = ["dep:rav1e"]
 openh264 = ["dep:openh264"]
 openh264-enc = ["dep:openh264"]
+vaapi = ["dep:cros-libva"]
 
 [dependencies]
 tarang-core = { path = "../tarang-core" }
@@ -24,3 +25,4 @@ dav1d = { workspace = true, optional = true }
 libvpx-sys = { workspace = true, optional = true }
 rav1e = { workspace = true, optional = true }
 openh264 = { workspace = true, optional = true }
+cros-libva = { workspace = true, optional = true }

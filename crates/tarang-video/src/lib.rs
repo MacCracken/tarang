@@ -21,6 +21,8 @@ pub mod rav1e_enc;
 pub mod openh264_dec;
 #[cfg(feature = "openh264-enc")]
 pub mod openh264_enc;
+#[cfg(feature = "vaapi")]
+pub mod vaapi_probe;
 
 #[cfg(feature = "dav1d")]
 pub use dav1d_dec::Dav1dDecoder;
@@ -34,6 +36,8 @@ pub use rav1e_enc::{Rav1eConfig, Rav1eEncoder};
 pub use openh264_dec::OpenH264Decoder;
 #[cfg(feature = "openh264-enc")]
 pub use openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
+#[cfg(feature = "vaapi")]
+pub use vaapi_probe::{probe_vaapi, HwAccelReport, HwCodecCapability, HwCodecDirection};
 
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};
@@ -62,6 +66,8 @@ pub enum DecoderBackend {
     LibVpx,
     /// Software fallback (pure Rust, limited)
     Software,
+    /// VA-API hardware acceleration
+    Vaapi,
 }
 
 impl std::fmt::Display for DecoderBackend {
@@ -71,6 +77,7 @@ impl std::fmt::Display for DecoderBackend {
             Self::OpenH264 => write!(f, "openh264"),
             Self::LibVpx => write!(f, "libvpx"),
             Self::Software => write!(f, "software"),
+            Self::Vaapi => write!(f, "vaapi"),
         }
     }
 }
@@ -388,6 +395,7 @@ mod tests {
         assert_eq!(DecoderBackend::OpenH264.to_string(), "openh264");
         assert_eq!(DecoderBackend::LibVpx.to_string(), "libvpx");
         assert_eq!(DecoderBackend::Software.to_string(), "software");
+        assert_eq!(DecoderBackend::Vaapi.to_string(), "vaapi");
     }
 
     #[test]

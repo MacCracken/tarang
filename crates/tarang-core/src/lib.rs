@@ -300,6 +300,8 @@ pub enum TarangError {
     EndOfStream,
     #[error("pipeline error: {0}")]
     Pipeline(String),
+    #[error("hardware acceleration error: {0}")]
+    HwAccelError(String),
 }
 
 pub type Result<T> = std::result::Result<T, TarangError>;

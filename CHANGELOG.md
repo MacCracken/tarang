@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.3.16c
+
+VA-API hardware acceleration detection.
+
+- VA-API probe via cros-libva: detects GPU capabilities (decode/encode) for H.264, HEVC, VP8, VP9, AV1
+- `vaapi` feature flag, `HwAccelReport` type with `can_decode()`/`can_encode()` queries
+- DRM render node auto-discovery (`/dev/dri/renderD*`) with `TARANG_VAAPI_DEVICE` override
+- `DecoderBackend::Vaapi` variant added
+- VDPAU dropped from roadmap (Mesa removed support from all open-source drivers)
+- 16 new unit tests for profile mapping, entrypoint mapping, report queries
+- `HwAccelError` variant added to `TarangError`
+
 ## 2026.3.16b
 
 Video codec bindings — V3, F1, F2 complete.
