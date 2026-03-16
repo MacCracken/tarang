@@ -208,7 +208,7 @@ mod tests {
             codec: VideoCodec::Vp8,
             width: 320,
             height: 240,
-            bitrate_kbps: 500,
+            bitrate_bps: 500_000,
             threads: 1,
             ..Default::default()
         };

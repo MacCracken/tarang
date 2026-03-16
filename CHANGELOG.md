@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026.3.16e
+
+Encoder API normalization, security fixes, libvpx-sys migration, test coverage.
+
+### Encoder API normalization
+- All encoders now use `bitrate_bps: u32` (bits per second) — was kbps in vpx, unnamed in rav1e
+- All encoders now use `frame_rate_num: u32, frame_rate_den: u32` — was f32 in openh264/vaapi, u64 in rav1e
+- All speed presets now use `u32` — was i32 in vpx, usize in rav1e
+
+### Security fixes
+- Upgraded openh264 0.6 → 0.9 (fixes RUSTSEC-2025-0008 heap overflow in openh264-sys2)
+- Migrated libvpx-sys 1.4 → env-libvpx-sys 5.1 (eliminates RUSTSEC-2023-0018 remove_dir_all TOCTOU, RUSTSEC-2018-0017 tempdir unmaintained)
+- `cargo audit` now passes with 0 vulnerabilities
+
+### libvpx-sys → env-libvpx-sys migration
+- Bindings now generated from system headers via bindgen — struct layouts always match
+- VPX_ENCODER/DECODER_ABI_VERSION exported directly — build.rs probe eliminated
+- Encoder ABI mismatch with libvpx >= 1.14 resolved — all VPX encoder tests now pass
+- MaybeUninit for encoder config (new bindgen types can't be zero-initialized)
+- Proper Rust enums for error codes, image formats, packet kinds
+
+### Clippy cleanup (workspace-wide)
+- Fixed all clippy warnings across tarang-audio, tarang-demux, tarang-video
+- Removed dead code (unused struct fields), replaced manual patterns with idiomatic Rust
+
+### Test coverage: 155 base + 62 feature-gated = 217 total tests
+- VP8/VP9 encode-decode roundtrip verified (previously blocked by ABI mismatch)
+- All VPX encoder tests un-ignored and passing
+
 ## 2026.3.16d
 
 Test coverage + VA-API encode scaffolding.

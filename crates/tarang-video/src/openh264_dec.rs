@@ -136,7 +136,7 @@ mod tests {
             width: 320,
             height: 240,
             bitrate_bps: 500_000,
-            frame_rate: 30.0,
+            ..Default::default()
         };
         let mut encoder = OpenH264Encoder::new(&config).unwrap();
 

@@ -13,7 +13,8 @@ pub struct OpenH264EncoderConfig {
     pub width: u32,
     pub height: u32,
     pub bitrate_bps: u32,
-    pub frame_rate: f32,
+    pub frame_rate_num: u32,
+    pub frame_rate_den: u32,
 }
 
 impl Default for OpenH264EncoderConfig {
@@ -22,7 +23,8 @@ impl Default for OpenH264EncoderConfig {
             width: 1920,
             height: 1080,
             bitrate_bps: 5_000_000,
-            frame_rate: 30.0,
+            frame_rate_num: 30,
+            frame_rate_den: 1,
         }
     }
 }
@@ -52,7 +54,9 @@ impl OpenH264Encoder {
         let api = openh264::OpenH264API::from_source();
         let enc_config = openh264::encoder::EncoderConfig::new()
             .bitrate(openh264::encoder::BitRate::from_bps(config.bitrate_bps))
-            .max_frame_rate(openh264::encoder::FrameRate::from_hz(config.frame_rate));
+            .max_frame_rate(openh264::encoder::FrameRate::from_hz(
+                config.frame_rate_num as f32 / config.frame_rate_den as f32,
+            ));
 
         let encoder = openh264::encoder::Encoder::with_api_config(api, enc_config)
             .map_err(|e| TarangError::Pipeline(format!("openh264 encoder init failed: {e:?}")))?;

@@ -3,7 +3,6 @@
 //! Safe wrapper around rav1e for AV1 encoding.
 //! Requires the `rav1e` feature.
 
-use bytes::Bytes;
 use tarang_core::{Result, TarangError, VideoFrame};
 
 /// AV1 encoder configuration
@@ -11,10 +10,10 @@ use tarang_core::{Result, TarangError, VideoFrame};
 pub struct Rav1eConfig {
     pub width: u32,
     pub height: u32,
-    pub frame_rate_num: u64,
-    pub frame_rate_den: u64,
-    pub bitrate: u32,
-    pub speed: usize,
+    pub frame_rate_num: u32,
+    pub frame_rate_den: u32,
+    pub bitrate_bps: u32,
+    pub speed: u32,
 }
 
 impl Default for Rav1eConfig {
@@ -24,7 +23,7 @@ impl Default for Rav1eConfig {
             height: 1080,
             frame_rate_num: 30,
             frame_rate_den: 1,
-            bitrate: 5_000_000,
+            bitrate_bps: 5_000_000,
             speed: 6,
         }
     }
@@ -43,11 +42,11 @@ impl Rav1eEncoder {
         let mut enc_config = rav1e::EncoderConfig::default();
         enc_config.width = config.width as usize;
         enc_config.height = config.height as usize;
-        enc_config.speed_settings = rav1e::SpeedSettings::from_preset(config.speed);
-        enc_config.bitrate = config.bitrate as i32;
+        enc_config.speed_settings = rav1e::SpeedSettings::from_preset(config.speed as usize);
+        enc_config.bitrate = config.bitrate_bps as i32;
         enc_config.time_base = rav1e::data::Rational {
-            num: config.frame_rate_den,
-            den: config.frame_rate_num,
+            num: config.frame_rate_den as u64,
+            den: config.frame_rate_num as u64,
         };
 
         let rav1e_cfg = rav1e::Config::new()
@@ -70,7 +69,6 @@ impl Rav1eEncoder {
     pub fn send_frame(&mut self, frame: &VideoFrame) -> Result<()> {
         let mut enc_frame = self.context.new_frame();
 
-        // Copy Y plane
         let y_size = (self.width * self.height) as usize;
         let chroma_w = (self.width / 2) as usize;
         let chroma_h = (self.height / 2) as usize;
@@ -111,7 +109,7 @@ impl Rav1eEncoder {
         Ok(())
     }
 
-    /// Receive encoded AV1 packets. Returns empty vec if encoder needs more data.
+    /// Receive encoded AV1 packets. Returns None if encoder needs more data.
     pub fn receive_packet(&mut self) -> Result<Option<Vec<u8>>> {
         match self.context.receive_packet() {
             Ok(packet) => {

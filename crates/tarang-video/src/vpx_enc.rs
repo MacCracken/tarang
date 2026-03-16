@@ -22,7 +22,7 @@ pub struct VpxEncoderConfig {
     pub codec: VideoCodec,
     pub width: u32,
     pub height: u32,
-    pub bitrate_kbps: u32,
+    pub bitrate_bps: u32,
     pub frame_rate_num: u32,
     pub frame_rate_den: u32,
     pub threads: u32,
@@ -35,7 +35,7 @@ impl Default for VpxEncoderConfig {
             codec: VideoCodec::Vp9,
             width: 1920,
             height: 1080,
-            bitrate_kbps: 4000,
+            bitrate_bps: 4_000_000,
             frame_rate_num: 30,
             frame_rate_den: 1,
             threads: 4,
@@ -99,7 +99,7 @@ impl VpxEncoder {
 
         cfg.g_w = config.width;
         cfg.g_h = config.height;
-        cfg.rc_target_bitrate = config.bitrate_kbps;
+        cfg.rc_target_bitrate = config.bitrate_bps / 1000;
         cfg.g_timebase.num = config.frame_rate_den as i32;
         cfg.g_timebase.den = config.frame_rate_num as i32;
         cfg.g_threads = config.threads;
@@ -333,7 +333,7 @@ mod tests {
             codec: VideoCodec::Vp9,
             width: 320,
             height: 240,
-            bitrate_kbps: 500,
+            bitrate_bps: 500_000,
             speed: 9,
             threads: 1,
             ..Default::default()
@@ -390,7 +390,7 @@ mod tests {
             codec: VideoCodec::Vp8,
             width: 320,
             height: 240,
-            bitrate_kbps: 500,
+            bitrate_bps: 500_000,
             threads: 1,
             ..Default::default()
         };
@@ -410,7 +410,7 @@ mod tests {
             codec: VideoCodec::Vp9,
             width: 160,
             height: 120,
-            bitrate_kbps: 200,
+            bitrate_bps: 200_000,
             speed: 9,
             threads: 1,
             ..Default::default()

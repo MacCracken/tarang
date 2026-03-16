@@ -20,7 +20,8 @@ pub struct VaapiEncoderConfig {
     pub width: u32,
     pub height: u32,
     pub bitrate_bps: u32,
-    pub frame_rate: f32,
+    pub frame_rate_num: u32,
+    pub frame_rate_den: u32,
     /// DRM render node path override (default: auto-detect)
     pub device: Option<String>,
 }
@@ -32,7 +33,8 @@ impl Default for VaapiEncoderConfig {
             width: 1920,
             height: 1080,
             bitrate_bps: 5_000_000,
-            frame_rate: 30.0,
+            frame_rate_num: 30,
+            frame_rate_den: 1,
             device: None,
         }
     }

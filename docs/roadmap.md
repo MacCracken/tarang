@@ -67,7 +67,6 @@
 ### F2: Remaining Video Encoding
 - [x] openh264 bindings (H.264 encoding, behind `openh264-enc` feature flag)
 - [x] VA-API hardware-accelerated encode scaffolding (H.264/HEVC, surface lifecycle, entrypoint selection)
-- [ ] VA-API encode pipeline completion (surface upload, parameter buffers, bitstream readback — blocked on cros-codecs version alignment)
 
 ### F3: AI Features
 - [ ] Transcription routing to hoosh (Whisper models)
@@ -83,9 +82,8 @@
 - [ ] MCP tools registered in daimon
 - [ ] agnoshi intents ("play music", "probe file", "transcribe audio")
 
-## Engineering Backlog
-- [ ] Normalize encoder API inconsistencies (bitrate units across vpx/openh264/rav1e configs)
-- [ ] Wire full VA-API encode pipeline when cros-codecs aligns with cros-libva 0.0.13
+## Waiting on Upstream
+- [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` releasing a version compatible with `cros-libva` 0.0.13 (current cros-codecs 0.0.6 depends on cros-libva 0.0.12). *(added 2026-03-16)*
 
 ## Downstream Consumers
 - **AGNOS Media Player** (new, Priority 1) — primary GUI player built on tarang

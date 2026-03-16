@@ -9,7 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: [ci]
     strategy:
       matrix:
         include:
@@ -29,14 +34,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install system dependencies
+      - name: Install system dependencies (amd64)
+        if: matrix.arch == 'amd64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (arm64)
         if: matrix.arch == 'arm64'
         run: |
+          sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
@@ -62,7 +69,7 @@ jobs:
             tarang-*.sha256
 
   release:
-    needs: build
+    needs: [ci, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
