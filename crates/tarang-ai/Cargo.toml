@@ -1,0 +1,19 @@
+[package]
+name = "tarang-ai"
+version = "2026.3.16"
+edition = "2024"
+description = "AI features for Tarang — media analysis, content classification, transcription routing via hoosh"
+license = "GPL-3.0"
+
+[dependencies]
+tarang-core = { path = "../tarang-core" }
+tarang-demux = { path = "../tarang-demux" }
+tarang-audio = { path = "../tarang-audio" }
+tarang-video = { path = "../tarang-video" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

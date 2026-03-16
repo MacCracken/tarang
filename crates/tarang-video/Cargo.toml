@@ -1,0 +1,12 @@
+[package]
+name = "tarang-video"
+version = "2026.3.16"
+edition = "2024"
+description = "Video decoding for Tarang — thin Rust FFI wrappers around dav1d (AV1), openh264 (H.264), libvpx (VP9)"
+license = "GPL-3.0"
+
+[dependencies]
+tarang-core = { path = "../tarang-core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }

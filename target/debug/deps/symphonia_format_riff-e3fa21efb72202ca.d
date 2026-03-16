@@ -1,0 +1,10 @@
+/home/macro/Repos/tarang/target/debug/deps/symphonia_format_riff-e3fa21efb72202ca.d: /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/lib.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/common.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/mod.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/chunks.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/mod.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/chunks.rs
+
+/home/macro/Repos/tarang/target/debug/deps/libsymphonia_format_riff-e3fa21efb72202ca.rmeta: /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/lib.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/common.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/mod.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/chunks.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/mod.rs /home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/chunks.rs
+
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/lib.rs:
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/common.rs:
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/mod.rs:
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/aiff/chunks.rs:
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/mod.rs:
+/home/macro/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-format-riff-0.5.5/src/wave/chunks.rs:

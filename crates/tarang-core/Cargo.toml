@@ -1,0 +1,14 @@
+[package]
+name = "tarang-core"
+version = "2026.3.16"
+edition = "2024"
+description = "Core types for Tarang media framework — codecs, formats, buffers, pipeline primitives"
+license = "GPL-3.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }

@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tarang-core",
+    "crates/tarang-demux",
+    "crates/tarang-audio",
+    "crates/tarang-video",
+    "crates/tarang-ai",
+]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "io-std"] }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+symphonia = { version = "0.5", features = ["all"] }
+bytes = "1"
+
+[package]
+name = "tarang"
+version = "2026.3.16"
+edition = "2024"
+description = "AI-native Rust media framework for AGNOS — container parsing, audio/video decoding, media pipeline"
+license = "GPL-3.0"
+
+[dependencies]
+tarang-core = { path = "crates/tarang-core" }
+tarang-demux = { path = "crates/tarang-demux" }
+tarang-audio = { path = "crates/tarang-audio" }
+tarang-video = { path = "crates/tarang-video" }
+tarang-ai = { path = "crates/tarang-ai" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "tarang"
+path = "src/main.rs"
