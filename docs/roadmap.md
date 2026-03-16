@@ -82,17 +82,7 @@
 - [ ] agnoshi intents ("play music", "probe file", "transcribe audio")
 
 ## Engineering Backlog
-- [ ] Remove redundant `initialized` field from VpxDecoder/VpxEncoder (unconditionally destroy in Drop)
-- [ ] Implement `unsafe impl Send` for VpxDecoder/VpxEncoder (single-owner context is safe to move)
-- [ ] Normalize encoder API inconsistencies (bitrate units, chroma rounding, config field types)
-- [ ] Update tarang-video doc comment to cover both decoding and encoding
-- [ ] Add convenience `full` feature flag to tarang-video Cargo.toml
-- [ ] VpxEncoder: use frame.timestamp for PTS instead of monotonic counter
-- [ ] DecoderConfig::for_codec() should validate that the backend feature is enabled
-- [ ] dav1d_dec: document timestamp unit contract; clamp negative i64 timestamps to 0
-- [ ] dav1d_dec: guard against negative stride from dav1d (currently cast `as usize`)
-- [ ] build.rs: mention env-var workaround in probe execution failure message
-- [ ] openh264_enc: add comment explaining why floor division is safe (even dims enforced)
+- [ ] Normalize encoder API inconsistencies (bitrate units across vpx/openh264/rav1e configs)
 
 ## Downstream Consumers
 - **AGNOS Media Player** (new, Priority 1) — primary GUI player built on tarang

@@ -82,7 +82,10 @@ int main() { printf("%d %d\n", VPX_DECODER_ABI_VERSION, VPX_ENCODER_ABI_VERSION)
 
         let output = Command::new(&bin_path)
             .output()
-            .expect("failed to execute vpx ABI probe binary");
+            .unwrap_or_else(|e| panic!(
+                "failed to execute vpx ABI probe binary: {e}. \
+                 For cross-compilation, set VPX_DECODER_ABI_VERSION and VPX_ENCODER_ABI_VERSION env vars."
+            ));
 
         let versions = String::from_utf8_lossy(&output.stdout);
         let mut parts = versions.trim().split_whitespace();

@@ -24,8 +24,11 @@ pub struct VpxDecoder {
     codec: VideoCodec,
     ctx: vpx_sys::vpx_codec_ctx_t,
     frames_decoded: u64,
-    initialized: bool,
 }
+
+// VpxDecoder owns the codec context exclusively; safe to move across threads.
+// SAFETY: libvpx codec contexts are not shared — each VpxDecoder has sole ownership.
+unsafe impl Send for VpxDecoder {}
 
 impl VpxDecoder {
     pub fn new(codec: VideoCodec) -> Result<Self> {
@@ -62,7 +65,6 @@ impl VpxDecoder {
             codec,
             ctx,
             frames_decoded: 0,
-            initialized: true,
         })
     }
 
@@ -160,6 +162,10 @@ impl VpxDecoder {
         Ok(frames)
     }
 
+    pub fn codec(&self) -> VideoCodec {
+        self.codec
+    }
+
     pub fn frames_decoded(&self) -> u64 {
         self.frames_decoded
     }
@@ -167,10 +173,8 @@ impl VpxDecoder {
 
 impl Drop for VpxDecoder {
     fn drop(&mut self) {
-        if self.initialized {
-            unsafe {
-                vpx_sys::vpx_codec_destroy(&mut self.ctx);
-            }
+        unsafe {
+            vpx_sys::vpx_codec_destroy(&mut self.ctx);
         }
     }
 }

@@ -1,12 +1,13 @@
-//! tarang-video — Video decoding for the Tarang media framework
+//! tarang-video — Video decoding and encoding for the Tarang media framework
 //!
-//! Provides thin Rust wrappers around native C codec libraries:
-//! - dav1d for AV1
-//! - openh264 for H.264
-//! - libvpx for VP8/VP9
+//! Provides thin Rust wrappers around native codec libraries:
 //!
-//! The Rust layer owns the pipeline, memory management, and error handling.
-//! C codecs are called through safe FFI boundaries.
+//! **Decoders**: dav1d (AV1), openh264 (H.264), libvpx (VP8/VP9)
+//! **Encoders**: rav1e (AV1), openh264 (H.264), libvpx (VP8/VP9)
+//!
+//! Each codec is behind a feature flag. The Rust layer owns the pipeline,
+//! memory management, and error handling. C codecs are called through safe
+//! FFI boundaries.
 
 #[cfg(feature = "dav1d")]
 pub mod dav1d_dec;
@@ -87,9 +88,30 @@ impl DecoderConfig {
     /// Create a default config for the given codec
     pub fn for_codec(codec: VideoCodec) -> Result<Self> {
         let backend = match codec {
-            VideoCodec::Av1 => DecoderBackend::Dav1d,
-            VideoCodec::H264 => DecoderBackend::OpenH264,
-            VideoCodec::Vp8 | VideoCodec::Vp9 => DecoderBackend::LibVpx,
+            VideoCodec::Av1 => {
+                if !cfg!(feature = "dav1d") {
+                    return Err(TarangError::UnsupportedCodec(
+                        "AV1 decoding requires the `dav1d` feature".to_string(),
+                    ));
+                }
+                DecoderBackend::Dav1d
+            }
+            VideoCodec::H264 => {
+                if !cfg!(feature = "openh264") {
+                    return Err(TarangError::UnsupportedCodec(
+                        "H.264 decoding requires the `openh264` feature".to_string(),
+                    ));
+                }
+                DecoderBackend::OpenH264
+            }
+            VideoCodec::Vp8 | VideoCodec::Vp9 => {
+                if !cfg!(feature = "vpx") {
+                    return Err(TarangError::UnsupportedCodec(
+                        "VP8/VP9 decoding requires the `vpx` feature".to_string(),
+                    ));
+                }
+                DecoderBackend::LibVpx
+            }
             VideoCodec::H265 => {
                 return Err(TarangError::UnsupportedCodec(
                     "H.265 not yet supported — no BSD-licensed decoder available".to_string(),
@@ -230,27 +252,44 @@ mod tests {
     use super::*;
     #[test]
     fn config_for_av1() {
-        let config = DecoderConfig::for_codec(VideoCodec::Av1).unwrap();
-        assert_eq!(config.backend, DecoderBackend::Dav1d);
-        assert_eq!(config.codec, VideoCodec::Av1);
+        let result = DecoderConfig::for_codec(VideoCodec::Av1);
+        if cfg!(feature = "dav1d") {
+            let config = result.unwrap();
+            assert_eq!(config.backend, DecoderBackend::Dav1d);
+            assert_eq!(config.codec, VideoCodec::Av1);
+        } else {
+            assert!(result.is_err());
+        }
     }
 
     #[test]
     fn config_for_h264() {
-        let config = DecoderConfig::for_codec(VideoCodec::H264).unwrap();
-        assert_eq!(config.backend, DecoderBackend::OpenH264);
+        let result = DecoderConfig::for_codec(VideoCodec::H264);
+        if cfg!(feature = "openh264") {
+            assert_eq!(result.unwrap().backend, DecoderBackend::OpenH264);
+        } else {
+            assert!(result.is_err());
+        }
     }
 
     #[test]
     fn config_for_vp9() {
-        let config = DecoderConfig::for_codec(VideoCodec::Vp9).unwrap();
-        assert_eq!(config.backend, DecoderBackend::LibVpx);
+        let result = DecoderConfig::for_codec(VideoCodec::Vp9);
+        if cfg!(feature = "vpx") {
+            assert_eq!(result.unwrap().backend, DecoderBackend::LibVpx);
+        } else {
+            assert!(result.is_err());
+        }
     }
 
     #[test]
     fn config_for_vp8() {
-        let config = DecoderConfig::for_codec(VideoCodec::Vp8).unwrap();
-        assert_eq!(config.backend, DecoderBackend::LibVpx);
+        let result = DecoderConfig::for_codec(VideoCodec::Vp8);
+        if cfg!(feature = "vpx") {
+            assert_eq!(result.unwrap().backend, DecoderBackend::LibVpx);
+        } else {
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -266,20 +305,20 @@ mod tests {
 
     #[test]
     fn decoder_creation() {
-        let config = DecoderConfig::for_codec(VideoCodec::Av1).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let decoder = VideoDecoder::new(config).unwrap();
-        assert_eq!(decoder.codec(), VideoCodec::Av1);
-        assert_eq!(decoder.backend(), DecoderBackend::Dav1d);
+        assert_eq!(decoder.codec(), VideoCodec::Theora);
+        assert_eq!(decoder.backend(), DecoderBackend::Software);
         assert_eq!(decoder.status(), DecoderStatus::Ready);
         assert_eq!(decoder.frames_decoded(), 0);
     }
 
     #[test]
     fn decoder_init() {
-        let config = DecoderConfig::for_codec(VideoCodec::H264).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
         decoder.init(&VideoStreamInfo {
-            codec: VideoCodec::H264,
+            codec: VideoCodec::Theora,
             width: 1920,
             height: 1080,
             pixel_format: PixelFormat::Yuv420p,
@@ -292,10 +331,10 @@ mod tests {
 
     #[test]
     fn decode_cycle() {
-        let config = DecoderConfig::for_codec(VideoCodec::Av1).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
         decoder.init(&VideoStreamInfo {
-            codec: VideoCodec::Av1,
+            codec: VideoCodec::Theora,
             width: 640,
             height: 480,
             pixel_format: PixelFormat::Yuv420p,
@@ -321,14 +360,14 @@ mod tests {
 
     #[test]
     fn empty_packet_error() {
-        let config = DecoderConfig::for_codec(VideoCodec::H264).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
         assert!(decoder.send_packet(&[], Duration::ZERO).is_err());
     }
 
     #[test]
     fn flush() {
-        let config = DecoderConfig::for_codec(VideoCodec::Vp9).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
         decoder.flush().unwrap();
         assert_eq!(decoder.status(), DecoderStatus::Flushed);
@@ -353,7 +392,7 @@ mod tests {
 
     #[test]
     fn multiple_frames() {
-        let config = DecoderConfig::for_codec(VideoCodec::H264).unwrap();
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
 
         for i in 0..5 {

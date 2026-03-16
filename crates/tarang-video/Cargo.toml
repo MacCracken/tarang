@@ -2,11 +2,12 @@
 name = "tarang-video"
 version = "2026.3.16"
 edition = "2024"
-description = "Video decoding for Tarang — thin Rust FFI wrappers around dav1d (AV1), openh264 (H.264), libvpx (VP9)"
+description = "Video decoding and encoding for Tarang — thin Rust FFI wrappers around dav1d, openh264, libvpx, rav1e"
 license = "GPL-3.0"
 
 [features]
 default = []
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc"]
 dav1d = ["dep:dav1d"]
 vpx = ["dep:libvpx-sys"]
 vpx-enc = ["dep:libvpx-sys"]

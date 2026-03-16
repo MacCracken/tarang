@@ -65,8 +65,11 @@ pub struct VpxEncoder {
     height: u32,
     frames_encoded: u64,
     pts: i64,
-    initialized: bool,
 }
+
+// VpxEncoder owns the codec context exclusively; safe to move across threads.
+// SAFETY: libvpx codec contexts are not shared — each VpxEncoder has sole ownership.
+unsafe impl Send for VpxEncoder {}
 
 impl VpxEncoder {
     pub fn new(config: &VpxEncoderConfig) -> Result<Self> {
@@ -154,11 +157,11 @@ impl VpxEncoder {
             height: config.height,
             frames_encoded: 0,
             pts: 0,
-            initialized: true,
         })
     }
 
-    /// Encode a YUV420p frame. Returns encoded packets (may be empty if encoder is buffering).
+    /// Encode a YUV420p frame. Uses the frame's timestamp for PTS.
+    /// Returns encoded packets (may be empty if encoder is buffering).
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<Vec<u8>>> {
         // Compute plane sizes in usize to avoid u32 overflow
         let y_size = self.width as usize * self.height as usize;
@@ -237,12 +240,15 @@ impl VpxEncoder {
             }
         }
 
+        // Use frame timestamp as PTS (in timebase units)
+        let pts = frame.timestamp.as_millis() as i64;
+
         // VPX_DL_GOOD_QUALITY = 1000000
         let res = unsafe {
             vpx_sys::vpx_codec_encode(
                 &mut self.ctx,
                 &guard.img,
-                self.pts,
+                pts,
                 1,
                 0,
                 1_000_000,
@@ -258,7 +264,7 @@ impl VpxEncoder {
             )));
         }
 
-        self.pts += 1;
+        self.pts = pts + 1;
         let packets = self.drain_packets();
         self.frames_encoded += 1;
         Ok(packets)
@@ -323,10 +329,8 @@ impl VpxEncoder {
 
 impl Drop for VpxEncoder {
     fn drop(&mut self) {
-        if self.initialized {
-            unsafe {
-                vpx_sys::vpx_codec_destroy(&mut self.ctx);
-            }
+        unsafe {
+            vpx_sys::vpx_codec_destroy(&mut self.ctx);
         }
     }
 }

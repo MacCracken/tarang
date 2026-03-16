@@ -26,6 +26,9 @@ impl Dav1dDecoder {
     }
 
     /// Send encoded AV1 data to the decoder.
+    ///
+    /// The `timestamp` value is opaque — it is passed through to decoded frames
+    /// and interpreted as nanoseconds when constructing the output `Duration`.
     pub fn send_data(&mut self, data: &[u8], timestamp: i64) -> Result<()> {
         self.decoder
             .send_data(data.to_vec(), Some(timestamp), None, None)
@@ -79,7 +82,7 @@ impl Dav1dDecoder {
                     yuv_data.extend_from_slice(&v_plane[start..start + chroma_w]);
                 }
 
-                let timestamp_ns = pic.timestamp().unwrap_or(0);
+                let timestamp_ns = pic.timestamp().unwrap_or(0).max(0) as u64;
                 self.frames_decoded += 1;
 
                 Ok(Some(VideoFrame {
@@ -87,7 +90,7 @@ impl Dav1dDecoder {
                     pixel_format: PixelFormat::Yuv420p,
                     width,
                     height,
-                    timestamp: Duration::from_nanos(timestamp_ns as u64),
+                    timestamp: Duration::from_nanos(timestamp_ns),
                 }))
             }
             Err(dav1d::Error::Again) => Ok(None),

@@ -83,6 +83,7 @@ impl OpenH264Encoder {
         let w = self.width as usize;
         let h = self.height as usize;
         let y_size = w * h;
+        // Floor division is safe here — dimensions are validated even in new()
         let chroma_w = w / 2;
         let chroma_h = h / 2;
         let expected_size = y_size + 2 * chroma_w * chroma_h;
