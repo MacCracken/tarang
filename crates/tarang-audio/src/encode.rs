@@ -99,8 +99,13 @@ impl AudioEncoder for PcmEncoder {
 pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
     match config.codec {
         AudioCodec::Pcm => Ok(Box::new(PcmEncoder::new(config)?)),
+        AudioCodec::Flac => Ok(Box::new(crate::FlacEncoder::new(config)?)),
+        #[cfg(feature = "opus-enc")]
+        AudioCodec::Opus => Ok(Box::new(crate::OpusEncoder::new(config)?)),
+        #[cfg(feature = "aac-enc")]
+        AudioCodec::Aac => Ok(Box::new(crate::AacEncoder::new(config)?)),
         other => Err(TarangError::UnsupportedCodec(format!(
-            "no encoder for {other} yet (FLAC/Opus/AAC encoders pending)"
+            "no encoder for {other}"
         ))),
     }
 }
@@ -229,13 +234,25 @@ mod tests {
     #[test]
     fn create_unsupported_encoder() {
         let config = EncoderConfig {
-            codec: AudioCodec::Flac,
+            codec: AudioCodec::Wma,
             sample_rate: 44100,
             channels: 2,
             bits_per_sample: 16,
         };
         let enc = create_encoder(&config);
         assert!(enc.is_err());
+    }
+
+    #[test]
+    fn create_flac_encoder() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let enc = create_encoder(&config);
+        assert!(enc.is_ok());
     }
 
     #[test]

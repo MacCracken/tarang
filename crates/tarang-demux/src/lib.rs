@@ -9,7 +9,7 @@ mod ogg;
 mod wav;
 
 pub use mp4::Mp4Demuxer;
-pub use mux::{MuxConfig, Muxer, OggMuxer, WavMuxer};
+pub use mux::{Mp4Muxer, MuxConfig, Muxer, OggMuxer, WavMuxer};
 pub use ogg::OggDemuxer;
 pub use wav::WavDemuxer;
 

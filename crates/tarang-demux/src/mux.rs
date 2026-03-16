@@ -280,6 +280,361 @@ impl<W: Write> Muxer for OggMuxer<W> {
     }
 }
 
+// ---- MP4/M4A Muxer ----
+
+/// MP4/M4A container muxer — writes ISOBMFF boxes for audio-only MP4 files.
+///
+/// Accumulates sample data and metadata, then writes the full file on `finalize()`
+/// (moov-at-end strategy, simple and correct).
+pub struct Mp4Muxer<W: Write + Seek> {
+    writer: W,
+    config: MuxConfig,
+    /// Collected encoded sample data
+    samples: Vec<Vec<u8>>,
+    /// Per-sample sizes for stsz
+    sample_sizes: Vec<u32>,
+    /// Sample delta for stts (constant for audio)
+    sample_delta: u32,
+    header_written: bool,
+}
+
+impl<W: Write + Seek> Mp4Muxer<W> {
+    pub fn new(writer: W, config: MuxConfig) -> Self {
+        // Default sample delta: 1024 for AAC, 960 for Opus, 1 for PCM
+        let sample_delta = match config.codec {
+            AudioCodec::Aac => 1024,
+            AudioCodec::Opus => 960,
+            _ => 1024,
+        };
+        Self {
+            writer,
+            config,
+            samples: Vec::new(),
+            sample_sizes: Vec::new(),
+            sample_delta,
+            header_written: false,
+        }
+    }
+
+    fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
+        let size = (8 + data.len()) as u32;
+        self.writer
+            .write_all(&size.to_be_bytes())
+            .map_err(io_err)?;
+        self.writer.write_all(box_type).map_err(io_err)?;
+        self.writer.write_all(data).map_err(io_err)?;
+        Ok(())
+    }
+
+    fn build_ftyp(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"isom"); // major brand
+        buf.extend_from_slice(&0u32.to_be_bytes()); // minor version
+        buf.extend_from_slice(b"isom"); // compatible
+        buf.extend_from_slice(b"mp41"); // compatible
+        buf
+    }
+
+    fn build_moov(&self, mdat_offset: u64) -> Vec<u8> {
+        let mut moov = Vec::new();
+
+        // mvhd
+        let mvhd = self.build_mvhd();
+        write_sub_box(&mut moov, b"mvhd", &mvhd);
+
+        // trak
+        let trak = self.build_trak(mdat_offset);
+        write_sub_box(&mut moov, b"trak", &trak);
+
+        moov
+    }
+
+    fn build_mvhd(&self) -> Vec<u8> {
+        let num_samples = self.samples.len() as u64;
+        let timescale = self.config.sample_rate;
+        let duration = num_samples * self.sample_delta as u64;
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        buf.extend_from_slice(&timescale.to_be_bytes());
+        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate = 1.0
+        buf.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
+        buf.extend_from_slice(&[0u8; 10]); // reserved
+        // Matrix (identity)
+        for &v in &[
+            0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+        ] {
+            buf.extend_from_slice(&v.to_be_bytes());
+        }
+        buf.extend_from_slice(&[0u8; 24]); // pre_defined
+        buf.extend_from_slice(&2u32.to_be_bytes()); // next_track_id
+        buf
+    }
+
+    fn build_trak(&self, mdat_offset: u64) -> Vec<u8> {
+        let mut trak = Vec::new();
+
+        let tkhd = self.build_tkhd();
+        write_sub_box(&mut trak, b"tkhd", &tkhd);
+
+        let mdia = self.build_mdia(mdat_offset);
+        write_sub_box(&mut trak, b"mdia", &mdia);
+
+        trak
+    }
+
+    fn build_tkhd(&self) -> Vec<u8> {
+        let num_samples = self.samples.len() as u64;
+        let duration = num_samples * self.sample_delta as u64;
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x00000003u32.to_be_bytes()); // version 0 + flags (enabled+in_movie)
+        buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        buf.extend_from_slice(&1u32.to_be_bytes()); // track_id
+        buf.extend_from_slice(&0u32.to_be_bytes()); // reserved
+        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]); // reserved
+        buf.extend_from_slice(&0u16.to_be_bytes()); // layer
+        buf.extend_from_slice(&0u16.to_be_bytes()); // alternate_group
+        buf.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
+        buf.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        // Matrix (identity)
+        for &v in &[
+            0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+        ] {
+            buf.extend_from_slice(&v.to_be_bytes());
+        }
+        buf.extend_from_slice(&0u32.to_be_bytes()); // width
+        buf.extend_from_slice(&0u32.to_be_bytes()); // height
+        buf
+    }
+
+    fn build_mdia(&self, mdat_offset: u64) -> Vec<u8> {
+        let mut mdia = Vec::new();
+
+        let mdhd = self.build_mdhd();
+        write_sub_box(&mut mdia, b"mdhd", &mdhd);
+
+        let hdlr = self.build_hdlr();
+        write_sub_box(&mut mdia, b"hdlr", &hdlr);
+
+        let minf = self.build_minf(mdat_offset);
+        write_sub_box(&mut mdia, b"minf", &minf);
+
+        mdia
+    }
+
+    fn build_mdhd(&self) -> Vec<u8> {
+        let num_samples = self.samples.len() as u64;
+        let timescale = self.config.sample_rate;
+        let duration = num_samples * self.sample_delta as u64;
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        buf.extend_from_slice(&timescale.to_be_bytes());
+        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&0x55C40000u32.to_be_bytes()); // language 'und' + pre_defined
+        buf
+    }
+
+    fn build_hdlr(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // pre_defined
+        buf.extend_from_slice(b"soun"); // handler_type
+        buf.extend_from_slice(&[0u8; 12]); // reserved
+        buf.extend_from_slice(b"tarang\0"); // name
+        buf
+    }
+
+    fn build_minf(&self, mdat_offset: u64) -> Vec<u8> {
+        let mut minf = Vec::new();
+
+        // smhd (sound media header)
+        let mut smhd = Vec::new();
+        smhd.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        smhd.extend_from_slice(&0u16.to_be_bytes()); // balance
+        smhd.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        write_sub_box(&mut minf, b"smhd", &smhd);
+
+        // dinf + dref (data reference)
+        let mut dinf = Vec::new();
+        let mut dref = Vec::new();
+        dref.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        dref.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        // url entry (self-contained)
+        let mut url_entry = Vec::new();
+        url_entry.extend_from_slice(&0x00000001u32.to_be_bytes()); // version + flags (self-contained)
+        write_sub_box(&mut dref, b"url ", &url_entry);
+        write_sub_box(&mut dinf, b"dref", &dref);
+        write_sub_box(&mut minf, b"dinf", &dinf);
+
+        let stbl = self.build_stbl(mdat_offset);
+        write_sub_box(&mut minf, b"stbl", &stbl);
+
+        minf
+    }
+
+    fn build_stbl(&self, mdat_offset: u64) -> Vec<u8> {
+        let mut stbl = Vec::new();
+
+        let stsd = self.build_stsd();
+        write_sub_box(&mut stbl, b"stsd", &stsd);
+
+        let stts = self.build_stts();
+        write_sub_box(&mut stbl, b"stts", &stts);
+
+        let stsc = self.build_stsc();
+        write_sub_box(&mut stbl, b"stsc", &stsc);
+
+        let stsz = self.build_stsz();
+        write_sub_box(&mut stbl, b"stsz", &stsz);
+
+        // mdat data starts at mdat_offset + 8 (box header)
+        let data_start = mdat_offset + 8;
+        let stco = self.build_stco(data_start);
+        write_sub_box(&mut stbl, b"stco", &stco);
+
+        stbl
+    }
+
+    fn build_stsd(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+
+        // Audio sample entry
+        let box_type = match self.config.codec {
+            AudioCodec::Aac => b"mp4a",
+            AudioCodec::Alac => b"alac",
+            AudioCodec::Opus => b"Opus",
+            AudioCodec::Flac => b"fLaC",
+            _ => b"mp4a",
+        };
+
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&[0u8; 6]); // reserved
+        entry.extend_from_slice(&1u16.to_be_bytes()); // data_ref_index
+        entry.extend_from_slice(&[0u8; 8]); // reserved
+        entry.extend_from_slice(&self.config.channels.to_be_bytes());
+        entry.extend_from_slice(&self.config.bits_per_sample.to_be_bytes());
+        entry.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
+        entry.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        entry.extend_from_slice(&(self.config.sample_rate << 16).to_be_bytes()); // 16.16 fixed
+
+        write_sub_box(&mut buf, box_type, &entry);
+        buf
+    }
+
+    fn build_stts(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        buf.extend_from_slice(&(self.samples.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&self.sample_delta.to_be_bytes());
+        buf
+    }
+
+    fn build_stsc(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        buf.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
+        buf.extend_from_slice(&(self.samples.len() as u32).to_be_bytes()); // samples_per_chunk
+        buf.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index
+        buf
+    }
+
+    fn build_stsz(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+
+        // Check if all samples are the same size
+        let all_same = self
+            .sample_sizes
+            .windows(2)
+            .all(|w| w[0] == w[1]);
+
+        if all_same && !self.sample_sizes.is_empty() {
+            buf.extend_from_slice(&self.sample_sizes[0].to_be_bytes());
+            buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes());
+        } else {
+            buf.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size = 0 (variable)
+            buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes());
+            for &size in &self.sample_sizes {
+                buf.extend_from_slice(&size.to_be_bytes());
+            }
+        }
+        buf
+    }
+
+    fn build_stco(&self, data_start: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
+        buf.extend_from_slice(&(data_start as u32).to_be_bytes());
+        buf
+    }
+}
+
+impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
+    fn write_header(&mut self) -> Result<()> {
+        // Write ftyp immediately
+        let ftyp = self.build_ftyp();
+        self.write_box(b"ftyp", &ftyp)?;
+        self.header_written = true;
+        Ok(())
+    }
+
+    fn write_packet(&mut self, data: &[u8]) -> Result<()> {
+        if !self.header_written {
+            return Err(TarangError::Pipeline("header not written".to_string()));
+        }
+        self.sample_sizes.push(data.len() as u32);
+        self.samples.push(data.to_vec());
+        Ok(())
+    }
+
+    fn finalize(&mut self) -> Result<()> {
+        // Write mdat box
+        let total_data: usize = self.samples.iter().map(|s| s.len()).sum();
+        let mdat_size = (8 + total_data) as u32;
+
+        let mdat_offset = self
+            .writer
+            .stream_position()
+            .map_err(io_err)?;
+
+        self.writer
+            .write_all(&mdat_size.to_be_bytes())
+            .map_err(io_err)?;
+        self.writer.write_all(b"mdat").map_err(io_err)?;
+        for sample in &self.samples {
+            self.writer.write_all(sample).map_err(io_err)?;
+        }
+
+        // Write moov box
+        let moov_data = self.build_moov(mdat_offset);
+        self.write_box(b"moov", &moov_data)?;
+
+        self.writer.flush().map_err(io_err)?;
+        Ok(())
+    }
+}
+
+fn write_sub_box(buf: &mut Vec<u8>, box_type: &[u8; 4], data: &[u8]) {
+    let size = (8 + data.len()) as u32;
+    buf.extend_from_slice(&size.to_be_bytes());
+    buf.extend_from_slice(box_type);
+    buf.extend_from_slice(data);
+}
+
 fn io_err(e: std::io::Error) -> TarangError {
     TarangError::DemuxError(format!("mux write error: {e}"))
 }
@@ -459,5 +814,128 @@ mod tests {
         };
         let mut mux = OggMuxer::new(&mut buf, config);
         assert!(mux.write_header().is_err());
+    }
+
+    #[test]
+    fn mp4_muxer_basic() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        mux.write_header().unwrap();
+
+        let packet = vec![0xAAu8; 512];
+        mux.write_packet(&packet).unwrap();
+        mux.write_packet(&packet).unwrap();
+        mux.finalize().unwrap();
+
+        let output = buf.into_inner();
+
+        // Should start with ftyp
+        assert_eq!(&output[4..8], b"ftyp");
+        assert_eq!(&output[8..12], b"isom");
+    }
+
+    #[test]
+    fn mp4_muxer_has_moov_and_mdat() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        mux.write_header().unwrap();
+        mux.write_packet(&[0xBBu8; 256]).unwrap();
+        mux.finalize().unwrap();
+
+        let output = buf.into_inner();
+
+        // Scan for mdat and moov boxes
+        let mut found_mdat = false;
+        let mut found_moov = false;
+        let mut pos = 0;
+        while pos + 8 <= output.len() {
+            let size = u32::from_be_bytes(output[pos..pos + 4].try_into().unwrap()) as usize;
+            let btype = &output[pos + 4..pos + 8];
+            if btype == b"mdat" {
+                found_mdat = true;
+            }
+            if btype == b"moov" {
+                found_moov = true;
+            }
+            if size == 0 {
+                break;
+            }
+            pos += size;
+        }
+        assert!(found_mdat, "MP4 should contain mdat box");
+        assert!(found_moov, "MP4 should contain moov box");
+    }
+
+    #[test]
+    fn mp4_muxer_demuxer_roundtrip() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        mux.write_header().unwrap();
+
+        for _ in 0..5 {
+            mux.write_packet(&[0xCCu8; 128]).unwrap();
+        }
+        mux.finalize().unwrap();
+
+        // Read it back with Mp4Demuxer
+        let data = buf.into_inner();
+        let cursor = Cursor::new(data);
+        let mut demuxer = crate::Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, tarang_core::ContainerFormat::Mp4);
+        let audio = info.audio_streams();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].codec, AudioCodec::Aac);
+        assert_eq!(audio[0].sample_rate, 44100);
+        assert_eq!(audio[0].channels, 2);
+
+        // Read all packets back
+        let mut count = 0;
+        loop {
+            match demuxer.next_packet() {
+                Ok(p) => {
+                    assert_eq!(p.data.len(), 128);
+                    count += 1;
+                }
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected: {e}"),
+            }
+        }
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn mp4_muxer_write_before_header() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        assert!(mux.write_packet(&[0u8; 100]).is_err());
     }
 }

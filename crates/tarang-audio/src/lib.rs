@@ -5,6 +5,11 @@
 
 mod decode;
 mod encode;
+mod encode_flac;
+#[cfg(feature = "aac-enc")]
+mod encode_aac;
+#[cfg(feature = "opus-enc")]
+mod encode_opus;
 mod mix;
 mod output;
 mod probe;
@@ -12,6 +17,11 @@ mod resample;
 
 pub use decode::FileDecoder;
 pub use encode::{AudioEncoder, EncoderConfig, PcmEncoder, create_encoder};
+pub use encode_flac::FlacEncoder;
+#[cfg(feature = "aac-enc")]
+pub use encode_aac::AacEncoder;
+#[cfg(feature = "opus-enc")]
+pub use encode_opus::OpusEncoder;
 pub use mix::{ChannelLayout, mix_channels};
 pub use output::{AudioOutput, NullOutput, OutputConfig};
 #[cfg(feature = "pipewire")]

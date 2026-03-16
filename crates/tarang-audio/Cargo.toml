@@ -8,6 +8,8 @@ license = "GPL-3.0"
 [features]
 default = []
 pipewire = ["dep:pipewire"]
+opus-enc = ["dep:opus"]
+aac-enc = ["dep:fdk-aac"]
 
 [dependencies]
 tarang-core = { path = "../tarang-core" }
@@ -17,3 +19,5 @@ tracing = { workspace = true }
 bytes = { workspace = true }
 uuid = { workspace = true }
 pipewire = { workspace = true, optional = true }
+opus = { workspace = true, optional = true }
+fdk-aac = { workspace = true, optional = true }

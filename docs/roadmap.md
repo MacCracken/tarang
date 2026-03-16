@@ -36,11 +36,11 @@
 ### M5: Audio Encoding
 - [x] Muxer trait + WAV muxer (pure Rust — inverse of demuxer, roundtrip-verified)
 - [x] OGG muxer (pure Rust — page assembly, Opus + Vorbis headers, roundtrip-verified)
+- [x] MP4/M4A muxer (pure Rust — moov/mdat assembly, roundtrip-verified with Mp4Demuxer)
 - [x] PCM encoder (F32 → 16/24/32-bit interleaved PCM)
-- [ ] FLAC encoder (pure Rust)
-- [ ] Opus encoder (libopus FFI — FOSS first)
-- [ ] AAC encoder (fdk-aac FFI)
-- [ ] MP4/M4A muxer (pure Rust — moov/mdat assembly)
+- [x] FLAC encoder (pure Rust — verbatim subframes, BitWriter, STREAMINFO generation)
+- [x] Opus encoder (libopus FFI, behind `opus-enc` feature flag)
+- [x] AAC encoder (fdk-aac FFI, behind `aac-enc` feature flag)
 
 ## v0.2 — Container Coverage + Video Bootstrap
 

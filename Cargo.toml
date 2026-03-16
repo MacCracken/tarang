@@ -23,6 +23,8 @@ clap = { version = "4", features = ["derive"] }
 symphonia = { version = "0.5", features = ["all"] }
 bytes = "1"
 pipewire = "0.9"
+opus = "0.3"
+fdk-aac = "0.8"
 
 [package]
 name = "tarang"
