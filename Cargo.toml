@@ -8,11 +8,16 @@ members = [
     "crates/tarang-ai",
 ]
 
+[workspace.package]
+version = "2026.3.16-1"
+edition = "2024"
+license = "GPL-3.0"
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "io-std"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
@@ -35,10 +40,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 
 [package]
 name = "tarang"
-version = "2026.3.16-1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "AI-native Rust media framework for AGNOS — container parsing, audio/video decoding, media pipeline"
-license = "GPL-3.0"
+license.workspace = true
 
 [dependencies]
 tarang-core = { path = "crates/tarang-core" }

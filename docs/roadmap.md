@@ -69,18 +69,20 @@
 - [x] VA-API hardware-accelerated encode scaffolding (H.264/HEVC, surface lifecycle, entrypoint selection)
 
 ### F3: AI Features
-- [ ] Transcription routing to hoosh (Whisper models)
-- [ ] Audio fingerprinting
-- [ ] Scene detection in video
-- [ ] Thumbnail generation at keyframes
+- [x] Transcription routing to hoosh (Whisper models — HooshClient, WAV encoding, audio preprocessing)
+- [x] Audio fingerprinting (Chromaprint-style — FFT, chroma features, hash comparison)
+- [x] Scene detection in video (histogram diff, chi-squared distance, gradual transitions)
+- [x] Thumbnail generation at keyframes (YUV→RGB, JPEG/PNG encoding, variance scoring)
 
 ## Post-v1 — Ecosystem Integration
-- [ ] AGNOS media player backend (primary consumer)
+- [x] AGNOS media player backend (Jalwa — built on tarang)
 - [ ] Tazama video editor backend (replace GStreamer/ffmpeg with tarang)
 - [ ] Shruti DAW backend (unify symphonia usage under tarang-audio)
-- [ ] AGNOS marketplace recipe
-- [ ] MCP tools registered in daimon
-- [ ] agnoshi intents ("play music", "probe file", "transcribe audio")
+- [x] AGNOS marketplace recipe (`recipes/marketplace/tarang.toml`)
+- [x] MCP tools registered in daimon (8 tools: probe, analyze, codecs, transcribe, formats, fingerprint_index, search_similar, describe)
+- [x] agnoshi intents (8 intents: probe, analyze, codecs, transcribe, formats, fingerprint, similar, describe)
+- [x] Daimon integration module — vector store fingerprint indexing, RAG metadata ingestion, multimodal agent registration, LLM content description via hoosh
+- [x] Hoosh endpoint fix (port 8088, correct path)
 
 ## Waiting on Upstream
 - [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` releasing a version compatible with `cros-libva` 0.0.13 (current cros-codecs 0.0.6 depends on cros-libva 0.0.12). *(added 2026-03-16)*

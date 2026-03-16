@@ -45,7 +45,7 @@ pub struct HooshConfig {
 impl Default for HooshConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://localhost:8080/transcribe".to_string(),
+            endpoint: "http://localhost:8088/v1/audio/transcribe".to_string(),
             api_key: None,
             model: WhisperModel::Base,
             timeout: Duration::from_secs(300),
@@ -283,6 +283,7 @@ mod tests {
     #[test]
     fn hoosh_config_default() {
         let config = HooshConfig::default();
+        assert!(config.endpoint.contains("8088"));
         assert!(config.endpoint.contains("transcribe"));
         assert_eq!(config.model, WhisperModel::Base);
     }

@@ -1,9 +1,9 @@
 [package]
 name = "tarang-audio"
-version = "2026.3.16-1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Audio decoding for Tarang — pure Rust via symphonia (MP3, FLAC, WAV, OGG, AAC)"
-license = "GPL-3.0"
+license.workspace = true
 
 [features]
 default = []

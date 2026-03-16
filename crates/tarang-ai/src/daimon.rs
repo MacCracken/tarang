@@ -1,0 +1,744 @@
+//! Daimon (agent-runtime) integration
+//!
+//! Connects tarang to the AGNOS agent orchestrator for:
+//! - Vector store: fingerprint indexing and similarity search
+//! - RAG: media metadata ingestion for natural-language queries
+//! - Multimodal agent registration: Audio + Vision modalities
+//! - LLM content description: route thumbnails/metadata to hoosh for richer analysis
+
+use serde::{Deserialize, Serialize};
+use tarang_core::{MediaInfo, Result, TarangError};
+use tracing::{info, warn};
+
+use crate::{AudioFingerprint, MediaAnalysis};
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for the daimon (agent-runtime) connection.
+#[derive(Debug, Clone)]
+pub struct DaimonConfig {
+    pub endpoint: String,
+    pub api_key: Option<String>,
+}
+
+impl Default for DaimonConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: std::env::var("DAIMON_URL")
+                .unwrap_or_else(|_| "http://localhost:8090".to_string()),
+            api_key: std::env::var("DAIMON_API_KEY").ok(),
+        }
+    }
+}
+
+/// Configuration for hoosh LLM-powered content description.
+#[derive(Debug, Clone)]
+pub struct HooshLlmConfig {
+    pub endpoint: String,
+    pub api_key: Option<String>,
+    pub model: String,
+}
+
+impl Default for HooshLlmConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: std::env::var("HOOSH_URL")
+                .unwrap_or_else(|_| "http://localhost:8088".to_string()),
+            api_key: std::env::var("HOOSH_API_KEY").ok(),
+            model: std::env::var("HOOSH_MODEL")
+                .unwrap_or_else(|_| "llama3".to_string()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+
+/// Client for integrating with daimon services.
+pub struct DaimonClient {
+    config: DaimonConfig,
+    http: reqwest::Client,
+}
+
+impl DaimonClient {
+    pub fn new(config: DaimonConfig) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
+        Ok(Self { config, http })
+    }
+
+    fn auth_header(&self) -> Option<String> {
+        self.config.api_key.as_ref().map(|k| format!("Bearer {k}"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Vector Store — fingerprint indexing
+    // -----------------------------------------------------------------------
+
+    /// Index an audio fingerprint in the daimon vector store for similarity search.
+    pub async fn index_fingerprint(
+        &self,
+        file_path: &str,
+        fingerprint: &AudioFingerprint,
+        metadata: &serde_json::Value,
+    ) -> Result<String> {
+        let embedding = fingerprint_to_embedding(fingerprint);
+        if embedding.is_empty() {
+            return Err(TarangError::AiError("empty fingerprint — nothing to index".to_string()));
+        }
+
+        let body = serde_json::json!({
+            "collection": "tarang_fingerprints",
+            "items": [{
+                "embedding": embedding,
+                "content": file_path,
+                "metadata": metadata,
+            }]
+        });
+
+        let url = format!("{}/v1/vectors/insert", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("vector insert failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(TarangError::NetworkError(
+                format!("vector insert returned {status}: {body}")
+            ));
+        }
+
+        info!(path = %file_path, hashes = fingerprint.hashes.len(), "Indexed fingerprint in vector store");
+        Ok(file_path.to_string())
+    }
+
+    /// Search for similar media by fingerprint.
+    pub async fn search_similar(
+        &self,
+        fingerprint: &AudioFingerprint,
+        top_k: usize,
+    ) -> Result<Vec<SimilarMedia>> {
+        let embedding = fingerprint_to_embedding(fingerprint);
+        if embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let body = serde_json::json!({
+            "collection": "tarang_fingerprints",
+            "embedding": embedding,
+            "top_k": top_k,
+        });
+
+        let url = format!("{}/v1/vectors/search", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("vector search failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            warn!("Vector search returned {}", resp.status());
+            return Ok(Vec::new());
+        }
+
+        let result: VectorSearchResponse = resp.json().await
+            .map_err(|e| TarangError::NetworkError(format!("parse search response: {e}")))?;
+
+        Ok(result.results.into_iter().map(|r| SimilarMedia {
+            path: r.content,
+            score: r.score,
+            metadata: r.metadata,
+        }).collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // RAG — media metadata ingestion
+    // -----------------------------------------------------------------------
+
+    /// Ingest media analysis metadata into the RAG pipeline for NL queries.
+    pub async fn ingest_metadata(
+        &self,
+        file_path: &str,
+        info: &MediaInfo,
+        analysis: &MediaAnalysis,
+    ) -> Result<()> {
+        let text = format_metadata_for_rag(file_path, info, analysis);
+
+        let body = serde_json::json!({
+            "text": text,
+            "agent_id": "tarang",
+            "metadata": {
+                "source": "tarang",
+                "path": file_path,
+                "content_type": analysis.content_type.to_string(),
+            }
+        });
+
+        let url = format!("{}/v1/rag/ingest", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("RAG ingest failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            warn!(%status, "RAG ingest returned non-success");
+        } else {
+            info!(path = %file_path, "Ingested media metadata into RAG");
+        }
+
+        Ok(())
+    }
+
+    /// Query RAG for media matching a natural-language description.
+    pub async fn query_media(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
+        let body = serde_json::json!({
+            "query": query,
+            "top_k": top_k,
+            "agent_id": "tarang",
+        });
+
+        let url = format!("{}/v1/rag/query", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("RAG query failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let result: RagQueryResponse = resp.json().await
+            .map_err(|e| TarangError::NetworkError(format!("parse RAG response: {e}")))?;
+
+        Ok(result.results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Multimodal agent registration
+    // -----------------------------------------------------------------------
+
+    /// Register tarang as a multimodal agent with daimon.
+    pub async fn register_agent(&self) -> Result<()> {
+        let body = serde_json::json!({
+            "name": "tarang",
+            "id": "tarang-media-framework",
+            "domain": "media",
+            "capabilities": ["audio_decode", "video_decode", "fingerprint", "scene_detect", "thumbnail", "transcribe", "content_analysis"],
+            "metadata": {
+                "modalities_input": ["audio", "video"],
+                "modalities_output": ["text", "structured_data"],
+                "version": env!("CARGO_PKG_VERSION"),
+                "runtime": "native-binary",
+            }
+        });
+
+        let url = format!("{}/v1/agents/register", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("agent registration failed: {e}")))?;
+
+        if resp.status().is_success() {
+            info!("Registered tarang as multimodal agent with daimon");
+        } else {
+            let status = resp.status();
+            warn!(%status, "Agent registration returned non-success");
+        }
+
+        Ok(())
+    }
+
+    /// Ensure the tarang_fingerprints vector collection exists.
+    pub async fn ensure_collection(&self) -> Result<()> {
+        let body = serde_json::json!({
+            "name": "tarang_fingerprints",
+        });
+
+        let url = format!("{}/v1/vectors/collections", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("collection create failed: {e}")))?;
+
+        // 409 = already exists, which is fine
+        if resp.status().is_success() || resp.status().as_u16() == 409 {
+            info!("Vector collection 'tarang_fingerprints' ready");
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLM content description via hoosh
+// ---------------------------------------------------------------------------
+
+/// Client for LLM-powered content description via hoosh.
+pub struct HooshLlmClient {
+    config: HooshLlmConfig,
+    http: reqwest::Client,
+}
+
+impl HooshLlmClient {
+    pub fn new(config: HooshLlmConfig) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
+        Ok(Self { config, http })
+    }
+
+    /// Generate a rich content description using LLM analysis.
+    ///
+    /// Sends media metadata + analysis to hoosh for natural-language description,
+    /// genre classification, and content moderation tags.
+    pub async fn describe_content(
+        &self,
+        info: &MediaInfo,
+        analysis: &MediaAnalysis,
+    ) -> Result<ContentDescription> {
+        let prompt = build_description_prompt(info, analysis);
+
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+            }],
+            "temperature": 0.3,
+            "max_tokens": 512,
+        });
+
+        let url = format!("{}/v1/chat/completions", self.config.endpoint);
+        let mut req = self.http.post(&url).json(&body);
+        if let Some(key) = &self.config.api_key {
+            req = req.header("Authorization", format!("Bearer {key}"));
+        }
+
+        let resp = req.send().await
+            .map_err(|e| TarangError::NetworkError(format!("hoosh LLM request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(TarangError::NetworkError(
+                format!("hoosh LLM returned {status}")
+            ));
+        }
+
+        let result: serde_json::Value = resp.json().await
+            .map_err(|e| TarangError::NetworkError(format!("parse LLM response: {e}")))?;
+
+        let content = result["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        parse_description_response(&content, analysis)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/// A media file similar to a query fingerprint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimilarMedia {
+    pub path: String,
+    pub score: f64,
+    pub metadata: serde_json::Value,
+}
+
+/// A RAG query result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RagResult {
+    pub text: String,
+    pub relevance: f64,
+}
+
+/// LLM-generated content description.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentDescription {
+    pub summary: String,
+    pub genre: Option<String>,
+    pub mood: Option<String>,
+    pub tags: Vec<String>,
+    pub content_rating: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VectorSearchResponse {
+    results: Vec<VectorSearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VectorSearchResult {
+    content: String,
+    score: f64,
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RagQueryResponse {
+    results: Vec<RagResult>,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert fingerprint hashes to a normalized float embedding for the vector store.
+fn fingerprint_to_embedding(fp: &AudioFingerprint) -> Vec<f32> {
+    if fp.hashes.is_empty() {
+        return Vec::new();
+    }
+
+    // Use hash bit patterns as embedding dimensions.
+    // Normalize each u32 to [0, 1] range.
+    fp.hashes.iter().map(|&h| h as f32 / u32::MAX as f32).collect()
+}
+
+/// Format media metadata as text for RAG ingestion.
+fn format_metadata_for_rag(path: &str, info: &MediaInfo, analysis: &MediaAnalysis) -> String {
+    let mut parts = vec![
+        format!("File: {path}"),
+        format!("Format: {}", info.format),
+        format!("Content type: {}", analysis.content_type),
+        format!("Quality: {:.0}/100", analysis.quality_score),
+    ];
+
+    if let Some(d) = info.duration {
+        parts.push(format!("Duration: {:.1}s", d.as_secs_f64()));
+    }
+    if let Some(title) = &info.title {
+        parts.push(format!("Title: {title}"));
+    }
+    if let Some(artist) = &info.artist {
+        parts.push(format!("Artist: {artist}"));
+    }
+    if let Some(album) = &info.album {
+        parts.push(format!("Album: {album}"));
+    }
+
+    for stream in &info.streams {
+        match stream {
+            tarang_core::StreamInfo::Audio(a) => {
+                parts.push(format!("Audio: {} {}Hz {}ch", a.codec, a.sample_rate, a.channels));
+            }
+            tarang_core::StreamInfo::Video(v) => {
+                parts.push(format!("Video: {} {}x{} {:.1}fps", v.codec, v.width, v.height, v.frame_rate));
+            }
+            tarang_core::StreamInfo::Subtitle { language } => {
+                parts.push(format!("Subtitle: {}", language.as_deref().unwrap_or("unknown")));
+            }
+        }
+    }
+
+    if !analysis.tags.is_empty() {
+        parts.push(format!("Tags: {}", analysis.tags.join(", ")));
+    }
+    if let Some(rec) = &analysis.codec_recommendation {
+        parts.push(format!("Recommendation: {rec}"));
+    }
+
+    parts.join("\n")
+}
+
+/// Build a prompt for LLM content description.
+fn build_description_prompt(info: &MediaInfo, analysis: &MediaAnalysis) -> String {
+    let mut ctx = Vec::new();
+    ctx.push(format!("Content type: {}", analysis.content_type));
+    ctx.push(format!("Quality score: {:.0}/100", analysis.quality_score));
+
+    if let Some(d) = info.duration {
+        let mins = d.as_secs() / 60;
+        let secs = d.as_secs() % 60;
+        ctx.push(format!("Duration: {}m{}s", mins, secs));
+    }
+    if let Some(title) = &info.title {
+        ctx.push(format!("Title: {title}"));
+    }
+    if let Some(artist) = &info.artist {
+        ctx.push(format!("Artist: {artist}"));
+    }
+
+    for stream in &info.streams {
+        match stream {
+            tarang_core::StreamInfo::Audio(a) => {
+                ctx.push(format!("Audio: {} {}Hz {}ch", a.codec, a.sample_rate, a.channels));
+            }
+            tarang_core::StreamInfo::Video(v) => {
+                ctx.push(format!("Video: {} {}x{} {:.1}fps", v.codec, v.width, v.height, v.frame_rate));
+            }
+            _ => {}
+        }
+    }
+
+    format!(
+        "Analyze this media file and provide a JSON response with these fields:\n\
+         - summary: 1-2 sentence description of the content\n\
+         - genre: likely genre (e.g. \"rock\", \"documentary\", \"tutorial\")\n\
+         - mood: emotional tone (e.g. \"energetic\", \"calm\", \"dramatic\")\n\
+         - tags: list of relevant descriptive tags\n\
+         - content_rating: suggested rating (\"G\", \"PG\", \"PG-13\", \"R\", or null)\n\n\
+         Media metadata:\n{}\n\n\
+         Respond with only valid JSON, no markdown.",
+        ctx.join("\n")
+    )
+}
+
+/// Parse LLM response into a ContentDescription.
+fn parse_description_response(
+    response: &str,
+    analysis: &MediaAnalysis,
+) -> Result<ContentDescription> {
+    // Try parsing as JSON first
+    if let Ok(desc) = serde_json::from_str::<ContentDescription>(response) {
+        return Ok(desc);
+    }
+
+    // Try extracting JSON from markdown code block
+    let json_str = response
+        .find('{')
+        .and_then(|start| response.rfind('}').map(|end| &response[start..=end]));
+
+    if let Some(json) = json_str {
+        if let Ok(desc) = serde_json::from_str::<ContentDescription>(json) {
+            return Ok(desc);
+        }
+    }
+
+    // Fallback: use the raw response as summary
+    Ok(ContentDescription {
+        summary: response.trim().to_string(),
+        genre: None,
+        mood: None,
+        tags: analysis.tags.clone(),
+        content_rating: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tarang_core::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn fingerprint_to_embedding_normalizes() {
+        let fp = AudioFingerprint {
+            hashes: vec![0, u32::MAX / 2, u32::MAX],
+            duration_secs: 2.0,
+        };
+        let emb = fingerprint_to_embedding(&fp);
+        assert_eq!(emb.len(), 3);
+        assert!((emb[0] - 0.0).abs() < 0.001);
+        assert!((emb[1] - 0.5).abs() < 0.01);
+        assert!((emb[2] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fingerprint_to_embedding_empty() {
+        let fp = AudioFingerprint {
+            hashes: Vec::new(),
+            duration_secs: 0.0,
+        };
+        assert!(fingerprint_to_embedding(&fp).is_empty());
+    }
+
+    #[test]
+    fn format_rag_metadata() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Aac,
+                    sample_rate: 44100,
+                    channels: 2,
+                    sample_format: SampleFormat::F32,
+                    bitrate: None,
+                    duration: Some(Duration::from_secs(180)),
+                }),
+            ],
+            duration: Some(Duration::from_secs(180)),
+            file_size: None,
+            title: Some("Test Song".to_string()),
+            artist: Some("Test Artist".to_string()),
+            album: None,
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Music,
+            quality_score: 70.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["audio".to_string()],
+        };
+
+        let text = format_metadata_for_rag("/music/song.mp4", &info, &analysis);
+        assert!(text.contains("Test Song"));
+        assert!(text.contains("Test Artist"));
+        assert!(text.contains("music"));
+        assert!(text.contains("180.0s"));
+        assert!(text.contains("AAC"));
+    }
+
+    #[test]
+    fn build_prompt_includes_metadata() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Flac,
+            streams: vec![StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Flac,
+                sample_rate: 96000,
+                channels: 2,
+                sample_format: SampleFormat::I32,
+                bitrate: None,
+                duration: Some(Duration::from_secs(300)),
+            })],
+            duration: Some(Duration::from_secs(300)),
+            file_size: None,
+            title: Some("Opus No. 1".to_string()),
+            artist: Some("Composer".to_string()),
+            album: None,
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Music,
+            quality_score: 80.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["audio".to_string()],
+        };
+
+        let prompt = build_description_prompt(&info, &analysis);
+        assert!(prompt.contains("Opus No. 1"));
+        assert!(prompt.contains("Composer"));
+        assert!(prompt.contains("96000Hz"));
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn parse_valid_json_description() {
+        let json = r#"{"summary":"A rock song","genre":"rock","mood":"energetic","tags":["guitar","drums"],"content_rating":"PG"}"#;
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Music,
+            quality_score: 70.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        let desc = parse_description_response(json, &analysis).unwrap();
+        assert_eq!(desc.summary, "A rock song");
+        assert_eq!(desc.genre, Some("rock".to_string()));
+        assert_eq!(desc.mood, Some("energetic".to_string()));
+        assert_eq!(desc.tags, vec!["guitar", "drums"]);
+    }
+
+    #[test]
+    fn parse_json_in_markdown_block() {
+        let response = "Here is the analysis:\n```json\n{\"summary\":\"A calm podcast\",\"genre\":\"talk\",\"mood\":\"calm\",\"tags\":[\"interview\"],\"content_rating\":null}\n```";
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Podcast,
+            quality_score: 60.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        let desc = parse_description_response(response, &analysis).unwrap();
+        assert_eq!(desc.summary, "A calm podcast");
+        assert_eq!(desc.genre, Some("talk".to_string()));
+    }
+
+    #[test]
+    fn parse_fallback_raw_text() {
+        let response = "This is just a plain text response with no JSON.";
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Unknown,
+            quality_score: 50.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["audio".to_string()],
+        };
+        let desc = parse_description_response(response, &analysis).unwrap();
+        assert_eq!(desc.summary, response);
+        assert_eq!(desc.tags, vec!["audio"]);
+        assert!(desc.genre.is_none());
+    }
+
+    #[test]
+    fn daimon_config_defaults() {
+        let config = DaimonConfig::default();
+        assert!(config.endpoint.contains("8090"));
+    }
+
+    #[test]
+    fn hoosh_llm_config_defaults() {
+        let config = HooshLlmConfig::default();
+        assert!(config.endpoint.contains("8088"));
+    }
+
+    #[test]
+    fn similar_media_serialization() {
+        let sm = SimilarMedia {
+            path: "/music/test.flac".to_string(),
+            score: 0.95,
+            metadata: serde_json::json!({"artist": "test"}),
+        };
+        let json = serde_json::to_string(&sm).unwrap();
+        let parsed: SimilarMedia = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.path, "/music/test.flac");
+        assert!((parsed.score - 0.95).abs() < 0.001);
+    }
+
+    #[test]
+    fn content_description_serialization() {
+        let desc = ContentDescription {
+            summary: "A test".to_string(),
+            genre: Some("test".to_string()),
+            mood: None,
+            tags: vec!["a".to_string(), "b".to_string()],
+            content_rating: Some("G".to_string()),
+        };
+        let json = serde_json::to_string(&desc).unwrap();
+        let parsed: ContentDescription = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.summary, "A test");
+        assert_eq!(parsed.tags.len(), 2);
+    }
+
+    #[test]
+    fn rag_result_serialization() {
+        let r = RagResult {
+            text: "Some media info".to_string(),
+            relevance: 0.8,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: RagResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.text, "Some media info");
+    }
+}

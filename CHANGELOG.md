@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026.3.16-1
+
+F3 AI features — all four items complete.
+
+### Scene detection (`scene.rs`)
+- SceneDetector: stateful feed-frame API with hard-cut and gradual-transition detection
+- Chi-squared histogram distance on luminance channel
+- Rolling standard deviation for fade/dissolve detection
+- Min-scene-duration debouncing; supports YUV420p and RGB24
+- 8 tests
+
+### Thumbnail generation (`thumbnail.rs`)
+- ThumbnailGenerator: variance-based frame scoring with scene-boundary preference
+- YUV420p→RGB24 conversion (BT.601), bilinear resize via `image` crate
+- JPEG and PNG encoding with configurable quality
+- Aspect-ratio-preserving resize; rejects solid-color frames
+- 8 tests
+
+### Transcription routing (`transcribe.rs`)
+- HooshClient: async multipart HTTP client for Whisper endpoint
+- Audio preprocessing: stereo→mono downmix (F32 channel averaging)
+- In-memory WAV encoding (PCM16) from any AudioBuffer format
+- WhisperModel enum, HooshConfig with timeout/API key
+- 7 tests
+
+### Audio fingerprinting (`fingerprint.rs`)
+- Chromaprint-style fingerprinting: FFT → chroma bands → differential hashing
+- `compute_fingerprint` / `fingerprint_match` with sliding-window Hamming distance
+- Supports F32 and I16 input; configurable FFT/hop/bands
+- 8 tests
+
+### Dependencies added
+- `rustfft = "6"` (pure Rust FFT for fingerprinting)
+- `image = "0.25"` (JPEG/PNG encoding for thumbnails)
+- `reqwest` multipart feature (for hoosh client)
+
+### Version bumped to 2026.3.16-1
+
 ## 2026.3.16e
 
 Encoder API normalization, security fixes, libvpx-sys migration, test coverage.

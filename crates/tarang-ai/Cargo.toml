@@ -1,9 +1,9 @@
 [package]
 name = "tarang-ai"
-version = "2026.3.16-1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "AI features for Tarang — media analysis, content classification, transcription routing via hoosh"
-license = "GPL-3.0"
+license.workspace = true
 
 [dependencies]
 tarang-core = { path = "../tarang-core" }

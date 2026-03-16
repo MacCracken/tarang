@@ -186,13 +186,48 @@ async fn cmd_mcp() -> Result<()> {
                             "properties": { "path": { "type": "string", "description": "Path to media file" } },
                             "required": ["path"]
                         }
+                    },
+                    {
+                        "name": "tarang_fingerprint_index",
+                        "description": "Compute audio fingerprint and index in the AGNOS vector store for similarity search",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": { "path": { "type": "string", "description": "Path to audio file" } },
+                            "required": ["path"]
+                        }
+                    },
+                    {
+                        "name": "tarang_search_similar",
+                        "description": "Find media files similar to a given file using audio fingerprint matching",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "Path to reference audio file" },
+                                "top_k": { "type": "integer", "description": "Number of results (default: 5)" }
+                            },
+                            "required": ["path"]
+                        }
+                    },
+                    {
+                        "name": "tarang_describe",
+                        "description": "Generate a rich AI content description using LLM analysis via hoosh",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": { "path": { "type": "string", "description": "Path to media file" } },
+                            "required": ["path"]
+                        }
                     }
                 ]
             }),
             "tools/call" => {
                 let tool_name = request["params"]["name"].as_str().unwrap_or("");
                 let args = &request["params"]["arguments"];
-                handle_tool_call(tool_name, args)
+                match tool_name {
+                    "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe" => {
+                        handle_async_tool_call(tool_name, args).await
+                    }
+                    _ => handle_tool_call(tool_name, args),
+                }
             }
             _ => json!({ "error": format!("unknown method: {method}") }),
         };
@@ -301,8 +336,124 @@ fn handle_tool_call(name: &str, args: &serde_json::Value) -> serde_json::Value {
                 }
             }
         }
+        // Async tools — need to be handled via a helper
+        "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe" => {
+            json!({ "content": [{ "type": "text", "text": "async tool — use handle_async_tool_call" }], "isError": true })
+        }
         _ => {
             json!({ "content": [{ "type": "text", "text": format!("unknown tool: {name}") }], "isError": true })
         }
+    }
+}
+
+async fn handle_async_tool_call(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    use serde_json::json;
+
+    match name {
+        "tarang_fingerprint_index" => {
+            let path = args["path"].as_str().unwrap_or("");
+            let file = match std::fs::File::open(path) {
+                Ok(f) => f,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true }),
+            };
+            let info = match tarang_audio::probe_audio(file) {
+                Ok(i) => i,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("probe error: {e}") }], "isError": true }),
+            };
+
+            // Decode audio and compute fingerprint
+            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path)).and_then(|mut d| d.decode_all()) {
+                Ok(b) => b,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("decode error: {e}") }], "isError": true }),
+            };
+
+            let config = tarang_ai::FingerprintConfig::default();
+            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
+                Ok(fp) => fp,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("fingerprint error: {e}") }], "isError": true }),
+            };
+
+            let analysis = tarang_ai::analyze_media(&info);
+            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
+                Ok(c) => c,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("daimon client error: {e}") }], "isError": true }),
+            };
+
+            // Ensure collection exists, then index
+            let _ = daimon.ensure_collection().await;
+
+            let metadata = json!({
+                "content_type": analysis.content_type.to_string(),
+                "quality_score": analysis.quality_score,
+                "tags": analysis.tags,
+                "duration_secs": fingerprint.duration_secs,
+            });
+
+            match daimon.index_fingerprint(path, &fingerprint, &metadata).await {
+                Ok(_) => {
+                    // Also ingest into RAG
+                    let _ = daimon.ingest_metadata(path, &info, &analysis).await;
+                    json!({
+                        "content": [{ "type": "text", "text": format!(
+                            "Indexed: {path}\nFingerprint: {} hashes ({:.1}s)\nContent: {}\nAlso ingested into RAG pipeline",
+                            fingerprint.hashes.len(), fingerprint.duration_secs, analysis.content_type
+                        )}]
+                    })
+                }
+                Err(e) => json!({ "content": [{ "type": "text", "text": format!("index error: {e}") }], "isError": true }),
+            }
+        }
+        "tarang_search_similar" => {
+            let path = args["path"].as_str().unwrap_or("");
+            let top_k = args["top_k"].as_u64().unwrap_or(5) as usize;
+
+            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path)).and_then(|mut d| d.decode_all()) {
+                Ok(b) => b,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("decode error: {e}") }], "isError": true }),
+            };
+
+            let config = tarang_ai::FingerprintConfig::default();
+            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
+                Ok(fp) => fp,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("fingerprint error: {e}") }], "isError": true }),
+            };
+
+            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
+                Ok(c) => c,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("daimon client error: {e}") }], "isError": true }),
+            };
+
+            match daimon.search_similar(&fingerprint, top_k).await {
+                Ok(results) => json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&results).unwrap_or_default() }]
+                }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": format!("search error: {e}") }], "isError": true }),
+            }
+        }
+        "tarang_describe" => {
+            let path = args["path"].as_str().unwrap_or("");
+            let file = match std::fs::File::open(path) {
+                Ok(f) => f,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true }),
+            };
+            let info = match tarang_audio::probe_audio(file) {
+                Ok(i) => i,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("probe error: {e}") }], "isError": true }),
+            };
+
+            let analysis = tarang_ai::analyze_media(&info);
+            let hoosh = match tarang_ai::HooshLlmClient::new(tarang_ai::HooshLlmConfig::default()) {
+                Ok(c) => c,
+                Err(e) => return json!({ "content": [{ "type": "text", "text": format!("hoosh client error: {e}") }], "isError": true }),
+            };
+
+            match hoosh.describe_content(&info, &analysis).await {
+                Ok(desc) => json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&desc).unwrap_or_default() }]
+                }),
+                Err(e) => json!({ "content": [{ "type": "text", "text": format!("describe error: {e}") }], "isError": true }),
+            }
+        }
+        _ => json!({ "content": [{ "type": "text", "text": format!("unknown async tool: {name}") }], "isError": true }),
     }
 }

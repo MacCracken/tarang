@@ -1,9 +1,9 @@
 [package]
 name = "tarang-core"
-version = "2026.3.16-1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Core types for Tarang media framework — codecs, formats, buffers, pipeline primitives"
-license = "GPL-3.0"
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
