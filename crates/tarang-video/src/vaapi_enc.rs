@@ -8,9 +8,7 @@
 //! slice headers, rate control) — we manage surfaces, buffers, and the
 //! encode→sync→readback lifecycle.
 
-use cros_libva::{
-    Display, VAEntrypoint, VAProfile,
-};
+use cros_libva::{Display, VAEntrypoint, VAProfile};
 use std::path::Path;
 use std::rc::Rc;
 use tarang_core::{Result, TarangError, VideoCodec, VideoFrame};

@@ -180,8 +180,8 @@ impl AudioEncoder for FlacEncoder {
 
         let mut int_samples = Vec::with_capacity(num_frames * ch);
         let expected = num_frames * ch;
-        for i in 0..expected.min(float_samples.len()) {
-            int_samples.push((float_samples[i].clamp(-1.0, 1.0) * scale) as i32);
+        for sample in float_samples.iter().take(expected.min(float_samples.len())) {
+            int_samples.push((sample.clamp(-1.0, 1.0) * scale) as i32);
         }
 
         // Pad if needed
@@ -277,7 +277,7 @@ impl BitWriter {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len() % 4 == 0);
+    assert!(bytes.len().is_multiple_of(4));
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
 }
 

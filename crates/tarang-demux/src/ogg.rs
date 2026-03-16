@@ -404,12 +404,12 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             // Handle continuation: prepend any partial packet from previous page
             let mut page_packets = page.packets;
             if page.header_type & HEADER_TYPE_CONTINUATION != 0 {
-                if let Some(mut partial) = stream.partial_packet.take() {
-                    if let Some(first) = page_packets.first_mut() {
-                        let mut combined = std::mem::take(&mut partial);
-                        combined.extend_from_slice(first);
-                        *first = combined;
-                    }
+                if let Some(mut partial) = stream.partial_packet.take()
+                    && let Some(first) = page_packets.first_mut()
+                {
+                    let mut combined = std::mem::take(&mut partial);
+                    combined.extend_from_slice(first);
+                    *first = combined;
                 }
             } else {
                 // Not a continuation — discard any leftover partial
@@ -515,25 +515,25 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
 
             match self.read_page() {
                 Ok(page) => {
-                    if page.granule_position >= 0 {
-                        if let Some(stream) = self.streams.get(&page.serial_number) {
-                            let sr = if stream.codec == AudioCodec::Opus {
-                                48000u32
-                            } else {
-                                stream.sample_rate
-                            };
+                    if page.granule_position >= 0
+                        && let Some(stream) = self.streams.get(&page.serial_number)
+                    {
+                        let sr = if stream.codec == AudioCodec::Opus {
+                            48000u32
+                        } else {
+                            stream.sample_rate
+                        };
 
-                            if sr > 0 {
-                                let page_time = page.granule_position as f64 / sr as f64;
-                                if page_time >= target_seconds {
-                                    // Seek to this page's start
-                                    self.reader
-                                        .seek(std::io::SeekFrom::Start(last_page_start))
-                                        .map_err(|e| {
-                                            TarangError::DemuxError(format!("seek error: {e}"))
-                                        })?;
-                                    return Ok(());
-                                }
+                        if sr > 0 {
+                            let page_time = page.granule_position as f64 / sr as f64;
+                            if page_time >= target_seconds {
+                                // Seek to this page's start
+                                self.reader
+                                    .seek(std::io::SeekFrom::Start(last_page_start))
+                                    .map_err(|e| {
+                                        TarangError::DemuxError(format!("seek error: {e}"))
+                                    })?;
+                                return Ok(());
                             }
                         }
                     }

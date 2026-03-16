@@ -59,6 +59,12 @@ pub struct NullOutput {
     samples_written: u64,
 }
 
+impl Default for NullOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NullOutput {
     pub fn new() -> Self {
         Self {

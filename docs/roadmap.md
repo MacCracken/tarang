@@ -85,7 +85,6 @@
 
 ## Engineering Backlog
 - [ ] Normalize encoder API inconsistencies (bitrate units across vpx/openh264/rav1e configs)
-- [ ] Upgrade libvpx-sys to a version ABI-compatible with libvpx >= 1.14 (encoder config struct mismatch)
 - [ ] Wire full VA-API encode pipeline when cros-codecs aligns with cros-libva 0.0.13
 
 ## Downstream Consumers

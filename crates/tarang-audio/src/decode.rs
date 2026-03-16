@@ -75,7 +75,7 @@ impl FileDecoder {
         let channels = params.channels.map(|c| c.count() as u16).unwrap_or(2);
 
         let decoder = symphonia::default::get_codecs()
-            .make(&params, &DecoderOptions::default())
+            .make(params, &DecoderOptions::default())
             .map_err(|e| TarangError::DecodeError(format!("failed to create decoder: {e}")))?;
 
         Ok(Self {
@@ -91,7 +91,7 @@ impl FileDecoder {
 
     /// Open from a file path (convenience).
     pub fn open_path(path: &std::path::Path) -> Result<Self> {
-        let file = std::fs::File::open(path).map_err(|e| TarangError::Io(e))?;
+        let file = std::fs::File::open(path).map_err(TarangError::Io)?;
         let ext = path.extension().and_then(|e| e.to_str());
         Self::open(Box::new(file), ext)
     }
@@ -259,7 +259,10 @@ fn bytemuck_f32_to_bytes(samples: &[f32]) -> &[u8] {
 
 /// Safe cast from &[u8] to &[f32]
 fn bytemuck_bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len() % 4 == 0, "byte slice not aligned to f32");
+    assert!(
+        bytes.len().is_multiple_of(4),
+        "byte slice not aligned to f32"
+    );
     let ptr = bytes.as_ptr() as *const f32;
     let len = bytes.len() / 4;
     unsafe { std::slice::from_raw_parts(ptr, len) }

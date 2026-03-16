@@ -26,9 +26,9 @@ pipewire = "0.9"
 opus = "0.3"
 fdk-aac = "0.8"
 dav1d = "0.11"
-libvpx-sys = "1.4"
+env-libvpx-sys = { version = "5.1", features = ["generate"] }
 rav1e = { version = "0.8", features = ["asm"] }
-openh264 = "0.6"
+openh264 = "0.9"
 cros-libva = "0.0.13"
 
 [package]

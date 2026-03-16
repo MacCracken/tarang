@@ -175,7 +175,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             b"M4B ", b"M4V ", b"avc1", b"dash", b"mmp4",
         ];
 
-        if !valid_brands.iter().any(|b| *b == &brand) {
+        if !valid_brands.contains(&&brand) {
             tracing::debug!(
                 brand = std::str::from_utf8(&brand).unwrap_or("????"),
                 "non-standard ftyp brand, continuing anyway"

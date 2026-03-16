@@ -7,18 +7,6 @@ use bytes::Bytes;
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
 
-const DECODER_ABI_VERSION: i32 = {
-    macro_rules! parse_i32 {
-        () => {
-            match i32::from_str_radix(env!("VPX_DECODER_ABI_VERSION"), 10) {
-                Ok(v) => v,
-                Err(_) => panic!("invalid VPX_DECODER_ABI_VERSION"),
-            }
-        };
-    }
-    parse_i32!()
-};
-
 /// VP8/VP9 decoder powered by libvpx
 pub struct VpxDecoder {
     codec: VideoCodec,
@@ -46,12 +34,18 @@ impl VpxDecoder {
         let cfg: *const vpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
 
         let res = unsafe {
-            vpx_sys::vpx_codec_dec_init_ver(&mut ctx, iface, cfg, 0, DECODER_ABI_VERSION)
+            vpx_sys::vpx_codec_dec_init_ver(
+                &mut ctx,
+                iface,
+                cfg,
+                0,
+                vpx_sys::VPX_DECODER_ABI_VERSION as i32,
+            )
         };
 
-        if res != vpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::DecodeError(format!(
-                "vpx_codec_dec_init failed: {res}"
+                "vpx_codec_dec_init failed: {res:?}"
             )));
         }
 
@@ -80,9 +74,9 @@ impl VpxDecoder {
             )
         };
 
-        if res != vpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::DecodeError(format!(
-                "vpx_codec_decode failed: {res}"
+                "vpx_codec_decode failed: {res:?}"
             )));
         }
 
@@ -104,9 +98,9 @@ impl VpxDecoder {
             }
 
             // Verify I420 format — VP9 profile 1+ can produce 4:2:2/4:4:4
-            if img.fmt != vpx_sys::VPX_IMG_FMT_I420 {
+            if img.fmt != vpx_sys::vpx_img_fmt::VPX_IMG_FMT_I420 {
                 return Err(TarangError::DecodeError(format!(
-                    "unsupported pixel format from libvpx: {}, expected I420",
+                    "unsupported pixel format from libvpx: {:?}, expected I420",
                     img.fmt
                 )));
             }
@@ -165,6 +159,14 @@ impl VpxDecoder {
     }
 }
 
+impl Drop for VpxDecoder {
+    fn drop(&mut self) {
+        unsafe {
+            vpx_sys::vpx_codec_destroy(&mut self.ctx);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,21 +193,17 @@ mod tests {
     #[test]
     fn decode_invalid_data_returns_error() {
         let mut decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
-        // Random bytes are not valid VP8 — should error
         let result = decoder.decode(&[0xDE, 0xAD, 0xBE, 0xEF], Duration::ZERO);
-        // libvpx may return error or empty frames for invalid data
         match result {
-            Err(_) => {} // Expected
+            Err(_) => {}
             Ok(frames) => assert!(frames.is_empty(), "invalid data should not produce frames"),
         }
     }
 
     #[test]
-    #[ignore] // Requires ABI-compatible libvpx for encoder
     fn vp8_encode_decode_roundtrip() {
         use crate::vpx_enc::{VpxEncoder, VpxEncoderConfig};
 
-        // Encode VP8 frames
         let enc_config = VpxEncoderConfig {
             codec: VideoCodec::Vp8,
             width: 320,
@@ -231,7 +229,6 @@ mod tests {
             timestamp: Duration::ZERO,
         };
 
-        // Encode 3 frames
         let mut encoded_packets = Vec::new();
         for i in 0..3 {
             let mut f = frame.clone();
@@ -243,7 +240,6 @@ mod tests {
         encoded_packets.extend(flushed);
         assert!(!encoded_packets.is_empty());
 
-        // Decode them back
         let mut decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
         let mut decoded_count = 0;
         for packet in &encoded_packets {
@@ -256,13 +252,5 @@ mod tests {
             }
         }
         assert!(decoded_count > 0, "should decode at least one frame");
-    }
-}
-
-impl Drop for VpxDecoder {
-    fn drop(&mut self) {
-        unsafe {
-            vpx_sys::vpx_codec_destroy(&mut self.ctx);
-        }
     }
 }

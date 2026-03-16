@@ -51,8 +51,8 @@ impl OpenH264Encoder {
 
         let api = openh264::OpenH264API::from_source();
         let enc_config = openh264::encoder::EncoderConfig::new()
-            .set_bitrate_bps(config.bitrate_bps)
-            .max_frame_rate(config.frame_rate);
+            .bitrate(openh264::encoder::BitRate::from_bps(config.bitrate_bps))
+            .max_frame_rate(openh264::encoder::FrameRate::from_hz(config.frame_rate));
 
         let encoder = openh264::encoder::Encoder::with_api_config(api, enc_config)
             .map_err(|e| TarangError::Pipeline(format!("openh264 encoder init failed: {e:?}")))?;

@@ -5,19 +5,6 @@
 
 use tarang_core::{Result, TarangError, VideoCodec, VideoFrame};
 
-const ENCODER_ABI_VERSION: i32 = {
-    // Set by build.rs from system headers
-    macro_rules! parse_i32 {
-        () => {
-            match i32::from_str_radix(env!("VPX_ENCODER_ABI_VERSION"), 10) {
-                Ok(v) => v,
-                Err(_) => panic!("invalid VPX_ENCODER_ABI_VERSION"),
-            }
-        };
-    }
-    parse_i32!()
-};
-
 /// RAII guard for `vpx_image_t` — ensures `vpx_img_free` is called even on panic.
 struct VpxImageGuard {
     img: vpx_sys::vpx_image_t,
@@ -99,14 +86,16 @@ impl VpxEncoder {
             }
         };
 
-        // Get default encoder config
-        let mut cfg: vpx_sys::vpx_codec_enc_cfg_t = unsafe { std::mem::zeroed() };
-        let res = unsafe { vpx_sys::vpx_codec_enc_config_default(iface, &mut cfg, 0) };
-        if res != vpx_sys::VPX_CODEC_OK {
+        // Get default encoder config — use MaybeUninit since the struct may contain
+        // types that cannot be zero-initialized (e.g. function pointers)
+        let mut cfg = std::mem::MaybeUninit::<vpx_sys::vpx_codec_enc_cfg_t>::uninit();
+        let res = unsafe { vpx_sys::vpx_codec_enc_config_default(iface, cfg.as_mut_ptr(), 0) };
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(format!(
-                "vpx_codec_enc_config_default failed: {res}"
+                "vpx_codec_enc_config_default failed: {res:?}"
             )));
         }
+        let mut cfg = unsafe { cfg.assume_init() };
 
         cfg.g_w = config.width;
         cfg.g_h = config.height;
@@ -118,12 +107,18 @@ impl VpxEncoder {
 
         let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
         let res = unsafe {
-            vpx_sys::vpx_codec_enc_init_ver(&mut ctx, iface, &cfg, 0, ENCODER_ABI_VERSION)
+            vpx_sys::vpx_codec_enc_init_ver(
+                &mut ctx,
+                iface,
+                &cfg,
+                0,
+                vpx_sys::VPX_ENCODER_ABI_VERSION as i32,
+            )
         };
 
-        if res != vpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(format!(
-                "vpx_codec_enc_init failed: {res}"
+                "vpx_codec_enc_init failed: {res:?}"
             )));
         }
 
@@ -132,14 +127,14 @@ impl VpxEncoder {
             let ctl_res = unsafe {
                 vpx_sys::vpx_codec_control_(
                     &mut ctx,
-                    vpx_sys::VP8E_SET_CPUUSED as i32,
+                    vpx_sys::vp8e_enc_control_id::VP8E_SET_CPUUSED as i32,
                     config.speed,
                 )
             };
-            if ctl_res != vpx_sys::VPX_CODEC_OK {
+            if ctl_res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
                 unsafe { vpx_sys::vpx_codec_destroy(&mut ctx) };
                 return Err(TarangError::Pipeline(format!(
-                    "vpx VP8E_SET_CPUUSED failed: {ctl_res}"
+                    "vpx VP8E_SET_CPUUSED failed: {ctl_res:?}"
                 )));
             }
         }
@@ -174,7 +169,7 @@ impl VpxEncoder {
         let alloc_result = unsafe {
             vpx_sys::vpx_img_alloc(
                 &mut raw_img,
-                vpx_sys::VPX_IMG_FMT_I420,
+                vpx_sys::vpx_img_fmt::VPX_IMG_FMT_I420,
                 self.width,
                 self.height,
                 1,
@@ -236,9 +231,9 @@ impl VpxEncoder {
         // guard drops here, calling vpx_img_free
         drop(guard);
 
-        if res != vpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(format!(
-                "vpx_codec_encode failed: {res}"
+                "vpx_codec_encode failed: {res:?}"
             )));
         }
 
@@ -254,9 +249,9 @@ impl VpxEncoder {
             vpx_sys::vpx_codec_encode(&mut self.ctx, std::ptr::null(), self.pts, 1, 0, 1_000_000)
         };
 
-        if res != vpx_sys::VPX_CODEC_OK {
+        if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(format!(
-                "vpx_codec_encode flush failed: {res}"
+                "vpx_codec_encode flush failed: {res:?}"
             )));
         }
 
@@ -274,8 +269,8 @@ impl VpxEncoder {
             }
 
             let pkt = unsafe { &*pkt };
-            if pkt.kind == vpx_sys::VPX_CODEC_CX_FRAME_PKT {
-                let frame_data = unsafe { &*pkt.data.frame_ref() };
+            if pkt.kind == vpx_sys::vpx_codec_cx_pkt_kind::VPX_CODEC_CX_FRAME_PKT {
+                let frame_data = unsafe { pkt.data.frame };
                 let buf = unsafe {
                     std::slice::from_raw_parts(frame_data.buf as *const u8, frame_data.sz)
                 };
@@ -296,6 +291,14 @@ impl VpxEncoder {
 
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+}
+
+impl Drop for VpxEncoder {
+    fn drop(&mut self) {
+        unsafe {
+            vpx_sys::vpx_codec_destroy(&mut self.ctx);
+        }
     }
 }
 
@@ -324,13 +327,7 @@ mod tests {
         }
     }
 
-    // Note: VPX encoder tests require that libvpx-sys 1.4 is ABI-compatible with the
-    // system's libvpx. On systems with libvpx >= 1.14, the encoder config struct layout
-    // has changed and these tests will fail with ABI mismatch. Upgrade to a newer
-    // libvpx-sys when available, or pin the system libvpx version.
-
     #[test]
-    #[ignore] // Requires ABI-compatible libvpx (libvpx-sys 1.4 vs system libvpx)
     fn encoder_creation_vp9() {
         let config = VpxEncoderConfig {
             codec: VideoCodec::Vp9,
@@ -348,7 +345,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn encoder_creation_vp8() {
         let config = VpxEncoderConfig {
             codec: VideoCodec::Vp8,
@@ -389,7 +385,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn encode_single_frame_vp8() {
         let config = VpxEncoderConfig {
             codec: VideoCodec::Vp8,
@@ -402,13 +397,14 @@ mod tests {
         let mut encoder = VpxEncoder::new(&config).unwrap();
         let frame = make_yuv420p_frame(320, 240);
         let packets = encoder.encode(&frame).unwrap();
-        // First frame should produce at least one packet (keyframe)
-        assert!(!packets.is_empty(), "VP8 encoder should produce output for first frame");
+        assert!(
+            !packets.is_empty(),
+            "VP8 encoder should produce output for first frame"
+        );
         assert_eq!(encoder.frames_encoded(), 1);
     }
 
     #[test]
-    #[ignore]
     fn encode_and_flush_vp9() {
         let config = VpxEncoderConfig {
             codec: VideoCodec::Vp9,
@@ -432,12 +428,14 @@ mod tests {
         let flushed = encoder.flush().unwrap();
         total_packets += flushed.len();
 
-        assert!(total_packets > 0, "should produce packets after encode + flush");
+        assert!(
+            total_packets > 0,
+            "should produce packets after encode + flush"
+        );
         assert_eq!(encoder.frames_encoded(), 3);
     }
 
     #[test]
-    #[ignore]
     fn encode_rejects_short_data() {
         let config = VpxEncoderConfig {
             width: 320,
@@ -453,13 +451,5 @@ mod tests {
             timestamp: Duration::ZERO,
         };
         assert!(encoder.encode(&frame).is_err());
-    }
-}
-
-impl Drop for VpxEncoder {
-    fn drop(&mut self) {
-        unsafe {
-            vpx_sys::vpx_codec_destroy(&mut self.ctx);
-        }
     }
 }

@@ -111,7 +111,7 @@ pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
 }
 
 fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len() % 4 == 0);
+    assert!(bytes.len().is_multiple_of(4));
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) }
 }
 

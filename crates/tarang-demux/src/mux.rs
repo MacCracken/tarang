@@ -155,9 +155,7 @@ impl<W: Write> OggMuxer<W> {
             let len = packet.len();
             let full_segments = len / 255;
             let remainder = len % 255;
-            for _ in 0..full_segments {
-                segment_table.push(255u8);
-            }
+            segment_table.extend(std::iter::repeat_n(255u8, full_segments));
             segment_table.push(remainder as u8);
         }
 
@@ -627,7 +625,6 @@ pub struct MkvMuxer<W: Write> {
     timecode_scale: u64,
     cluster_timecode: u64,
     packets_in_cluster: u32,
-    max_cluster_packets: u32,
     header_written: bool,
     total_packets: u64,
 }
@@ -641,7 +638,6 @@ impl<W: Write> MkvMuxer<W> {
             timecode_scale: 1_000_000, // 1ms
             cluster_timecode: 0,
             packets_in_cluster: 0,
-            max_cluster_packets: 256,
             header_written: false,
             total_packets: 0,
         }
@@ -772,12 +768,12 @@ fn ebml_write_id(w: &mut dyn Write, id: u32) -> std::io::Result<()> {
 }
 
 fn ebml_write_id_to_buf(buf: &mut Vec<u8>, id: u32) {
-    if id >= 0x80 && id <= 0xFF {
+    if (0x80..=0xFF).contains(&id) {
         buf.push(id as u8);
-    } else if id >= 0x4000 && id <= 0x7FFF {
+    } else if (0x4000..=0x7FFF).contains(&id) {
         buf.push((id >> 8) as u8);
         buf.push(id as u8);
-    } else if id >= 0x20_0000 && id <= 0x3F_FFFF {
+    } else if (0x20_0000..=0x3F_FFFF).contains(&id) {
         buf.push((id >> 16) as u8);
         buf.push((id >> 8) as u8);
         buf.push(id as u8);

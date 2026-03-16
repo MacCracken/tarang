@@ -9,8 +9,8 @@ license = "GPL-3.0"
 default = []
 full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi"]
 dav1d = ["dep:dav1d"]
-vpx = ["dep:libvpx-sys"]
-vpx-enc = ["dep:libvpx-sys"]
+vpx = ["dep:env-libvpx-sys"]
+vpx-enc = ["dep:env-libvpx-sys"]
 rav1e = ["dep:rav1e"]
 openh264 = ["dep:openh264"]
 openh264-enc = ["dep:openh264"]
@@ -22,7 +22,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 dav1d = { workspace = true, optional = true }
-libvpx-sys = { workspace = true, optional = true }
+env-libvpx-sys = { workspace = true, optional = true }
 rav1e = { workspace = true, optional = true }
 openh264 = { workspace = true, optional = true }
 cros-libva = { workspace = true, optional = true }
