@@ -4,10 +4,12 @@
 //! Extracts stream metadata and produces raw codec packets for downstream decoders.
 
 mod mp4;
+mod mux;
 mod ogg;
 mod wav;
 
 pub use mp4::Mp4Demuxer;
+pub use mux::{MuxConfig, Muxer, OggMuxer, WavMuxer};
 pub use ogg::OggDemuxer;
 pub use wav::WavDemuxer;
 

@@ -5,6 +5,10 @@ edition = "2024"
 description = "Audio decoding for Tarang — pure Rust via symphonia (MP3, FLAC, WAV, OGG, AAC)"
 license = "GPL-3.0"
 
+[features]
+default = []
+pipewire = ["dep:pipewire"]
+
 [dependencies]
 tarang-core = { path = "../tarang-core" }
 symphonia = { workspace = true }
@@ -12,3 +16,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 uuid = { workspace = true }
+pipewire = { workspace = true, optional = true }

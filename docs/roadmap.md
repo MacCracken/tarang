@@ -30,13 +30,15 @@
 - [x] Channel mixing (stereo↔mono, 5.1 downmix, generic N→1/N→2)
 
 ### M4: Audio Output
-- [ ] PipeWire output integration
+- [x] AudioOutput trait + NullOutput (test sink)
+- [x] PipeWire output backend (behind `pipewire` feature flag, requires libpipewire-0.3)
 
 ### M5: Audio Encoding
-- [ ] WAV muxer (pure Rust — inverse of demuxer)
+- [x] Muxer trait + WAV muxer (pure Rust — inverse of demuxer, roundtrip-verified)
+- [x] OGG muxer (pure Rust — page assembly, Opus + Vorbis headers, roundtrip-verified)
+- [x] PCM encoder (F32 → 16/24/32-bit interleaved PCM)
 - [ ] FLAC encoder (pure Rust)
 - [ ] Opus encoder (libopus FFI — FOSS first)
-- [ ] OGG muxer (pure Rust — page assembly)
 - [ ] AAC encoder (fdk-aac FFI)
 - [ ] MP4/M4A muxer (pure Rust — moov/mdat assembly)
 

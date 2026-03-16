@@ -4,12 +4,18 @@
 //! Supports MP3, FLAC, WAV, OGG Vorbis, AAC, ALAC, and PCM.
 
 mod decode;
+mod encode;
 mod mix;
+mod output;
 mod probe;
 mod resample;
 
 pub use decode::FileDecoder;
+pub use encode::{AudioEncoder, EncoderConfig, PcmEncoder, create_encoder};
 pub use mix::{ChannelLayout, mix_channels};
+pub use output::{AudioOutput, NullOutput, OutputConfig};
+#[cfg(feature = "pipewire")]
+pub use output::PipeWireOutput;
 pub use probe::probe_audio;
 pub use resample::{resample, resample_sinc};
 
