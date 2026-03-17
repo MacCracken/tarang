@@ -70,8 +70,23 @@ F3 AI features — all four items complete. Security audit, bug fixes, and test 
 - **tarang-video**: +7 (status transitions, default dimensions, timestamps, config validation)
 - **tarang-demux**: +8 (all format detection variants, keyframe packets)
 
+### Refactoring (30 backlog items cleared)
+- Extracted `sample.rs` shared module — `bytes_to_f32`, `f32_to_bytes`, PCM scaling constants, test helpers; removed 12 duplicate copies across 7 files
+- `yuv420p_frame_size()` and `validate_video_dimensions()` in tarang-core — used by all video encoders
+- PipeWire rearchitecture: lock-free SPSC ring buffer (AtomicUsize), condvar ready signal (replaced 50ms sleep), deadline-based flush (replaced fixed sleep loop)
+- OGG CRC-32 validation (demuxer) + CRC generation (muxer); bisection seek (O(log n))
+- OGG muxer: randomized serial numbers, codec validation at construction
+- Probe: auto-detects container format from symphonia codec type
+- WebM vs MKV detection via EBML DocType parsing
+- `VideoDecoder` wired to real backends (dav1d, openh264, libvpx) with unified send/receive API, pending-frame queue, flush drain
+- `Arc<VideoFrame>` in ThumbnailGenerator (avoids cloning megabyte frame data)
+- O(1) `Bytes::clone` in resample/mix no-op paths (was deep copy)
+- `Copy` derive on `OutputConfig` and `EncoderConfig`
+- Bounds-checks and error propagation across OGG/MP4/MKV demuxers, dav1d decoder planes, rav1e even dimensions, VPX bitrate floor, daimon endpoint validation
+
 ### Engineering
-- Low-severity audit items (30) added to `docs/roadmap.md` backlog section
+- 310 total tests (was 200 before audit)
+- All 30 backlog items resolved (1 remains: VA-API encode, blocked on upstream)
 - Downstream consumers (Jalwa, Tazama, Shruti) marked as integrated in roadmap
 
 ## 2026.3.16e

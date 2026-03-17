@@ -529,3 +529,250 @@ async fn handle_async_tool_call(name: &str, args: &serde_json::Value) -> serde_j
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+
+    // ---- Helper: create a temp WAV file, return its path ----
+    fn make_test_wav_file() -> tempfile::NamedTempFile {
+        let bits: u16 = 16;
+        let sample_rate: u32 = 44100;
+        let channels: u16 = 2;
+        let num_samples: u32 = 4410;
+        let data_size = num_samples * channels as u32 * (bits as u32 / 8);
+        let file_size = 36 + data_size;
+        let byte_rate = sample_rate * channels as u32 * (bits as u32 / 8);
+        let block_align = channels * (bits / 8);
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes());
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            let t = i as f64 / sample_rate as f64;
+            let s = (t * 440.0 * 2.0 * std::f64::consts::PI).sin();
+            let s16 = (s * 32000.0) as i16;
+            for _ in 0..channels {
+                buf.extend_from_slice(&s16.to_le_bytes());
+            }
+        }
+
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(&buf).unwrap();
+        tmp.flush().unwrap();
+        tmp
+    }
+
+    // ---- require_path ----
+
+    #[test]
+    fn require_path_valid() {
+        let args = json!({"path": "/some/file.wav"});
+        assert_eq!(require_path(&args).unwrap(), "/some/file.wav");
+    }
+
+    #[test]
+    fn require_path_missing() {
+        let args = json!({});
+        let err = require_path(&args).unwrap_err();
+        assert!(err["isError"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn require_path_empty() {
+        let args = json!({"path": ""});
+        assert!(require_path(&args).is_err());
+    }
+
+    #[test]
+    fn require_path_null() {
+        let args = json!({"path": null});
+        assert!(require_path(&args).is_err());
+    }
+
+    #[test]
+    fn require_path_number() {
+        let args = json!({"path": 42});
+        assert!(require_path(&args).is_err());
+    }
+
+    // ---- handle_tool_call: tarang_codecs ----
+
+    #[test]
+    fn tool_codecs() {
+        let result = handle_tool_call("tarang_codecs", &json!({}));
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Audio"));
+        assert!(text.contains("Video"));
+    }
+
+    // ---- handle_tool_call: unknown tool ----
+
+    #[test]
+    fn tool_unknown() {
+        let result = handle_tool_call("nonexistent_tool", &json!({}));
+        assert!(result["isError"].as_bool().unwrap());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("unknown tool"));
+    }
+
+    // ---- handle_tool_call: missing path ----
+
+    #[test]
+    fn tool_probe_missing_path() {
+        let result = handle_tool_call("tarang_probe", &json!({}));
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn tool_analyze_missing_path() {
+        let result = handle_tool_call("tarang_analyze", &json!({}));
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn tool_transcribe_missing_path() {
+        let result = handle_tool_call("tarang_transcribe", &json!({}));
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn tool_formats_missing_path() {
+        let result = handle_tool_call("tarang_formats", &json!({}));
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    // ---- handle_tool_call: nonexistent file ----
+
+    #[test]
+    fn tool_probe_bad_file() {
+        let result = handle_tool_call("tarang_probe", &json!({"path": "/nonexistent/file.wav"}));
+        assert!(result["isError"].as_bool().unwrap());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("file error"));
+    }
+
+    // ---- handle_tool_call: real WAV file ----
+
+    #[test]
+    fn tool_probe_wav() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call("tarang_probe", &json!({"path": path}));
+        assert!(result.get("isError").is_none());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Wav"));
+        assert!(text.contains("Pcm"));
+    }
+
+    #[test]
+    fn tool_analyze_wav() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call("tarang_analyze", &json!({"path": path}));
+        assert!(result.get("isError").is_none());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("content_type"));
+        assert!(text.contains("quality_score"));
+    }
+
+    #[test]
+    fn tool_transcribe_wav() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call("tarang_transcribe", &json!({"path": path}));
+        assert!(result.get("isError").is_none());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("audio_codec"));
+        assert!(text.contains("sample_rate"));
+    }
+
+    #[test]
+    fn tool_transcribe_with_language() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call(
+            "tarang_transcribe",
+            &json!({"path": path, "language": "en"}),
+        );
+        assert!(result.get("isError").is_none());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("en"));
+    }
+
+    #[test]
+    fn tool_formats_wav() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call("tarang_formats", &json!({"path": path}));
+        assert!(result.get("isError").is_none());
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("WAV"));
+    }
+
+    #[test]
+    fn tool_formats_unknown() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"not a media file").unwrap();
+        tmp.flush().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let result = handle_tool_call("tarang_formats", &json!({"path": path}));
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    // ---- async tool calls: missing path ----
+
+    #[tokio::test]
+    async fn async_tool_fingerprint_missing_path() {
+        let result = handle_async_tool_call("tarang_fingerprint_index", &json!({})).await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn async_tool_search_missing_path() {
+        let result = handle_async_tool_call("tarang_search_similar", &json!({})).await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn async_tool_describe_missing_path() {
+        let result = handle_async_tool_call("tarang_describe", &json!({})).await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn async_tool_unknown() {
+        let result = handle_async_tool_call("nonexistent", &json!({})).await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn async_tool_fingerprint_bad_file() {
+        let result = handle_async_tool_call(
+            "tarang_fingerprint_index",
+            &json!({"path": "/nonexistent.wav"}),
+        )
+        .await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn async_tool_describe_bad_file() {
+        let result =
+            handle_async_tool_call("tarang_describe", &json!({"path": "/nonexistent.wav"})).await;
+        assert!(result["isError"].as_bool().unwrap());
+    }
+}

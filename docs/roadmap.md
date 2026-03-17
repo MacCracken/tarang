@@ -7,18 +7,18 @@
 ## Phase 1 — Foundation (Complete)
 - [x] Core types: codecs, formats, buffers, pipeline primitives
 - [x] WAV demuxer (pure Rust)
-- [x] Magic bytes format detection
-- [x] Audio probe via symphonia
-- [x] Video decoder framework (backend stubs)
+- [x] Magic bytes format detection (WebM vs MKV via EBML DocType)
+- [x] Audio probe via symphonia (auto-detects container format)
+- [x] Video decoder framework with unified backend dispatch
 - [x] AI content classification
-- [x] CLI + MCP server (5 tools)
+- [x] CLI + MCP server (8 tools)
 - [x] CI/CD pipelines
 
 ## MVP (v0.1) — Audio-First Playback Engine
 
 ### M1: Container Demuxers
 - [x] MP4/M4A demuxer (pure Rust — parse moov/mdat atoms)
-- [x] OGG demuxer (pure Rust — page/packet extraction)
+- [x] OGG demuxer (pure Rust — page/packet extraction, CRC-32 validation, bisection seek)
 
 ### M2: Full Audio Decode
 - [x] Symphonia decode pipeline (full decode, not just probe)
@@ -31,11 +31,11 @@
 
 ### M4: Audio Output
 - [x] AudioOutput trait + NullOutput (test sink)
-- [x] PipeWire output backend (behind `pipewire` feature flag, requires libpipewire-0.3)
+- [x] PipeWire output backend (lock-free SPSC ring buffer, condvar ready signal)
 
 ### M5: Audio Encoding
 - [x] Muxer trait + WAV muxer (pure Rust — inverse of demuxer, roundtrip-verified)
-- [x] OGG muxer (pure Rust — page assembly, Opus + Vorbis headers, roundtrip-verified)
+- [x] OGG muxer (pure Rust — page assembly, CRC-32, Opus + Vorbis headers, roundtrip-verified)
 - [x] MP4/M4A muxer (pure Rust — moov/mdat assembly, roundtrip-verified with Mp4Demuxer)
 - [x] PCM encoder (F32 → 16/24/32-bit interleaved PCM)
 - [x] FLAC encoder (pure Rust — verbatim subframes, BitWriter, STREAMINFO generation)
@@ -70,9 +70,9 @@
 
 ### F3: AI Features
 - [x] Transcription routing to hoosh (Whisper models — HooshClient, WAV encoding, audio preprocessing)
-- [x] Audio fingerprinting (Chromaprint-style — FFT, chroma features, hash comparison)
+- [x] Audio fingerprinting (Chromaprint-style — FFT, chroma features, hash comparison, 64K hash limit)
 - [x] Scene detection in video (histogram diff, chi-squared distance, gradual transitions)
-- [x] Thumbnail generation at keyframes (YUV→RGB, JPEG/PNG encoding, variance scoring)
+- [x] Thumbnail generation at keyframes (YUV→RGB, JPEG/PNG encoding, Arc-based candidate storage)
 
 ## Post-v1 — Ecosystem Integration (Complete)
 - [x] AGNOS media player backend (Jalwa — built on tarang)
@@ -86,45 +86,6 @@
 
 ## Waiting on Upstream
 - [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` releasing a version compatible with `cros-libva` 0.0.13 (current cros-codecs 0.0.6 depends on cros-libva 0.0.12). *(added 2026-03-16)*
-
-## Engineering Backlog *(added 2026-03-16)*
-
-### Remaining (blocked on upstream)
-- [ ] Complete VA-API encode pipeline (surface upload → encode → readback) — blocked on upstream cros-codecs
-
-### Completed (all non-blocked items)
-- [x] Add `Copy` derive to `OutputConfig` and `EncoderConfig`
-- [x] FLAC encoder: log warning on silent zero-padding
-- [x] OGG: randomize serial number
-- [x] OGG: bounds-check `try_into().unwrap()` → proper error propagation
-- [x] MP4: validate allocation sizes (64 MB guard)
-- [x] MP4: replace `.unwrap()` on `playback.as_mut()` with error propagation
-- [x] MKV: saturating timecode arithmetic to prevent i64 overflow
-- [x] OGG muxer: validate codec at construction
-- [x] Eliminate unnecessary `info.clone()` in all demuxers
-- [x] Add SAFETY comments to FFI unsafe blocks in vpx_dec.rs, vpx_enc.rs
-- [x] Validate rav1e even dimensions
-- [x] VPX encoder: validate `bitrate_bps >= 1000`
-- [x] Fingerprint: add max hash count limit (64K)
-- [x] Fingerprint: remove unused `_num_bands` parameter
-- [x] Scene detection: bounds-check RGB24 pixel data length
-- [x] Daimon: improve error context (operation + path in messages)
-- [x] Daimon: validate config endpoint URLs at construction time
-- [x] Document content-type thresholds (named constants with comments)
-- [x] WebM vs MKV detection — EBML DocType parsing
-- [x] PipeWire ring buffer: lock-free `AtomicUsize` SPSC ring buffer
-- [x] PipeWire: condvar-based ready signal (replaced 50ms sleep)
-- [x] PipeWire: deadline-based flush with timeout (replaced fixed sleep loop)
-- [x] Probe: detect container format from symphonia codec type
-- [x] Avoid cloning `AudioBuffer` in resample/mix no-op paths (O(1) `Bytes::clone`)
-- [x] OGG: CRC-32 page validation (demuxer) + CRC generation (muxer)
-- [x] OGG: bisection seek (O(log n) with linear scan refinement)
-- [x] Thumbnail: `Arc<VideoFrame>` to avoid cloning megabyte frame data
-- [x] Deduplicate `bytes_to_f32`/`f32_to_bytes` — extracted to `sample.rs`
-- [x] PCM scaling constants (`I16_SCALE`, `I24_SCALE`, `I32_SCALE`) in `sample.rs`
-- [x] Shared `yuv420p_frame_size()` and `validate_video_dimensions()` in tarang-core
-- [x] Shared test helpers (`make_test_buffer`, `make_test_sine`) in `sample.rs`
-- [x] `VideoDecoder` wired to real backends (dav1d, openh264, libvpx) with unified send/receive API
 
 ## Downstream Consumers (All Integrated)
 - **AGNOS Media Player (Jalwa)** — primary GUI player built on tarang

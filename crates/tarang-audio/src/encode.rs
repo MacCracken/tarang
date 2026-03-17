@@ -115,10 +115,6 @@ use crate::sample::{self, bytes_to_f32};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
-    use std::time::Duration;
-    use tarang_core::SampleFormat;
-
     use crate::sample::make_test_buffer as make_buffer;
 
     #[test]

@@ -58,6 +58,9 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "tarang"
 path = "src/main.rs"
