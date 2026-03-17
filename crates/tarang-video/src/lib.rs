@@ -312,7 +312,7 @@ impl VideoDecoder {
     /// Flush the decoder (signal end of stream) and drain buffered frames.
     pub fn flush(&mut self) -> Result<()> {
         // Collect flushed frames into a local vec to avoid borrow conflicts
-        let mut flushed = Vec::new();
+        let mut flushed: Vec<VideoFrame> = Vec::new();
 
         match &mut self.backend {
             #[cfg(feature = "openh264")]
