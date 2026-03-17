@@ -52,12 +52,12 @@ impl RingBuffer {
     fn write(&self, samples: &[f32]) -> usize {
         let to_write = samples.len().min(self.free_space());
         let mut wp = self.write_pos.load(Ordering::Relaxed);
-        for i in 0..to_write {
+        for &sample in samples.iter().take(to_write) {
             // Safety: single producer, wp is only modified here.
             // data[wp] is not read by consumer until write_pos is updated.
             unsafe {
                 let ptr = self.data.as_ptr().add(wp) as *mut f32;
-                std::ptr::write(ptr, samples[i]);
+                std::ptr::write(ptr, sample);
             }
             wp = (wp + 1) % self.capacity;
         }
@@ -105,6 +105,12 @@ pub struct PipeWireOutput {
     running: Arc<AtomicBool>,
     signal: Arc<PwSignal>,
     pw_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Default for PipeWireOutput {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PipeWireOutput {
@@ -171,7 +177,7 @@ impl AudioOutput for PipeWireOutput {
         }
 
         let byte_len = buf.data.len();
-        if byte_len % 4 != 0 {
+        if !byte_len.is_multiple_of(4) {
             return Err(TarangError::Pipeline(
                 "audio buffer size not aligned to f32".to_string(),
             ));
@@ -222,11 +228,12 @@ impl AudioOutput for PipeWireOutput {
 
     fn latency(&self) -> Duration {
         let avail = self.ring.available();
-        if let Some(ref config) = self.config {
-            if config.sample_rate > 0 && config.channels > 0 {
-                let frames = avail / config.channels as usize;
-                return Duration::from_secs_f64(frames as f64 / config.sample_rate as f64);
-            }
+        if let Some(ref config) = self.config
+            && config.sample_rate > 0
+            && config.channels > 0
+        {
+            let frames = avail / config.channels as usize;
+            return Duration::from_secs_f64(frames as f64 / config.sample_rate as f64);
         }
         Duration::ZERO
     }
@@ -333,23 +340,20 @@ fn pw_thread_main(
         .process(move |stream, _| {
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 let datas = buffer.datas_mut();
-                if let Some(data) = datas.first_mut() {
-                    if let Some(slice) = data.data() {
-                        let n_frames = slice.len() / (ch * 4);
-                        // Safety: PipeWire MAP_BUFFERS guarantees the slice is valid F32-aligned
-                        // memory for the negotiated format (F32LE).
-                        let dst: &mut [f32] = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                slice.as_ptr() as *mut f32,
-                                n_frames * ch,
-                            )
-                        };
-                        ring_ref.read(dst);
-                        let chunk = data.chunk_mut();
-                        *chunk.size_mut() = (n_frames * ch * 4) as u32;
-                        *chunk.stride_mut() = (ch * 4) as i32;
-                        *chunk.offset_mut() = 0;
-                    }
+                if let Some(data) = datas.first_mut()
+                    && let Some(slice) = data.data()
+                {
+                    let n_frames = slice.len() / (ch * 4);
+                    // Safety: PipeWire MAP_BUFFERS guarantees the slice is valid F32-aligned
+                    // memory for the negotiated format (F32LE).
+                    let dst: &mut [f32] = unsafe {
+                        std::slice::from_raw_parts_mut(slice.as_ptr() as *mut f32, n_frames * ch)
+                    };
+                    ring_ref.read(dst);
+                    let chunk = data.chunk_mut();
+                    *chunk.size_mut() = (n_frames * ch * 4) as u32;
+                    *chunk.stride_mut() = (ch * 4) as i32;
+                    *chunk.offset_mut() = 0;
                 }
             }
         })

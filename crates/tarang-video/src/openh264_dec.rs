@@ -15,8 +15,8 @@ fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
     let height = height as u32;
     let (y_stride, u_stride, v_stride) = yuv.strides();
 
-    let chroma_w = ((width + 1) / 2) as usize;
-    let chroma_h = ((height + 1) / 2) as usize;
+    let chroma_w = width.div_ceil(2) as usize;
+    let chroma_h = height.div_ceil(2) as usize;
     let y_size = width as usize * height as usize;
     let mut yuv_data = Vec::with_capacity(y_size + chroma_w * chroma_h * 2);
 

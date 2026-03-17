@@ -36,6 +36,7 @@ impl AacEncoder {
                     )));
                 }
             },
+            audio_object_type: fdk_aac::enc::AudioObjectType::Mpeg4LowComplexity,
         })
         .map_err(|e| TarangError::Pipeline(format!("failed to create AAC encoder: {e:?}")))?;
 

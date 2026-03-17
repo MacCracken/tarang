@@ -39,8 +39,8 @@ impl Dav1dDecoder {
     pub fn get_frame(&mut self) -> Result<Option<VideoFrame>> {
         match self.decoder.get_picture() {
             Ok(pic) => {
-                let width = pic.width() as u32;
-                let height = pic.height() as u32;
+                let width = pic.width();
+                let height = pic.height();
 
                 // Only YUV420p is supported; reject other layouts
                 if pic.pixel_layout() != dav1d::PixelLayout::I420 {
@@ -54,8 +54,8 @@ impl Dav1dDecoder {
                 let plane = pic.plane(dav1d::PlanarImageComponent::Y);
 
                 // Use ceiling division for chroma dimensions (correct for odd sizes)
-                let chroma_h = ((height + 1) / 2) as usize;
-                let chroma_w = ((width + 1) / 2) as usize;
+                let chroma_h = height.div_ceil(2) as usize;
+                let chroma_w = width.div_ceil(2) as usize;
                 let y_size = width as usize * height as usize;
 
                 let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);

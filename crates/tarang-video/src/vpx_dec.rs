@@ -108,8 +108,8 @@ impl VpxDecoder {
             }
 
             // Pre-allocate output buffer
-            let chroma_w = ((width + 1) / 2) as usize;
-            let chroma_h = ((height + 1) / 2) as usize;
+            let chroma_w = width.div_ceil(2) as usize;
+            let chroma_h = height.div_ceil(2) as usize;
             let y_size = width as usize * height as usize;
             let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
 

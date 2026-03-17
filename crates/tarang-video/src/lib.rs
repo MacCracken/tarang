@@ -293,16 +293,16 @@ impl VideoDecoder {
 
         // For dav1d, try pulling another frame (it can buffer internally)
         #[cfg(feature = "dav1d")]
-        if let BackendInner::Dav1d(dec) = &mut self.backend {
-            if let Some(frame) = dec.get_frame()? {
-                if self.width == 0 {
-                    self.width = frame.width;
-                    self.height = frame.height;
-                }
-                self.frames_decoded += 1;
-                self.status = DecoderStatus::NeedsInput;
-                return Ok(frame);
+        if let BackendInner::Dav1d(dec) = &mut self.backend
+            && let Some(frame) = dec.get_frame()?
+        {
+            if self.width == 0 {
+                self.width = frame.width;
+                self.height = frame.height;
             }
+            self.frames_decoded += 1;
+            self.status = DecoderStatus::NeedsInput;
+            return Ok(frame);
         }
 
         self.status = DecoderStatus::NeedsInput;
@@ -312,6 +312,7 @@ impl VideoDecoder {
     /// Flush the decoder (signal end of stream) and drain buffered frames.
     pub fn flush(&mut self) -> Result<()> {
         // Collect flushed frames into a local vec to avoid borrow conflicts
+        #[allow(unused_mut)]
         let mut flushed: Vec<VideoFrame> = Vec::new();
 
         match &mut self.backend {
@@ -320,12 +321,11 @@ impl VideoDecoder {
                 flushed = dec.flush()?;
             }
             #[cfg(feature = "dav1d")]
-            BackendInner::Dav1d(dec) => loop {
-                match dec.get_frame() {
-                    Ok(Some(frame)) => flushed.push(frame),
-                    _ => break,
+            BackendInner::Dav1d(dec) => {
+                while let Ok(Some(frame)) = dec.get_frame() {
+                    flushed.push(frame);
                 }
-            },
+            }
             _ => {}
         }
 

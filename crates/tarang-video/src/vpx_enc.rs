@@ -149,8 +149,8 @@ impl VpxEncoder {
     /// Returns encoded packets (may be empty if encoder is buffering).
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<Vec<u8>>> {
         let y_size = self.width as usize * self.height as usize;
-        let chroma_w = ((self.width + 1) / 2) as usize;
-        let chroma_h = ((self.height + 1) / 2) as usize;
+        let chroma_w = self.width.div_ceil(2) as usize;
+        let chroma_h = self.height.div_ceil(2) as usize;
         let expected_size = tarang_core::yuv420p_frame_size(self.width, self.height);
 
         if frame.data.len() < expected_size {
