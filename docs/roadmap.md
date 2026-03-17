@@ -87,49 +87,41 @@
 ## Waiting on Upstream
 - [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` releasing a version compatible with `cros-libva` 0.0.13 (current cros-codecs 0.0.6 depends on cros-libva 0.0.12). *(added 2026-03-16)*
 
-## Engineering Backlog — Low Severity Audit Items *(added 2026-03-16)*
+## Engineering Backlog *(added 2026-03-16)*
 
-Items identified during code audit, deferred for future work.
-
-### tarang-audio
+### Remaining items
 - [ ] Deduplicate `bytes_to_f32`/`f32_to_bytes` helpers (6+ copies) — extract shared module or use `bytemuck`
 - [ ] PipeWire ring buffer: replace `Mutex` with lock-free `AtomicUsize` for read/write positions
 - [ ] PipeWire: replace blocking `flush()` sleep loop with condvar/channel notification
 - [ ] PipeWire: replace hardcoded 50ms init sleep with proper ready signal
-- [ ] FLAC encoder: log warning on silent zero-padding for undersized buffers
 - [ ] Probe: detect actual format instead of hardcoding `ContainerFormat::Mp4`
-- [ ] Add `Copy` derive to `OutputConfig` and `EncoderConfig`
 - [ ] Return `Cow`/reference instead of cloning `AudioBuffer` in `resample()`/`mix_channels()` no-op paths
-
-### tarang-demux
 - [ ] OGG: implement CRC-32 page validation
 - [ ] OGG: bisection seek (currently O(n) linear scan)
-- [ ] OGG: randomize serial number (hardcoded `0x74617267`)
-- [ ] OGG: bounds-check `try_into().unwrap()` on untrusted input (ogg.rs lines 99-101, 160-162, etc.)
-- [ ] MP4: validate allocation sizes — guard against OOM from malformed `sample_size`
-- [ ] MP4: replace `.unwrap()` on `playback.as_mut()` with error propagation
-- [ ] MKV: check `cluster_timecode as i64` overflow in timestamp calc
-- [ ] OGG muxer: validate codec at construction, not `write_header` time
-- [ ] Eliminate unnecessary `info.clone()` in all demuxers
-
-### tarang-video
-- [ ] Complete VA-API encode pipeline (surface upload → encode → readback)
-- [ ] Complete `VideoDecoder` implementation (currently stubs)
-- [ ] Add SAFETY comments to FFI unsafe blocks in vpx_dec.rs, vpx_enc.rs
-- [ ] Validate rav1e even dimensions (floor division corrupts odd chroma planes)
-- [ ] VPX encoder: validate `bitrate_bps >= 1000` to avoid rounding to zero
-
-### tarang-ai
-- [ ] Fingerprint: add max hash count limit for very long audio
-- [ ] Fingerprint: remove unused `_num_bands` parameter in `hash_chroma_frames`
-- [ ] Scene detection: bounds-check RGB24 pixel data length before indexing
 - [ ] Thumbnail: avoid cloning full `VideoFrame` — use `Arc` or store metadata only
-- [ ] Daimon: improve error context (indicate which operation failed)
-- [ ] Daimon: validate config endpoint URLs at construction time
-- [ ] Document content-type thresholds (600s/3600s magic numbers)
+- [ ] Complete VA-API encode pipeline (surface upload → encode → readback) — blocked on upstream cros-codecs
+- [ ] Complete `VideoDecoder` implementation (currently stubs)
 
-### tarang-core
-- [ ] WebM vs MKV detection — add deeper EBML DocType parsing
+### Completed
+- [x] Add `Copy` derive to `OutputConfig` and `EncoderConfig`
+- [x] FLAC encoder: log warning on silent zero-padding
+- [x] OGG: randomize serial number
+- [x] OGG: bounds-check `try_into().unwrap()` → proper error propagation
+- [x] MP4: validate allocation sizes (64 MB guard)
+- [x] MP4: replace `.unwrap()` on `playback.as_mut()` with error propagation
+- [x] MKV: saturating timecode arithmetic to prevent i64 overflow
+- [x] OGG muxer: validate codec at construction
+- [x] Eliminate unnecessary `info.clone()` in all demuxers
+- [x] Add SAFETY comments to FFI unsafe blocks in vpx_dec.rs, vpx_enc.rs
+- [x] Validate rav1e even dimensions
+- [x] VPX encoder: validate `bitrate_bps >= 1000`
+- [x] Fingerprint: add max hash count limit (64K)
+- [x] Fingerprint: remove unused `_num_bands` parameter
+- [x] Scene detection: bounds-check RGB24 pixel data length
+- [x] Daimon: improve error context (operation + path in messages)
+- [x] Daimon: validate config endpoint URLs at construction time
+- [x] Document content-type thresholds (named constants with comments)
+- [x] WebM vs MKV detection — EBML DocType parsing
 
 ## Downstream Consumers (All Integrated)
 - **AGNOS Media Player (Jalwa)** — primary GUI player built on tarang

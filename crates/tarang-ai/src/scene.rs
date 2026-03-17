@@ -182,6 +182,9 @@ pub fn compute_luminance_histogram(frame: &VideoFrame, bins: usize) -> Vec<f64> 
         let pixel_count = frame.data.len() / pixel_size;
         for i in 0..pixel_count {
             let offset = i * pixel_size;
+            if offset + 2 >= frame.data.len() {
+                break;
+            }
             let r = frame.data[offset] as f64;
             let g = frame.data[offset + 1] as f64;
             let b = frame.data[offset + 2] as f64;

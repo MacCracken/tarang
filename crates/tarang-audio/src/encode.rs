@@ -6,7 +6,7 @@
 use tarang_core::{AudioBuffer, AudioCodec, Result, TarangError};
 
 /// Configuration for an audio encoder
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncoderConfig {
     pub codec: AudioCodec,
     pub sample_rate: u32,

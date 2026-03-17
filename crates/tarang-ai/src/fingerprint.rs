@@ -58,8 +58,14 @@ pub fn compute_fingerprint(
     // Compute chroma features per frame
     let chroma_frames = compute_chroma_frames(&samples, config);
 
-    // Hash consecutive chroma frame pairs
-    let hashes = hash_chroma_frames(&chroma_frames, config.num_bands);
+    // Hash consecutive chroma frame pairs (cap at 64K to prevent OOM on very long audio)
+    const MAX_HASHES: usize = 65536;
+    let frames_to_hash = if chroma_frames.len() > MAX_HASHES + 1 {
+        &chroma_frames[..MAX_HASHES + 1]
+    } else {
+        &chroma_frames
+    };
+    let hashes = hash_chroma_frames(frames_to_hash);
 
     Ok(AudioFingerprint {
         hashes,
@@ -213,7 +219,7 @@ fn magnitudes_to_chroma(magnitudes: &[f64], config: &FingerprintConfig) -> Vec<f
     chroma
 }
 
-fn hash_chroma_frames(frames: &[Vec<f64>], _num_bands: usize) -> Vec<u32> {
+fn hash_chroma_frames(frames: &[Vec<f64>]) -> Vec<u32> {
     if frames.len() < 2 {
         return Vec::new();
     }

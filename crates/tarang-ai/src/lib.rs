@@ -103,16 +103,22 @@ pub fn analyze_media(info: &MediaInfo) -> MediaAnalysis {
     let has_audio = info.has_audio();
     let duration = info.duration.unwrap_or(Duration::ZERO);
 
+    // Classification thresholds:
+    // - Audio-only: ≤10min → Music, >10min → Podcast
+    // - Audio+Video: ≤1hr → Clip, >1hr → Movie
+    const PODCAST_THRESHOLD: Duration = Duration::from_secs(600);
+    const MOVIE_THRESHOLD: Duration = Duration::from_secs(3600);
+
     let content_type = match (has_video, has_audio) {
         (false, true) => {
-            if duration > Duration::from_secs(600) {
+            if duration > PODCAST_THRESHOLD {
                 ContentType::Podcast
             } else {
                 ContentType::Music
             }
         }
         (true, true) => {
-            if duration > Duration::from_secs(3600) {
+            if duration > MOVIE_THRESHOLD {
                 ContentType::Movie
             } else {
                 ContentType::Clip

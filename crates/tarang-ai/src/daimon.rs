@@ -64,6 +64,12 @@ pub struct DaimonClient {
 
 impl DaimonClient {
     pub fn new(config: DaimonConfig) -> Result<Self> {
+        if config.endpoint.is_empty() || !config.endpoint.starts_with("http") {
+            return Err(TarangError::NetworkError(format!(
+                "invalid daimon endpoint: {:?}",
+                config.endpoint
+            )));
+        }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -108,10 +114,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("vector insert failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            TarangError::NetworkError(format!("vector insert failed for {file_path}: {e}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -152,6 +157,7 @@ impl DaimonClient {
             .send()
             .await
             .map_err(|e| TarangError::NetworkError(format!("vector search failed: {e}")))?;
+        // NOTE: search failure logged at call site via warn! (see query_media)
 
         if !resp.status().is_success() {
             warn!("Vector search returned {}", resp.status());
@@ -203,10 +209,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("RAG ingest failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            TarangError::NetworkError(format!("RAG ingest failed for {file_path}: {e}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -236,6 +241,7 @@ impl DaimonClient {
             .send()
             .await
             .map_err(|e| TarangError::NetworkError(format!("RAG query failed: {e}")))?;
+        // NOTE: non-success status logged via warn! above
 
         if !resp.status().is_success() {
             warn!(status = %resp.status(), "RAG query returned non-success");
@@ -328,6 +334,12 @@ pub struct HooshLlmClient {
 
 impl HooshLlmClient {
     pub fn new(config: HooshLlmConfig) -> Result<Self> {
+        if config.endpoint.is_empty() || !config.endpoint.starts_with("http") {
+            return Err(TarangError::NetworkError(format!(
+                "invalid hoosh LLM endpoint: {:?}",
+                config.endpoint
+            )));
+        }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()
@@ -362,10 +374,9 @@ impl HooshLlmClient {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("hoosh LLM request failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            TarangError::NetworkError(format!("hoosh LLM describe_content failed: {e}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();

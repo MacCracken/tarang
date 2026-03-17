@@ -20,6 +20,7 @@ unsafe impl Send for VpxDecoder {}
 
 impl VpxDecoder {
     pub fn new(codec: VideoCodec) -> Result<Self> {
+        // Safety: vpx_codec_vp8_dx/vp9_dx return static function pointers; always valid.
         let iface = match codec {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_dx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_dx() },
@@ -30,6 +31,7 @@ impl VpxDecoder {
             }
         };
 
+        // Safety: vpx_codec_ctx_t is a C struct with no invariants; zero-init is valid pre-init state.
         let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
         let cfg: *const vpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
 
@@ -111,7 +113,10 @@ impl VpxDecoder {
             let y_size = width as usize * height as usize;
             let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
 
-            // Copy YUV420p planes using isize stride arithmetic (handles negative strides)
+            // Copy YUV420p planes using isize stride arithmetic (handles negative strides).
+            // Safety: libvpx guarantees planes[0..3] point to valid I420 image data with
+            // stride[0..3] bytes per row. Format was validated above. Pointers remain valid
+            // until the next vpx_codec_decode call, which we don't make within this scope.
             // Y plane
             for row in 0..height as isize {
                 let offset = row * img.stride[0] as isize;

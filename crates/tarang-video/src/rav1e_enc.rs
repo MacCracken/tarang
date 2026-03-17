@@ -57,6 +57,13 @@ impl Rav1eEncoder {
             .new_context()
             .map_err(|e| TarangError::Pipeline(format!("rav1e context creation failed: {e}")))?;
 
+        if config.width % 2 != 0 || config.height % 2 != 0 {
+            return Err(TarangError::Pipeline(format!(
+                "rav1e requires even dimensions, got {}x{}",
+                config.width, config.height
+            )));
+        }
+
         Ok(Self {
             context,
             frames_encoded: 0,

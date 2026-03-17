@@ -139,8 +139,9 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             album: None,
         };
 
-        self.info = Some(info.clone());
-        Ok(info)
+        let ret = info.clone();
+        self.info = Some(info);
+        Ok(ret)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

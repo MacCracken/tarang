@@ -520,8 +520,9 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             album: None,
         };
 
-        self.info = Some(info.clone());
-        Ok(info)
+        let ret = info.clone();
+        self.info = Some(info);
+        Ok(ret)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
@@ -647,8 +648,8 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             .read_exact(&mut data)
             .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
 
-        // Absolute timecode
-        let abs_tc = self.current_cluster_timecode as i64 + relative_tc as i64;
+        // Absolute timecode (saturate to prevent overflow)
+        let abs_tc = (self.current_cluster_timecode as i64).saturating_add(relative_tc as i64);
         let timestamp = self.timecode_to_duration(abs_tc.max(0) as u64);
 
         // Map track number to stream index

@@ -135,16 +135,37 @@ pub struct OggMuxer<W: Write> {
 }
 
 impl<W: Write> OggMuxer<W> {
-    pub fn new(writer: W, config: MuxConfig) -> Self {
-        // Use a fixed serial for now; could be randomized
-        Self {
+    pub fn new(writer: W, config: MuxConfig) -> Result<Self> {
+        // Validate codec upfront instead of deferring to write_header
+        match config.codec {
+            tarang_core::AudioCodec::Opus | tarang_core::AudioCodec::Vorbis => {}
+            other => {
+                return Err(TarangError::UnsupportedCodec(format!(
+                    "OGG muxer does not support {other}"
+                )));
+            }
+        }
+        // Randomize serial to support concurrent streams
+        let serial = {
+            let mut buf = [0u8; 4];
+            buf[0] = (std::process::id() & 0xFF) as u8;
+            buf[1] = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+                & 0xFF) as u8;
+            buf[2] = ((std::process::id() >> 8) & 0xFF) as u8;
+            buf[3] = 0x74; // 't' — tarang signature byte
+            u32::from_le_bytes(buf)
+        };
+        Ok(Self {
             writer,
             config,
-            serial: 0x74617267, // "targ" in hex
+            serial,
             page_sequence: 0,
             granule_position: 0,
             header_written: false,
-        }
+        })
     }
 
     /// Write a single OGG page containing the given packets.
@@ -952,7 +973,7 @@ mod tests {
             bits_per_sample: 16,
         };
 
-        let mut mux = OggMuxer::new(&mut buf, config);
+        let mut mux = OggMuxer::new(&mut buf, config).unwrap();
         mux.write_header().unwrap();
 
         // Write a fake Opus packet
@@ -978,7 +999,7 @@ mod tests {
             bits_per_sample: 16,
         };
 
-        let mut mux = OggMuxer::new(&mut buf, config);
+        let mut mux = OggMuxer::new(&mut buf, config).unwrap();
         mux.write_header().unwrap();
 
         let packet = vec![0xFCu8; 64];
@@ -1008,7 +1029,7 @@ mod tests {
             bits_per_sample: 16,
         };
 
-        let mut mux = OggMuxer::new(&mut buf, config);
+        let mut mux = OggMuxer::new(&mut buf, config).unwrap();
         mux.write_header().unwrap();
 
         let packet = vec![0x42u8; 128];
@@ -1028,8 +1049,8 @@ mod tests {
             channels: 2,
             bits_per_sample: 16,
         };
-        let mut mux = OggMuxer::new(&mut buf, config);
-        assert!(mux.write_header().is_err());
+        // Unsupported codec should fail at construction
+        assert!(OggMuxer::new(&mut buf, config).is_err());
     }
 
     #[test]

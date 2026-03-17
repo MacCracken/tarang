@@ -184,9 +184,14 @@ impl AudioEncoder for FlacEncoder {
             int_samples.push((sample.clamp(-1.0, 1.0) * scale) as i32);
         }
 
-        // Pad if needed
-        while int_samples.len() < expected {
-            int_samples.push(0);
+        // Pad if needed (buffer smaller than block size)
+        if int_samples.len() < expected {
+            tracing::debug!(
+                got = int_samples.len(),
+                expected,
+                "FLAC: zero-padding undersized buffer"
+            );
+            int_samples.resize(expected, 0);
         }
 
         // Generate STREAMINFO on first encode if not yet written

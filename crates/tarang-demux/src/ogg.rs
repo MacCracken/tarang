@@ -96,9 +96,21 @@ impl<R: Read + Seek> OggDemuxer<R> {
         }
 
         let header_type = header[5];
-        let granule_position = i64::from_le_bytes(header[6..14].try_into().unwrap());
-        let serial_number = u32::from_le_bytes(header[14..18].try_into().unwrap());
-        let page_sequence = u32::from_le_bytes(header[18..22].try_into().unwrap());
+        let granule_position = i64::from_le_bytes(
+            header[6..14]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+        );
+        let serial_number = u32::from_le_bytes(
+            header[14..18]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+        );
+        let page_sequence = u32::from_le_bytes(
+            header[18..22]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+        );
         // checksum at [22..26] — we skip validation for now
         let num_segments = header[26];
 
@@ -157,9 +169,21 @@ impl<R: Read + Seek> OggDemuxer<R> {
         // Vorbis identification header: 0x01 + "vorbis" + version(4) + channels(1) + sample_rate(4)
         if packet.len() >= 30 && packet[0] == 0x01 && &packet[1..7] == b"vorbis" {
             let channels = packet[11] as u16;
-            let sample_rate = u32::from_le_bytes(packet[12..16].try_into().unwrap());
-            let bitrate_max = i32::from_le_bytes(packet[16..20].try_into().unwrap());
-            let bitrate_nominal = i32::from_le_bytes(packet[20..24].try_into().unwrap());
+            let sample_rate = u32::from_le_bytes(
+                packet[12..16]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+            );
+            let bitrate_max = i32::from_le_bytes(
+                packet[16..20]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+            );
+            let bitrate_nominal = i32::from_le_bytes(
+                packet[20..24]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+            );
 
             let bitrate = if bitrate_nominal > 0 {
                 Some(bitrate_nominal as u32)
@@ -184,8 +208,16 @@ impl<R: Read + Seek> OggDemuxer<R> {
         if packet.len() >= 19 && &packet[0..8] == b"OpusHead" {
             let _version = packet[8];
             let channels = packet[9] as u16;
-            let pre_skip = u16::from_le_bytes(packet[10..12].try_into().unwrap()) as u32;
-            let sample_rate = u32::from_le_bytes(packet[12..16].try_into().unwrap());
+            let pre_skip = u16::from_le_bytes(
+                packet[10..12]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad Opus header".to_string()))?,
+            ) as u32;
+            let sample_rate = u32::from_le_bytes(
+                packet[12..16]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad Opus header".to_string()))?,
+            );
 
             return Ok(OggStream {
                 codec: AudioCodec::Opus,
@@ -208,7 +240,11 @@ impl<R: Read + Seek> OggDemuxer<R> {
             // STREAMINFO: min_block(2) + max_block(2) + min_frame(3) + max_frame(3)
             // + sample_rate(20 bits) + channels(3 bits) + bps(5 bits) + total_samples(36 bits)
             let sr_bytes = &packet[streaminfo_offset + 10..streaminfo_offset + 14];
-            let sr_bits = u32::from_be_bytes(sr_bytes.try_into().unwrap());
+            let sr_bits = u32::from_be_bytes(
+                sr_bytes
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("bad FLAC OGG header".to_string()))?,
+            );
             let sample_rate = sr_bits >> 12;
             let channels = ((sr_bits >> 9) & 0x07) as u16 + 1;
 
@@ -374,14 +410,15 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             album: None,
         };
 
-        self.info = Some(info.clone());
+        let ret = info.clone();
+        self.info = Some(info);
 
         // Seek back to start of data (after BOS pages) for packet reading
         self.reader
             .seek(std::io::SeekFrom::Start(0))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
 
-        Ok(info)
+        Ok(ret)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

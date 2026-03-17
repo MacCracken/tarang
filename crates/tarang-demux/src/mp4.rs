@@ -835,14 +835,15 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             album: None,
         };
 
-        self.info = Some(info.clone());
+        let ret = info.clone();
+        self.info = Some(info);
         self.playback = Some(PlaybackState {
             track_index: 0,
             current_sample: 0,
             current_ts: 0,
         });
 
-        Ok(info)
+        Ok(ret)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
@@ -883,13 +884,22 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             .seek(SeekFrom::Start(file_offset))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
 
+        const MAX_SAMPLE_SIZE: u32 = 64 * 1024 * 1024; // 64 MB guard
+        if sample_size > MAX_SAMPLE_SIZE {
+            return Err(TarangError::DemuxError(format!(
+                "sample size {sample_size} exceeds maximum ({MAX_SAMPLE_SIZE})"
+            )));
+        }
         let mut buf = vec![0u8; sample_size as usize];
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read sample: {e}")))?;
 
         // Advance
-        let playback = self.playback.as_mut().unwrap();
+        let playback = self
+            .playback
+            .as_mut()
+            .ok_or_else(|| TarangError::Pipeline("not probed yet".to_string()))?;
         playback.current_sample += 1;
 
         Ok(Packet {
@@ -937,7 +947,10 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             sample += count;
         }
 
-        let playback = self.playback.as_mut().unwrap();
+        let playback = self
+            .playback
+            .as_mut()
+            .ok_or_else(|| TarangError::Pipeline("not probed yet".to_string()))?;
         playback.current_sample = sample;
         playback.current_ts = ts;
 

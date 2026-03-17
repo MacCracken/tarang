@@ -99,7 +99,7 @@ impl VpxEncoder {
 
         cfg.g_w = config.width;
         cfg.g_h = config.height;
-        cfg.rc_target_bitrate = config.bitrate_bps / 1000;
+        cfg.rc_target_bitrate = (config.bitrate_bps / 1000).max(1); // min 1 kbps
         cfg.g_timebase.num = config.frame_rate_den as i32;
         cfg.g_timebase.den = config.frame_rate_num as i32;
         cfg.g_threads = config.threads;
@@ -183,8 +183,10 @@ impl VpxEncoder {
         // RAII guard created only after successful alloc — no forget() needed
         let guard = VpxImageGuard { img: raw_img };
 
-        // Copy YUV420p planes from VideoFrame into vpx_image
-        // Use isize arithmetic to correctly handle negative strides
+        // Copy YUV420p planes from VideoFrame into vpx_image.
+        // Safety: frame.data was validated above (len >= expected_size), so all
+        // src_start..src_start+width accesses are in bounds. vpx_img_alloc guarantees
+        // planes[0..3] and stride[0..3] are valid for the allocated dimensions.
         // Y plane
         for row in 0..self.height as usize {
             let src_start = row * self.width as usize;

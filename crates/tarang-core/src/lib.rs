@@ -97,9 +97,14 @@ impl ContainerFormat {
         if &bytes[4..8] == b"ftyp" {
             return Some(Self::Mp4);
         }
-        // EBML header for MKV/WebM
+        // EBML header for MKV/WebM — check DocType to distinguish
         if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
-            // Would need deeper parsing to distinguish MKV vs WebM
+            // Search for "webm" DocType string in the first bytes
+            if let Some(pos) = bytes.windows(4).position(|w| w == b"webm")
+                && pos < 64
+            {
+                return Some(Self::WebM);
+            }
             return Some(Self::Mkv);
         }
         // OggS

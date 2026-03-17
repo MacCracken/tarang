@@ -6,7 +6,7 @@
 use tarang_core::{AudioBuffer, Result, TarangError};
 
 /// Configuration for an audio output stream
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputConfig {
     pub sample_rate: u32,
     pub channels: u16,
@@ -80,7 +80,7 @@ impl NullOutput {
 
 impl AudioOutput for NullOutput {
     fn open(&mut self, config: &OutputConfig) -> Result<()> {
-        self.config = Some(config.clone());
+        self.config = Some(*config);
         self.samples_written = 0;
         Ok(())
     }
