@@ -226,37 +226,33 @@ impl VideoDecoder {
             return Err(TarangError::DecodeError("empty packet".to_string()));
         }
 
+        // Collect decoded frames into a local vec to avoid borrow conflicts
+        // with self.backend and self.pending_frames/width/height
+        let mut decoded = Vec::new();
+
         match &mut self.backend {
             #[cfg(feature = "dav1d")]
             BackendInner::Dav1d(dec) => {
                 dec.send_data(data, timestamp.as_nanos() as i64)?;
-                // Try to retrieve a decoded frame immediately
                 if let Some(frame) = dec.get_frame()? {
-                    self.update_dims(&frame);
-                    self.pending_frames.push(frame);
+                    decoded.push(frame);
                 }
             }
             #[cfg(feature = "openh264")]
             BackendInner::OpenH264(dec) => {
                 if let Some(frame) = dec.decode(data, timestamp)? {
-                    self.update_dims(&frame);
-                    self.pending_frames.push(frame);
+                    decoded.push(frame);
                 }
             }
             #[cfg(feature = "vpx")]
             BackendInner::Vpx(dec) => {
-                let frames = dec.decode(data, timestamp)?;
-                for frame in frames {
-                    self.update_dims(&frame);
-                    self.pending_frames.push(frame);
-                }
+                decoded = dec.decode(data, timestamp)?;
             }
             BackendInner::Stub => {
-                // Produce a stub frame at configured dimensions
                 let w = if self.width > 0 { self.width } else { 320 };
                 let h = if self.height > 0 { self.height } else { 240 };
                 let size = tarang_core::yuv420p_frame_size(w, h);
-                self.pending_frames.push(VideoFrame {
+                decoded.push(VideoFrame {
                     data: bytes::Bytes::from(vec![0u8; size]),
                     pixel_format: PixelFormat::Yuv420p,
                     width: w,
@@ -264,6 +260,14 @@ impl VideoDecoder {
                     timestamp,
                 });
             }
+        }
+
+        for frame in decoded {
+            if self.width == 0 {
+                self.width = frame.width;
+                self.height = frame.height;
+            }
+            self.pending_frames.push(frame);
         }
 
         self.status = if self.pending_frames.is_empty() {
@@ -291,7 +295,10 @@ impl VideoDecoder {
         #[cfg(feature = "dav1d")]
         if let BackendInner::Dav1d(dec) = &mut self.backend {
             if let Some(frame) = dec.get_frame()? {
-                self.update_dims(&frame);
+                if self.width == 0 {
+                    self.width = frame.width;
+                    self.height = frame.height;
+                }
                 self.frames_decoded += 1;
                 self.status = DecoderStatus::NeedsInput;
                 return Ok(frame);
@@ -304,29 +311,30 @@ impl VideoDecoder {
 
     /// Flush the decoder (signal end of stream) and drain buffered frames.
     pub fn flush(&mut self) -> Result<()> {
+        // Collect flushed frames into a local vec to avoid borrow conflicts
+        let mut flushed = Vec::new();
+
         match &mut self.backend {
             #[cfg(feature = "openh264")]
             BackendInner::OpenH264(dec) => {
-                let flushed = dec.flush()?;
-                for frame in flushed {
-                    self.update_dims(&frame);
-                    self.pending_frames.push(frame);
-                }
+                flushed = dec.flush()?;
             }
             #[cfg(feature = "dav1d")]
-            BackendInner::Dav1d(dec) => {
-                // Drain remaining frames
-                loop {
-                    match dec.get_frame() {
-                        Ok(Some(frame)) => {
-                            self.update_dims(&frame);
-                            self.pending_frames.push(frame);
-                        }
-                        _ => break,
-                    }
+            BackendInner::Dav1d(dec) => loop {
+                match dec.get_frame() {
+                    Ok(Some(frame)) => flushed.push(frame),
+                    _ => break,
                 }
-            }
+            },
             _ => {}
+        }
+
+        for frame in flushed {
+            if self.width == 0 {
+                self.width = frame.width;
+                self.height = frame.height;
+            }
+            self.pending_frames.push(frame);
         }
 
         self.status = if self.pending_frames.is_empty() {
