@@ -89,9 +89,8 @@
 
 ## Engineering Backlog *(added 2026-03-16)*
 
-### Remaining (blocked on upstream or major feature work)
+### Remaining (blocked on upstream)
 - [ ] Complete VA-API encode pipeline (surface upload → encode → readback) — blocked on upstream cros-codecs
-- [ ] Complete `VideoDecoder` implementation (currently stubs)
 
 ### Completed (all non-blocked items)
 - [x] Add `Copy` derive to `OutputConfig` and `EncoderConfig`
@@ -125,6 +124,7 @@
 - [x] PCM scaling constants (`I16_SCALE`, `I24_SCALE`, `I32_SCALE`) in `sample.rs`
 - [x] Shared `yuv420p_frame_size()` and `validate_video_dimensions()` in tarang-core
 - [x] Shared test helpers (`make_test_buffer`, `make_test_sine`) in `sample.rs`
+- [x] `VideoDecoder` wired to real backends (dav1d, openh264, libvpx) with unified send/receive API
 
 ## Downstream Consumers (All Integrated)
 - **AGNOS Media Player (Jalwa)** — primary GUI player built on tarang

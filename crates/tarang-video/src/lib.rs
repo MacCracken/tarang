@@ -140,28 +140,56 @@ impl DecoderConfig {
     }
 }
 
-/// Video decoder instance
+/// Internal backend handle — holds the actual FFI decoder.
+enum BackendInner {
+    #[cfg(feature = "dav1d")]
+    Dav1d(Dav1dDecoder),
+    #[cfg(feature = "openh264")]
+    OpenH264(OpenH264Decoder),
+    #[cfg(feature = "vpx")]
+    Vpx(VpxDecoder),
+    /// Software / stub — produces black frames (used for Theora until a Rust decoder exists)
+    Stub,
+}
+
+/// Unified video decoder — dispatches to the appropriate FFI backend
+/// based on the configured codec.
 pub struct VideoDecoder {
     config: DecoderConfig,
+    backend: BackendInner,
     status: DecoderStatus,
     frames_decoded: u64,
     width: u32,
     height: u32,
+    /// Frames buffered from backends that return multiple frames per call
+    pending_frames: Vec<VideoFrame>,
 }
 
 impl VideoDecoder {
-    /// Create a new video decoder
+    /// Create a new video decoder, initializing the appropriate FFI backend.
     pub fn new(config: DecoderConfig) -> Result<Self> {
+        let backend = match config.backend {
+            #[cfg(feature = "dav1d")]
+            DecoderBackend::Dav1d => BackendInner::Dav1d(Dav1dDecoder::new()?),
+            #[cfg(feature = "openh264")]
+            DecoderBackend::OpenH264 => BackendInner::OpenH264(OpenH264Decoder::new()?),
+            #[cfg(feature = "vpx")]
+            DecoderBackend::LibVpx => BackendInner::Vpx(VpxDecoder::new(config.codec)?),
+            _ => BackendInner::Stub,
+        };
+
         Ok(Self {
             config,
+            backend,
             status: DecoderStatus::Ready,
             frames_decoded: 0,
             width: 0,
             height: 0,
+            pending_frames: Vec::new(),
         })
     }
 
-    /// Initialize from stream info
+    /// Initialize from stream info (sets expected dimensions).
     pub fn init(&mut self, info: &VideoStreamInfo) {
         self.width = info.width;
         self.height = info.height;
@@ -192,46 +220,129 @@ impl VideoDecoder {
         (self.width, self.height)
     }
 
-    /// Feed compressed data to the decoder
-    pub fn send_packet(&mut self, data: &[u8], _timestamp: Duration) -> Result<()> {
+    /// Feed compressed data to the decoder.
+    pub fn send_packet(&mut self, data: &[u8], timestamp: Duration) -> Result<()> {
         if data.is_empty() {
             return Err(TarangError::DecodeError("empty packet".to_string()));
         }
 
-        // TODO: FFI call to actual codec backend
-        // For now, transition state
-        self.status = DecoderStatus::HasOutput;
-        Ok(())
-    }
-
-    /// Retrieve a decoded frame if available
-    pub fn receive_frame(&mut self) -> Result<VideoFrame> {
-        if self.status != DecoderStatus::HasOutput {
-            return Err(TarangError::DecodeError("no frame available".to_string()));
+        match &mut self.backend {
+            #[cfg(feature = "dav1d")]
+            BackendInner::Dav1d(dec) => {
+                dec.send_data(data, timestamp.as_nanos() as i64)?;
+                // Try to retrieve a decoded frame immediately
+                if let Some(frame) = dec.get_frame()? {
+                    self.update_dims(&frame);
+                    self.pending_frames.push(frame);
+                }
+            }
+            #[cfg(feature = "openh264")]
+            BackendInner::OpenH264(dec) => {
+                if let Some(frame) = dec.decode(data, timestamp)? {
+                    self.update_dims(&frame);
+                    self.pending_frames.push(frame);
+                }
+            }
+            #[cfg(feature = "vpx")]
+            BackendInner::Vpx(dec) => {
+                let frames = dec.decode(data, timestamp)?;
+                for frame in frames {
+                    self.update_dims(&frame);
+                    self.pending_frames.push(frame);
+                }
+            }
+            BackendInner::Stub => {
+                // Produce a stub frame at configured dimensions
+                let w = if self.width > 0 { self.width } else { 320 };
+                let h = if self.height > 0 { self.height } else { 240 };
+                let size = tarang_core::yuv420p_frame_size(w, h);
+                self.pending_frames.push(VideoFrame {
+                    data: bytes::Bytes::from(vec![0u8; size]),
+                    pixel_format: PixelFormat::Yuv420p,
+                    width: w,
+                    height: h,
+                    timestamp,
+                });
+            }
         }
 
-        // TODO: FFI call to retrieve decoded frame from backend
-        // Placeholder: produce a black frame at configured dimensions
-        let w = if self.width > 0 { self.width } else { 320 };
-        let h = if self.height > 0 { self.height } else { 240 };
-        let data_size = (w * h * 3) as usize; // RGB24
+        self.status = if self.pending_frames.is_empty() {
+            DecoderStatus::NeedsInput
+        } else {
+            DecoderStatus::HasOutput
+        };
 
-        self.frames_decoded += 1;
-        self.status = DecoderStatus::NeedsInput;
-
-        Ok(VideoFrame {
-            data: bytes::Bytes::from(vec![0u8; data_size]),
-            pixel_format: PixelFormat::Rgb24,
-            width: w,
-            height: h,
-            timestamp: Duration::from_secs_f64(self.frames_decoded as f64 / 30.0),
-        })
+        Ok(())
     }
 
-    /// Flush the decoder (signal end of stream)
+    /// Retrieve a decoded frame if available.
+    pub fn receive_frame(&mut self) -> Result<VideoFrame> {
+        if let Some(frame) = self.pending_frames.pop() {
+            self.frames_decoded += 1;
+            self.status = if self.pending_frames.is_empty() {
+                DecoderStatus::NeedsInput
+            } else {
+                DecoderStatus::HasOutput
+            };
+            return Ok(frame);
+        }
+
+        // For dav1d, try pulling another frame (it can buffer internally)
+        #[cfg(feature = "dav1d")]
+        if let BackendInner::Dav1d(dec) = &mut self.backend {
+            if let Some(frame) = dec.get_frame()? {
+                self.update_dims(&frame);
+                self.frames_decoded += 1;
+                self.status = DecoderStatus::NeedsInput;
+                return Ok(frame);
+            }
+        }
+
+        self.status = DecoderStatus::NeedsInput;
+        Err(TarangError::DecodeError("no frame available".to_string()))
+    }
+
+    /// Flush the decoder (signal end of stream) and drain buffered frames.
     pub fn flush(&mut self) -> Result<()> {
-        self.status = DecoderStatus::Flushed;
+        match &mut self.backend {
+            #[cfg(feature = "openh264")]
+            BackendInner::OpenH264(dec) => {
+                let flushed = dec.flush()?;
+                for frame in flushed {
+                    self.update_dims(&frame);
+                    self.pending_frames.push(frame);
+                }
+            }
+            #[cfg(feature = "dav1d")]
+            BackendInner::Dav1d(dec) => {
+                // Drain remaining frames
+                loop {
+                    match dec.get_frame() {
+                        Ok(Some(frame)) => {
+                            self.update_dims(&frame);
+                            self.pending_frames.push(frame);
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.status = if self.pending_frames.is_empty() {
+            DecoderStatus::Flushed
+        } else {
+            DecoderStatus::HasOutput
+        };
         Ok(())
+    }
+
+    #[allow(dead_code)] // Used by feature-gated backends (dav1d, openh264, vpx)
+    fn update_dims(&mut self, frame: &VideoFrame) {
+        if self.width == 0 {
+            self.width = frame.width;
+            self.height = frame.height;
+        }
     }
 }
 
@@ -261,6 +372,7 @@ fn num_cpus() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn config_for_av1() {
         let result = DecoderConfig::for_codec(VideoCodec::Av1);
@@ -365,6 +477,7 @@ mod tests {
         let frame = decoder.receive_frame().unwrap();
         assert_eq!(frame.width, 640);
         assert_eq!(frame.height, 480);
+        assert_eq!(frame.pixel_format, PixelFormat::Yuv420p);
         assert_eq!(decoder.frames_decoded(), 1);
         assert_eq!(decoder.status(), DecoderStatus::NeedsInput);
     }
@@ -387,9 +500,7 @@ mod tests {
     #[test]
     fn supported_codecs_list() {
         let codecs = supported_codecs();
-        // Theora software fallback is always present
         assert!(codecs.contains(&(VideoCodec::Theora, DecoderBackend::Software)));
-        // H.265 is never supported
         assert!(!codecs.iter().any(|(c, _)| *c == VideoCodec::H265));
     }
 
@@ -445,28 +556,31 @@ mod tests {
         let mut decoder = VideoDecoder::new(config).unwrap();
         assert_eq!(decoder.dimensions(), (0, 0));
 
-        // Without init, receive_frame uses default 320x240
+        // Without init, stub uses default 320x240
         decoder.send_packet(&[0xFF], Duration::ZERO).unwrap();
         let frame = decoder.receive_frame().unwrap();
         assert_eq!(frame.width, 320);
         assert_eq!(frame.height, 240);
-        assert_eq!(frame.pixel_format, PixelFormat::Rgb24);
+        assert_eq!(frame.pixel_format, PixelFormat::Yuv420p);
     }
 
     #[test]
-    fn decoder_frame_timestamps_increase() {
+    fn decoder_frame_timestamps() {
         let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
         let mut decoder = VideoDecoder::new(config).unwrap();
 
-        let mut prev_ts = Duration::ZERO;
-        for i in 0..3 {
-            decoder.send_packet(&[i as u8], Duration::ZERO).unwrap();
-            let frame = decoder.receive_frame().unwrap();
-            if i > 0 {
-                assert!(frame.timestamp > prev_ts);
-            }
-            prev_ts = frame.timestamp;
-        }
+        // Stub backend passes through the timestamp from send_packet
+        decoder
+            .send_packet(&[1], Duration::from_millis(100))
+            .unwrap();
+        let frame = decoder.receive_frame().unwrap();
+        assert_eq!(frame.timestamp, Duration::from_millis(100));
+
+        decoder
+            .send_packet(&[2], Duration::from_millis(200))
+            .unwrap();
+        let frame = decoder.receive_frame().unwrap();
+        assert_eq!(frame.timestamp, Duration::from_millis(200));
     }
 
     #[test]
@@ -491,5 +605,33 @@ mod tests {
                 assert_ne!(a, b, "duplicate codec entry");
             }
         }
+    }
+
+    #[test]
+    fn stub_frame_is_yuv420p_sized() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        decoder.init(&VideoStreamInfo {
+            codec: VideoCodec::Theora,
+            width: 64,
+            height: 48,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 30.0,
+            bitrate: None,
+            duration: None,
+        });
+
+        decoder.send_packet(&[0x42], Duration::ZERO).unwrap();
+        let frame = decoder.receive_frame().unwrap();
+        let expected = tarang_core::yuv420p_frame_size(64, 48);
+        assert_eq!(frame.data.len(), expected);
+    }
+
+    #[test]
+    fn flush_on_empty_is_flushed() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        decoder.flush().unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::Flushed);
     }
 }
