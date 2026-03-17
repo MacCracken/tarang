@@ -249,24 +249,7 @@ impl FileDecoder {
     }
 }
 
-/// Safe cast from &[f32] to &[u8]
-fn bytemuck_f32_to_bytes(samples: &[f32]) -> &[u8] {
-    // Safety: f32 is Pod, so reinterpreting as bytes is safe
-    let ptr = samples.as_ptr() as *const u8;
-    let len = samples.len() * 4;
-    unsafe { std::slice::from_raw_parts(ptr, len) }
-}
-
-/// Safe cast from &[u8] to &[f32]
-fn bytemuck_bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    let len = bytes.len() / 4;
-    if len == 0 || !bytes.len().is_multiple_of(4) {
-        return &[];
-    }
-    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
-    let ptr = bytes.as_ptr() as *const f32;
-    unsafe { std::slice::from_raw_parts(ptr, len) }
-}
+use crate::sample::{bytes_to_f32 as bytemuck_bytes_to_f32, f32_to_bytes as bytemuck_f32_to_bytes};
 
 #[cfg(test)]
 mod tests {

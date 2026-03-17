@@ -268,6 +268,30 @@ pub struct AudioBuffer {
     pub timestamp: Duration,
 }
 
+/// Compute the byte size of a YUV420p frame with the given dimensions.
+/// Uses ceiling division for chroma planes (correct for odd sizes).
+pub fn yuv420p_frame_size(width: u32, height: u32) -> usize {
+    let y_size = (width as usize) * (height as usize);
+    let chroma_w = (width as usize).div_ceil(2);
+    let chroma_h = (height as usize).div_ceil(2);
+    y_size + 2 * chroma_w * chroma_h
+}
+
+/// Validate video encoder dimensions (must be non-zero and even).
+pub fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Err(TarangError::Pipeline(
+            "width and height must be non-zero".to_string(),
+        ));
+    }
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        return Err(TarangError::Pipeline(format!(
+            "dimensions must be even, got {width}x{height}"
+        )));
+    }
+    Ok(())
+}
+
 /// A decoded video frame
 #[derive(Debug, Clone)]
 pub struct VideoFrame {

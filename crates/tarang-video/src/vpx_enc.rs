@@ -60,11 +60,7 @@ unsafe impl Send for VpxEncoder {}
 
 impl VpxEncoder {
     pub fn new(config: &VpxEncoderConfig) -> Result<Self> {
-        if config.width == 0 || config.height == 0 {
-            return Err(TarangError::Pipeline(
-                "VpxEncoder: width and height must be non-zero".to_string(),
-            ));
-        }
+        tarang_core::validate_video_dimensions(config.width, config.height)?;
         if config.frame_rate_num == 0 || config.frame_rate_den == 0 {
             return Err(TarangError::Pipeline(
                 "VpxEncoder: frame_rate_num and frame_rate_den must be non-zero".to_string(),
@@ -152,11 +148,10 @@ impl VpxEncoder {
     /// Encode a YUV420p frame. Uses the frame's timestamp for PTS.
     /// Returns encoded packets (may be empty if encoder is buffering).
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<Vec<u8>>> {
-        // Compute plane sizes in usize to avoid u32 overflow
         let y_size = self.width as usize * self.height as usize;
         let chroma_w = ((self.width + 1) / 2) as usize;
         let chroma_h = ((self.height + 1) / 2) as usize;
-        let expected_size = y_size + 2 * chroma_w * chroma_h;
+        let expected_size = tarang_core::yuv420p_frame_size(self.width, self.height);
 
         if frame.data.len() < expected_size {
             return Err(TarangError::Pipeline(format!(

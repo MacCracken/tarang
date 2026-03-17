@@ -14,6 +14,7 @@ mod mix;
 mod output;
 mod probe;
 mod resample;
+mod sample;
 
 pub use decode::FileDecoder;
 pub use encode::{AudioEncoder, EncoderConfig, PcmEncoder, create_encoder};

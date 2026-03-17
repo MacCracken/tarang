@@ -65,14 +65,14 @@ impl AudioEncoder for PcmEncoder {
             16 => {
                 for &s in &samples[..expected] {
                     let clamped = s.clamp(-1.0, 1.0);
-                    let i = (clamped * 32767.0) as i16;
+                    let i = (clamped * sample::I16_SCALE) as i16;
                     out.extend_from_slice(&i.to_le_bytes());
                 }
             }
             24 => {
                 for &s in &samples[..expected] {
                     let clamped = s.clamp(-1.0, 1.0);
-                    let i = (clamped * 8388607.0) as i32;
+                    let i = (clamped * sample::I24_SCALE) as i32;
                     let bytes = i.to_le_bytes();
                     out.extend_from_slice(&bytes[..3]);
                 }
@@ -80,7 +80,7 @@ impl AudioEncoder for PcmEncoder {
             32 => {
                 for &s in &samples[..expected] {
                     let clamped = s.clamp(-1.0, 1.0);
-                    let i = (clamped * 2147483647.0) as i32;
+                    let i = (clamped * sample::I32_SCALE) as i32;
                     out.extend_from_slice(&i.to_le_bytes());
                 }
             }
@@ -110,19 +110,7 @@ pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
     }
 }
 
-/// # Safety
-/// Caller must ensure bytes are from an F32 audio buffer (4-byte aligned, length multiple of 4).
-/// Panics are replaced with truncation to avoid crashing in library code.
-fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    let len = bytes.len() / 4;
-    if len == 0 || !bytes.len().is_multiple_of(4) {
-        return &[];
-    }
-    // Safety: AudioBuffer data originates from Vec<f32> serialized via to_le_bytes or
-    // Bytes::copy_from_slice, so alignment is guaranteed by the heap allocator (>=8 bytes).
-    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
-}
+use crate::sample::{self, bytes_to_f32};
 
 #[cfg(test)]
 mod tests {
@@ -131,20 +119,7 @@ mod tests {
     use std::time::Duration;
     use tarang_core::SampleFormat;
 
-    fn f32_to_bytes(samples: &[f32]) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) }
-    }
-
-    fn make_buffer(samples: &[f32], channels: u16, sample_rate: u32) -> AudioBuffer {
-        AudioBuffer {
-            data: Bytes::copy_from_slice(f32_to_bytes(samples)),
-            sample_format: SampleFormat::F32,
-            channels,
-            sample_rate,
-            num_samples: samples.len() / channels as usize,
-            timestamp: Duration::ZERO,
-        }
-    }
+    use crate::sample::make_test_buffer as make_buffer;
 
     #[test]
     fn pcm_encode_16bit() {

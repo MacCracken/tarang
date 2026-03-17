@@ -173,9 +173,9 @@ impl AudioEncoder for FlacEncoder {
 
         // Convert F32 to integer samples
         let scale = match self.bits_per_sample {
-            16 => 32767.0f32,
-            24 => 8388607.0f32,
-            _ => 32767.0f32,
+            16 => crate::sample::I16_SCALE,
+            24 => crate::sample::I24_SCALE,
+            _ => crate::sample::I16_SCALE,
         };
 
         let mut int_samples = Vec::with_capacity(num_frames * ch);
@@ -281,47 +281,18 @@ impl BitWriter {
     }
 }
 
-fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    let len = bytes.len() / 4;
-    if len == 0 || !bytes.len().is_multiple_of(4) {
-        return &[];
-    }
-    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
-}
+use crate::sample::bytes_to_f32;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
-    use std::time::Duration;
-    use tarang_core::SampleFormat;
 
-    fn f32_to_bytes(samples: &[f32]) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) }
-    }
-
-    fn make_buffer(samples: &[f32], channels: u16, sample_rate: u32) -> AudioBuffer {
-        AudioBuffer {
-            data: Bytes::copy_from_slice(f32_to_bytes(samples)),
-            sample_format: SampleFormat::F32,
-            channels,
-            sample_rate,
-            num_samples: samples.len() / channels as usize,
-            timestamp: Duration::ZERO,
-        }
+    fn make_buffer(samples: &[f32], channels: u16, sample_rate: u32) -> tarang_core::AudioBuffer {
+        crate::sample::make_test_buffer(samples, channels, sample_rate)
     }
 
     fn make_sine(num_samples: usize, channels: u16) -> Vec<f32> {
-        let mut out = Vec::with_capacity(num_samples * channels as usize);
-        for i in 0..num_samples {
-            let t = i as f64 / 44100.0;
-            let s = (t * 440.0 * 2.0 * std::f64::consts::PI).sin() as f32;
-            for _ in 0..channels {
-                out.push(s);
-            }
-        }
-        out
+        crate::sample::make_test_sine(440.0, 44100, num_samples, channels)
     }
 
     #[test]

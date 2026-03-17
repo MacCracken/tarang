@@ -39,17 +39,7 @@ pub struct OpenH264Encoder {
 
 impl OpenH264Encoder {
     pub fn new(config: &OpenH264EncoderConfig) -> Result<Self> {
-        if config.width == 0 || config.height == 0 {
-            return Err(TarangError::Pipeline(
-                "OpenH264Encoder: width and height must be non-zero".to_string(),
-            ));
-        }
-        if config.width % 2 != 0 || config.height % 2 != 0 {
-            return Err(TarangError::Pipeline(format!(
-                "OpenH264Encoder: dimensions must be even, got {}x{}",
-                config.width, config.height
-            )));
-        }
+        tarang_core::validate_video_dimensions(config.width, config.height)?;
 
         let api = openh264::OpenH264API::from_source();
         let enc_config = openh264::encoder::EncoderConfig::new()

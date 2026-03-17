@@ -86,7 +86,7 @@ impl Rav1eEncoder {
         let y_size = (self.width * self.height) as usize;
         let chroma_w = (self.width / 2) as usize;
         let chroma_h = (self.height / 2) as usize;
-        let expected_size = y_size + 2 * chroma_w * chroma_h;
+        let expected_size = tarang_core::yuv420p_frame_size(self.width, self.height);
         if frame.data.len() < expected_size {
             return Err(TarangError::Pipeline(format!(
                 "frame data too small: {} bytes, expected at least {}",

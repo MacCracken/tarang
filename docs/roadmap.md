@@ -90,7 +90,7 @@
 ## Engineering Backlog *(added 2026-03-16)*
 
 ### Remaining items
-- [ ] Deduplicate `bytes_to_f32`/`f32_to_bytes` helpers (6+ copies) — extract shared module or use `bytemuck`
+- [x] ~~Deduplicate `bytes_to_f32`/`f32_to_bytes` helpers~~ — extracted to `sample.rs` shared module
 - [ ] PipeWire ring buffer: replace `Mutex` with lock-free `AtomicUsize` for read/write positions
 - [ ] PipeWire: replace blocking `flush()` sleep loop with condvar/channel notification
 - [ ] PipeWire: replace hardcoded 50ms init sleep with proper ready signal

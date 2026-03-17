@@ -147,47 +147,13 @@ fn hann_window(x: f64, half_width: f64) -> f64 {
     }
 }
 
-fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
-    let len = bytes.len() / 4;
-    if len == 0 || !bytes.len().is_multiple_of(4) {
-        return &[];
-    }
-    debug_assert!(bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
-    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
-}
-
-fn f32_to_bytes(samples: &[f32]) -> &[u8] {
-    // Safety: f32 has no invalid bit patterns, reinterpreting as bytes is always safe.
-    unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) }
-}
+use crate::sample::{bytes_to_f32, f32_to_bytes};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_buffer(samples: &[f32], channels: u16, sample_rate: u32) -> AudioBuffer {
-        use std::time::Duration;
-        AudioBuffer {
-            data: Bytes::copy_from_slice(f32_to_bytes(samples)),
-            sample_format: SampleFormat::F32,
-            channels,
-            sample_rate,
-            num_samples: samples.len() / channels as usize,
-            timestamp: Duration::ZERO,
-        }
-    }
-
-    fn make_sine(freq: f64, sample_rate: u32, num_samples: usize, channels: u16) -> Vec<f32> {
-        let mut out = Vec::with_capacity(num_samples * channels as usize);
-        for i in 0..num_samples {
-            let t = i as f64 / sample_rate as f64;
-            let s = (t * freq * 2.0 * std::f64::consts::PI).sin() as f32;
-            for _ in 0..channels {
-                out.push(s);
-            }
-        }
-        out
-    }
+    use crate::sample::{make_test_buffer as make_buffer, make_test_sine as make_sine};
 
     #[test]
     fn resample_noop() {

@@ -112,17 +112,7 @@ impl VaapiEncoder {
     /// This verifies that the requested codec is supported for encoding
     /// on the available GPU hardware.
     pub fn new(config: &VaapiEncoderConfig) -> Result<Self> {
-        if config.width == 0 || config.height == 0 {
-            return Err(TarangError::Pipeline(
-                "VaapiEncoder: width and height must be non-zero".to_string(),
-            ));
-        }
-        if config.width % 2 != 0 || config.height % 2 != 0 {
-            return Err(TarangError::Pipeline(format!(
-                "VaapiEncoder: dimensions must be even, got {}x{}",
-                config.width, config.height
-            )));
-        }
+        tarang_core::validate_video_dimensions(config.width, config.height)?;
 
         let profile = codec_to_va_profile(config.codec)?;
         let display = open_display(&config.device)?;
