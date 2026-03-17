@@ -18,9 +18,16 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         return Err(TarangError::Pipeline("invalid source buffer".to_string()));
     }
 
-    // No-op if rates match
+    // No-op if rates match — return cheaply without cloning data
     if buf.sample_rate == target_rate {
-        return Ok(buf.clone());
+        return Ok(AudioBuffer {
+            data: buf.data.clone(), // Bytes::clone is O(1) ref-count bump
+            sample_format: buf.sample_format,
+            channels: buf.channels,
+            sample_rate: buf.sample_rate,
+            num_samples: buf.num_samples,
+            timestamp: buf.timestamp,
+        });
     }
 
     let src = bytes_to_f32(&buf.data);
@@ -76,7 +83,14 @@ pub fn resample_sinc(
         return Err(TarangError::Pipeline("invalid source buffer".to_string()));
     }
     if buf.sample_rate == target_rate {
-        return Ok(buf.clone());
+        return Ok(AudioBuffer {
+            data: buf.data.clone(),
+            sample_format: buf.sample_format,
+            channels: buf.channels,
+            sample_rate: buf.sample_rate,
+            num_samples: buf.num_samples,
+            timestamp: buf.timestamp,
+        });
     }
 
     let src = bytes_to_f32(&buf.data);

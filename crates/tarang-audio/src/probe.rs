@@ -22,6 +22,34 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
         .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}")))?;
 
     let format = probed.format;
+
+    // Detect container format from symphonia's codec registry name
+    let container = {
+        let name = format.default_track().map(|t| t.codec_params.codec);
+        // Symphonia doesn't directly expose container format, but we can infer
+        // from the format reader's track codec types and the probe result.
+        // For now, map based on the first track's codec.
+        match name {
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_FLAC => ContainerFormat::Flac,
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_VORBIS => ContainerFormat::Ogg,
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_OPUS => ContainerFormat::Ogg,
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_MP3 => ContainerFormat::Mp3,
+            Some(c)
+                if c == symphonia::core::codecs::CODEC_TYPE_PCM_S16LE
+                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S16BE
+                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S24LE
+                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S32LE
+                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_F32LE
+                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_F64LE =>
+            {
+                ContainerFormat::Wav
+            }
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_AAC => ContainerFormat::Mp4,
+            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_ALAC => ContainerFormat::Mp4,
+            _ => ContainerFormat::Mp4, // fallback
+        }
+    };
+
     let mut streams = Vec::new();
 
     for track in format.tracks() {
@@ -55,7 +83,7 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
 
     Ok(MediaInfo {
         id: uuid::Uuid::new_v4(),
-        format: ContainerFormat::Mp4, // symphonia determines actual format
+        format: container,
         streams,
         duration,
         file_size: None,

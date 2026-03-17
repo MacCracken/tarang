@@ -21,7 +21,14 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     };
 
     if src_ch == target_ch {
-        return Ok(buf.clone());
+        return Ok(AudioBuffer {
+            data: buf.data.clone(), // Bytes::clone is O(1) ref-count bump
+            sample_format: buf.sample_format,
+            channels: buf.channels,
+            sample_rate: buf.sample_rate,
+            num_samples: buf.num_samples,
+            timestamp: buf.timestamp,
+        });
     }
     if src_ch == 0 || buf.num_samples == 0 {
         return Err(TarangError::Pipeline("invalid source buffer".to_string()));

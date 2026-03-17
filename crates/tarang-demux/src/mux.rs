@@ -169,6 +169,7 @@ impl<W: Write> OggMuxer<W> {
     }
 
     /// Write a single OGG page containing the given packets.
+    /// Computes and embeds the CRC-32 checksum per the OGG spec.
     fn write_page(&mut self, header_type: u8, granule: i64, packets: &[&[u8]]) -> Result<()> {
         // Build segment table
         let mut segment_table = Vec::new();
@@ -180,29 +181,32 @@ impl<W: Write> OggMuxer<W> {
             segment_table.push(remainder as u8);
         }
 
-        // Page header
-        self.writer.write_all(b"OggS").map_err(io_err)?;
-        self.writer.write_all(&[0u8]).map_err(io_err)?; // version
-        self.writer.write_all(&[header_type]).map_err(io_err)?;
-        self.writer
-            .write_all(&granule.to_le_bytes())
-            .map_err(io_err)?;
-        self.writer
-            .write_all(&self.serial.to_le_bytes())
-            .map_err(io_err)?;
-        self.writer
-            .write_all(&self.page_sequence.to_le_bytes())
-            .map_err(io_err)?;
-        self.writer.write_all(&0u32.to_le_bytes()).map_err(io_err)?; // CRC (0 for now)
-        self.writer
-            .write_all(&[segment_table.len() as u8])
-            .map_err(io_err)?;
-        self.writer.write_all(&segment_table).map_err(io_err)?;
+        // Build complete page in memory so we can compute the CRC
+        let body_size: usize = packets.iter().map(|p| p.len()).sum();
+        let page_size = 27 + segment_table.len() + body_size;
+        let mut page = Vec::with_capacity(page_size);
 
-        // Page body
+        // Header (27 bytes)
+        page.extend_from_slice(b"OggS");
+        page.push(0); // version
+        page.push(header_type);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&self.serial.to_le_bytes());
+        page.extend_from_slice(&self.page_sequence.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes()); // CRC placeholder (bytes 22..26)
+        page.push(segment_table.len() as u8);
+        page.extend_from_slice(&segment_table);
+
+        // Body
         for packet in packets {
-            self.writer.write_all(packet).map_err(io_err)?;
+            page.extend_from_slice(packet);
         }
+
+        // Compute CRC with checksum field zeroed (already is)
+        let crc = crate::ogg::ogg_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+
+        self.writer.write_all(&page).map_err(io_err)?;
 
         self.page_sequence += 1;
         Ok(())

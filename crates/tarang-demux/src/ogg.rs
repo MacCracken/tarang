@@ -23,6 +23,36 @@ const HEADER_TYPE_EOS: u8 = 0x04;
 /// OGG page header size (fixed portion before segment table)
 const PAGE_HEADER_SIZE: usize = 27;
 
+/// OGG CRC-32 lookup table (polynomial 0x04C11DB7, used by the OGG spec).
+#[allow(dead_code)] // Used by both ogg.rs CRC validation and mux.rs CRC generation
+const OGG_CRC_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = (i as u32) << 24;
+        let mut j = 0;
+        while j < 8 {
+            if crc & 0x80000000 != 0 {
+                crc = (crc << 1) ^ 0x04C11DB7;
+            } else {
+                crc <<= 1;
+            }
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
+
+pub(crate) fn ogg_crc32(data: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &byte in data {
+        crc = (crc << 8) ^ OGG_CRC_TABLE[((crc >> 24) as u8 ^ byte) as usize];
+    }
+    crc
+}
+
 /// Parsed OGG page header
 #[derive(Debug)]
 struct OggPage {
@@ -75,6 +105,31 @@ impl<R: Read + Seek> OggDemuxer<R> {
     }
 
     /// Read and parse a single OGG page from the current reader position.
+    /// Scan forward from current position to find the next OGG page sync pattern.
+    /// Returns the file offset of the page start, or None if EOF.
+    fn find_next_page_start(&mut self) -> Option<u64> {
+        let mut buf = [0u8; 1];
+        let mut sync = [0u8; 4];
+        loop {
+            if self.reader.read_exact(&mut buf).is_err() {
+                return None;
+            }
+            sync[0] = sync[1];
+            sync[1] = sync[2];
+            sync[2] = sync[3];
+            sync[3] = buf[0];
+            if &sync == b"OggS" {
+                // Back up to the start of "OggS"
+                let pos = self.reader.stream_position().ok()?;
+                let page_start = pos - 4;
+                self.reader
+                    .seek(std::io::SeekFrom::Start(page_start))
+                    .ok()?;
+                return Some(page_start);
+            }
+        }
+    }
+
     fn read_page(&mut self) -> Result<OggPage> {
         let mut header = [0u8; PAGE_HEADER_SIZE];
         self.reader
@@ -111,7 +166,12 @@ impl<R: Read + Seek> OggDemuxer<R> {
                 .try_into()
                 .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
         );
-        // checksum at [22..26] — we skip validation for now
+        // Extract stored checksum before zeroing it for verification
+        let stored_crc = u32::from_le_bytes(
+            header[22..26]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+        );
         let num_segments = header[26];
 
         // Read segment table
@@ -126,6 +186,25 @@ impl<R: Read + Seek> OggDemuxer<R> {
         self.reader
             .read_exact(&mut body)
             .map_err(|e| TarangError::DemuxError(format!("failed to read page body: {e}")))?;
+
+        // Verify CRC-32: build the full page with checksum zeroed and compute
+        {
+            let mut page = Vec::with_capacity(PAGE_HEADER_SIZE + segment_table.len() + body.len());
+            let mut zeroed_header = header;
+            zeroed_header[22] = 0;
+            zeroed_header[23] = 0;
+            zeroed_header[24] = 0;
+            zeroed_header[25] = 0;
+            page.extend_from_slice(&zeroed_header);
+            page.extend_from_slice(&segment_table);
+            page.extend_from_slice(&body);
+            let computed = ogg_crc32(&page);
+            if computed != stored_crc {
+                return Err(TarangError::DemuxError(format!(
+                    "OGG page CRC mismatch: expected {stored_crc:#010x}, got {computed:#010x}"
+                )));
+            }
+        }
 
         // Assemble packets from segments.
         // A packet boundary occurs after any segment with size < 255.
@@ -530,20 +609,82 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
     }
 
     fn seek(&mut self, timestamp: Duration) -> Result<()> {
-        // For OGG, seeking requires bisection search since pages aren't fixed size.
-        // Simple approach: scan from start to find the target granule position.
-        // A proper implementation would use bisection, but this is correct for now.
-
         let target_seconds = timestamp.as_secs_f64();
 
-        // Reset to beginning
-        self.reader
-            .seek(std::io::SeekFrom::Start(0))
+        // Determine the sample rate for granule→time conversion
+        let sr = self
+            .streams
+            .values()
+            .next()
+            .map(|s| {
+                if s.codec == AudioCodec::Opus {
+                    48000u32
+                } else {
+                    s.sample_rate
+                }
+            })
+            .unwrap_or(44100);
+
+        if sr == 0 {
+            return Err(TarangError::DemuxError(
+                "cannot seek: sample rate is 0".to_string(),
+            ));
+        }
+
+        // Get file bounds for bisection
+        let file_start = 0u64;
+        let file_end = self
+            .reader
+            .seek(std::io::SeekFrom::End(0))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
 
-        // Scan pages until we find one with a granule position past our target
-        let mut last_page_start = 0u64;
+        let mut lo = file_start;
+        let mut hi = file_end;
+        let mut best_pos = file_start;
 
+        // Bisection: narrow down to the page containing the target granule
+        for _ in 0..64 {
+            if hi - lo < 8192 {
+                break; // Close enough, scan linearly
+            }
+
+            let mid = lo + (hi - lo) / 2;
+            self.reader
+                .seek(std::io::SeekFrom::Start(mid))
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+
+            // Scan forward to find next OGG page sync
+            match self.find_next_page_start() {
+                Some(page_pos) => match self.read_page() {
+                    Ok(page) if page.granule_position >= 0 => {
+                        let page_time = page.granule_position as f64 / sr as f64;
+                        if page_time < target_seconds {
+                            lo = page_pos;
+                            best_pos = page_pos;
+                        } else {
+                            hi = page_pos;
+                        }
+                    }
+                    Ok(_) => {
+                        // Page has no granule info, treat as "before target"
+                        lo = mid;
+                    }
+                    Err(_) => {
+                        hi = mid;
+                    }
+                },
+                None => {
+                    hi = mid;
+                }
+            }
+        }
+
+        // Linear scan from best_pos to find exact page
+        self.reader
+            .seek(std::io::SeekFrom::Start(best_pos))
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+
+        let mut last_page_start = best_pos;
         loop {
             let pos = self
                 .reader
@@ -552,35 +693,18 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
 
             match self.read_page() {
                 Ok(page) => {
-                    if page.granule_position >= 0
-                        && let Some(stream) = self.streams.get(&page.serial_number)
-                    {
-                        let sr = if stream.codec == AudioCodec::Opus {
-                            48000u32
-                        } else {
-                            stream.sample_rate
-                        };
-
-                        if sr > 0 {
-                            let page_time = page.granule_position as f64 / sr as f64;
-                            if page_time >= target_seconds {
-                                // Seek to this page's start
-                                self.reader
-                                    .seek(std::io::SeekFrom::Start(last_page_start))
-                                    .map_err(|e| {
-                                        TarangError::DemuxError(format!("seek error: {e}"))
-                                    })?;
-                                return Ok(());
-                            }
+                    if page.granule_position >= 0 {
+                        let page_time = page.granule_position as f64 / sr as f64;
+                        if page_time >= target_seconds {
+                            self.reader
+                                .seek(std::io::SeekFrom::Start(last_page_start))
+                                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+                            return Ok(());
                         }
                     }
                     last_page_start = pos;
                 }
-                Err(TarangError::DemuxError(_)) => {
-                    // Likely hit EOF
-                    return Err(TarangError::EndOfStream);
-                }
-                Err(e) => return Err(e),
+                Err(_) => return Err(TarangError::EndOfStream),
             }
         }
     }
@@ -691,21 +815,28 @@ mod tests {
             }
         }
 
-        // Page header
-        buf.extend_from_slice(b"OggS");
-        buf.push(0); // version
-        buf.push(header_type);
-        buf.extend_from_slice(&granule.to_le_bytes());
-        buf.extend_from_slice(&serial.to_le_bytes());
-        buf.extend_from_slice(&page_seq.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes()); // CRC (0 — we skip validation)
-        buf.push(segment_table.len() as u8);
-        buf.extend_from_slice(&segment_table);
+        // Build page in memory, compute CRC, then append
+        let body_size: usize = packets.iter().map(|p| p.len()).sum();
+        let mut page = Vec::with_capacity(27 + segment_table.len() + body_size);
 
-        // Page body
+        page.extend_from_slice(b"OggS");
+        page.push(0); // version
+        page.push(header_type);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&page_seq.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes()); // CRC placeholder
+        page.push(segment_table.len() as u8);
+        page.extend_from_slice(&segment_table);
         for packet in packets {
-            buf.extend_from_slice(packet);
+            page.extend_from_slice(packet);
         }
+
+        // Compute and patch CRC
+        let crc = ogg_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+
+        buf.extend_from_slice(&page);
     }
 
     #[test]

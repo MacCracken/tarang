@@ -89,20 +89,11 @@
 
 ## Engineering Backlog *(added 2026-03-16)*
 
-### Remaining items
-- [x] ~~Deduplicate `bytes_to_f32`/`f32_to_bytes` helpers~~ — extracted to `sample.rs` shared module
-- [ ] PipeWire ring buffer: replace `Mutex` with lock-free `AtomicUsize` for read/write positions
-- [ ] PipeWire: replace blocking `flush()` sleep loop with condvar/channel notification
-- [ ] PipeWire: replace hardcoded 50ms init sleep with proper ready signal
-- [ ] Probe: detect actual format instead of hardcoding `ContainerFormat::Mp4`
-- [ ] Return `Cow`/reference instead of cloning `AudioBuffer` in `resample()`/`mix_channels()` no-op paths
-- [ ] OGG: implement CRC-32 page validation
-- [ ] OGG: bisection seek (currently O(n) linear scan)
-- [ ] Thumbnail: avoid cloning full `VideoFrame` — use `Arc` or store metadata only
+### Remaining (blocked on upstream or major feature work)
 - [ ] Complete VA-API encode pipeline (surface upload → encode → readback) — blocked on upstream cros-codecs
 - [ ] Complete `VideoDecoder` implementation (currently stubs)
 
-### Completed
+### Completed (all non-blocked items)
 - [x] Add `Copy` derive to `OutputConfig` and `EncoderConfig`
 - [x] FLAC encoder: log warning on silent zero-padding
 - [x] OGG: randomize serial number
@@ -122,6 +113,18 @@
 - [x] Daimon: validate config endpoint URLs at construction time
 - [x] Document content-type thresholds (named constants with comments)
 - [x] WebM vs MKV detection — EBML DocType parsing
+- [x] PipeWire ring buffer: lock-free `AtomicUsize` SPSC ring buffer
+- [x] PipeWire: condvar-based ready signal (replaced 50ms sleep)
+- [x] PipeWire: deadline-based flush with timeout (replaced fixed sleep loop)
+- [x] Probe: detect container format from symphonia codec type
+- [x] Avoid cloning `AudioBuffer` in resample/mix no-op paths (O(1) `Bytes::clone`)
+- [x] OGG: CRC-32 page validation (demuxer) + CRC generation (muxer)
+- [x] OGG: bisection seek (O(log n) with linear scan refinement)
+- [x] Thumbnail: `Arc<VideoFrame>` to avoid cloning megabyte frame data
+- [x] Deduplicate `bytes_to_f32`/`f32_to_bytes` — extracted to `sample.rs`
+- [x] PCM scaling constants (`I16_SCALE`, `I24_SCALE`, `I32_SCALE`) in `sample.rs`
+- [x] Shared `yuv420p_frame_size()` and `validate_video_dimensions()` in tarang-core
+- [x] Shared test helpers (`make_test_buffer`, `make_test_sine`) in `sample.rs`
 
 ## Downstream Consumers (All Integrated)
 - **AGNOS Media Player (Jalwa)** — primary GUI player built on tarang

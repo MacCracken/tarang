@@ -6,6 +6,7 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::{ImageBuffer, ImageEncoder, Rgb, RgbImage};
+use std::sync::Arc;
 use std::time::Duration;
 use tarang_core::{PixelFormat, Result, TarangError, VideoFrame};
 
@@ -54,9 +55,11 @@ pub struct Thumbnail {
 }
 
 /// Stateful thumbnail generator — feed candidate frames, then generate.
+///
+/// Uses `Arc<VideoFrame>` internally to avoid cloning megabyte-sized frame data.
 pub struct ThumbnailGenerator {
     config: ThumbnailConfig,
-    candidates: Vec<(VideoFrame, f64)>,
+    candidates: Vec<(Arc<VideoFrame>, f64)>,
 }
 
 impl ThumbnailGenerator {
@@ -68,6 +71,9 @@ impl ThumbnailGenerator {
     }
 
     /// Consider a frame as a thumbnail candidate.
+    ///
+    /// Wraps the frame in an `Arc` to avoid deep-cloning megabyte-sized pixel data.
+    /// Only the top `max_thumbnails` candidates are retained.
     pub fn consider_frame(&mut self, frame: &VideoFrame, is_scene_boundary: bool) {
         let variance = luminance_variance(frame);
         if variance < self.config.min_variance {
@@ -76,8 +82,8 @@ impl ThumbnailGenerator {
 
         let score = variance * if is_scene_boundary { 2.0 } else { 1.0 };
 
-        // Insert and keep only top candidates
-        self.candidates.push((frame.clone(), score));
+        // Arc::new clones the frame once; subsequent retentions are O(1) ref bumps
+        self.candidates.push((Arc::new(frame.clone()), score));
         self.candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         self.candidates.truncate(self.config.max_thumbnails);
     }
