@@ -1,53 +1,89 @@
 # Changelog
 
-## 2026.3.19
+## 0.19.3
 
-Crates.io publishing, FLAC compression, EBML parser, MCP extraction, backlog cleanup.
+Single-crate restructure, crates.io publishing, security audit, supply-chain hardening.
+
+### Crate restructure
+- Flattened workspace into single `tarang` crate — 5 sub-crates become modules (`core`, `demux`, `audio`, `video`, `ai`)
+- Single `cargo publish` / `cargo install tarang` — no multi-crate orchestration
+- Feature flags consolidated: `full`, `dav1d`, `vpx`, `openh264`, `rav1e`, `vaapi`, `pipewire`, `opus-enc`, `aac-enc`
+- Package metadata: homepage, repository, readme, keywords, categories, MSRV 1.89
 
 ### crates.io publishing
-- Workspace crates now publishable to crates.io in dependency order
-- Internal path dependencies carry version constraints for registry resolution
-- Release workflow: version verification (VERSION + Cargo.toml + git tag) before publish
-- `cargo publish --dry-run` supported for pre-release validation
+- Release workflow matches ai-hwaccel: CI gate → version verification → test → build → publish → GitHub release
+- Version consistency check: VERSION file, Cargo.toml, and git tag must match
+- `cargo publish --dry-run` passes clean
 
-### FLAC encoding (`encode_flac.rs`)
-- Full pure-Rust FLAC encoder: fixed-predictor selection, residual Rice coding, MD5 checksumming
-- Stereo decorrelation (independent, mid-side, left-side, right-side) with automatic mode selection
+### Security audit (5 areas, 40+ issues fixed)
+
+#### FLAC encoder
+- Off-by-one in fixed prediction: `num_frames <= order` → `num_frames <= order + 1` (prevented panic on slice bounds)
+- LPC prediction: saturating arithmetic for i64 coefficient × sample multiplication
+- Fixed prediction orders 2-4: saturating arithmetic for all intermediate multiplications
+- Channel count validation: reject >8 channels (FLAC spec limit)
+
+#### MP4 muxer
+- Empty sample_sizes panic: guard in `build_stsz` returns valid zero-count box
+- Size overflow in `write_box`: checked arithmetic, error on >4GB box data
+- stco offset overflow: `build_stco` returns `Result`, errors if offset > u32::MAX
+- Duration overflow: saturating multiplication capped at u32::MAX
+
+#### Audio resampler
+- Sinc interpolation: bounds check before casting i64 index to usize (prevented negative index UB)
+- Window size validation: reject 0 or >1024
+- Precision: keep interpolation fraction as f64 throughout (was truncating to f32)
+
+#### Core types and utilities
+- `yuv420p_frame_size`: checked arithmetic for width × height multiplication
+- `extract_mono_f32`: zero-channels guard prevents division by zero
+- `audio_utils`: checked multiplication for interleaved offset calculations
+- PCM scaling: fixed inconsistent i16 divisor (32768.0 → 32767.0, matching `I16_SCALE`)
+- `video_utils`: checked multiplication for frame dimensions, stride validation for RGB/RGBA
+- `f32_to_bytes`: checked multiplication before unsafe slice cast
+
+### Supply-chain hardening
+- `cargo-vet` initialized with Mozilla audit imports, 32 trusted publisher audits
+- `cargo-deny` config: license allowlist (GPL-3.0), vulnerability deny, source restrictions
+- Both added to CI pipeline (vet + deny jobs gate release build)
+
+### Documentation (matching ai-hwaccel strategy)
+- `CONTRIBUTING.md`: dev workflow, system deps, feature flags, adding codecs, code style
+- `CODE_OF_CONDUCT.md`: Contributor Covenant v2.1
+- `SECURITY.md`: threat surface (media parsing, FFI, AI APIs, MCP)
+- `Makefile`: check/fmt/clippy/test/audit/deny/build/doc/clean targets
+- `rust-toolchain.toml`: stable channel with rustfmt + clippy
+- ADRs: feature-flags-per-codec, semver-versioning
+- `docs/development/threat-model.md`: media parsing, FFI safety, network, supply chain
+
+### Previous work (from 2026.3.19)
+
+#### FLAC encoding
+- Full pure-Rust FLAC encoder: fixed-predictor selection, residual Rice coding, CRC checksums
+- Linear LPC prediction (Levinson-Durbin): autocorrelation, coefficient quantization, orders 1-8
 - Configurable compression level, block size, and bit depth (16/24)
 - STREAMINFO, PADDING, and SEEKTABLE metadata block generation
 
-### EBML parser (`ebml.rs`)
+#### EBML parser
 - Generic EBML element parser for MKV/WebM containers
 - Variable-width integer (VINT) decoding, element tree traversal
-- Used by MKV demuxer for more robust container parsing
 
-### MCP server extraction
-- Extracted MCP server from monolithic `main.rs` into `src/mcp/` module
-- `mcp/mod.rs`: server lifecycle, JSON-RPC dispatch
-- `mcp/tools.rs`: tool implementations (probe, analyze, codecs, transcribe, formats)
+#### MCP server extraction
+- Extracted from monolithic `main.rs` into `src/mcp/{mod,tools}.rs`
 
-### AI module improvements
-- `audio_utils.rs` / `video_utils.rs`: shared preprocessing helpers extracted from AI features
-- Daimon client: full implementation for LLM-powered media analysis
+#### AI module
+- `audio_utils.rs` / `video_utils.rs`: shared preprocessing helpers
+- Daimon client: LLM-powered media analysis
 - Scene detector: improved transition thresholds and debouncing
 - Thumbnail generator: better frame scoring heuristics
 
-### Codec & demuxer fixes
-- MP4: improved box parsing with better size validation
-- MKV: SimpleBlock parsing hardened against malformed input
-- OGG: seek and CRC improvements
-- rav1e encoder: expanded configuration options and validation
-- dav1d decoder: improved plane stride handling
-- AAC/Opus encoders: additional safety checks on truncated buffers
+#### Codec & demuxer
+- MP4: improved box parsing, MKV: SimpleBlock hardening, OGG: seek/CRC
+- rav1e: expanded config, dav1d: stride handling, AAC/Opus: truncation guards
 
-### Audio pipeline
-- Resampler: expanded interpolation and edge-case handling
-- PipeWire output: additional runtime safety checks
-- Mixer: improved channel handling
-
-### Engineering
-- `scripts/version-bump.sh`: automated version bumping across VERSION + Cargo.toml workspace
-- `docs/building.md`: build instructions for all platforms and feature flags
+#### Audio pipeline
+- Resampler: sinc interpolation, SIMD-friendly linear path
+- PipeWire: runtime safety, Mixer: channel handling
 - Release workflow gates on CI + version verification before publish and binary packaging
 
 ## 2026.3.16-1

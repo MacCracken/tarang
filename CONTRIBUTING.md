@@ -163,7 +163,7 @@ src/
 
 ## Versioning
 
-This project uses calendar versioning (`YYYY.M.D`). Version bumps are handled by
+This project uses semantic versioning (`MAJOR.MINOR.PATCH`). Version bumps are handled by
 maintainers using `scripts/version-bump.sh`. Contributors do **not** need to
 bump the version in their PRs.
 

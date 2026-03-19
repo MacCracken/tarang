@@ -334,7 +334,15 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
-        let size = (8 + data.len()) as u32;
+        let total = 8usize.checked_add(data.len()).ok_or_else(|| {
+            TarangError::Pipeline("box size overflow: data too large for u32".to_string())
+        })?;
+        if total > u32::MAX as usize {
+            return Err(TarangError::Pipeline(
+                "box size overflow: total size exceeds u32::MAX".to_string(),
+            ));
+        }
+        let size = total as u32;
         self.writer.write_all(&size.to_be_bytes()).map_err(io_err)?;
         self.writer.write_all(box_type).map_err(io_err)?;
         self.writer.write_all(data).map_err(io_err)?;
@@ -350,7 +358,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_moov(&self, mdat_offset: u64) -> Vec<u8> {
+    fn build_moov(&self, mdat_offset: u64) -> Result<Vec<u8>> {
         let mut moov = Vec::new();
 
         // mvhd
@@ -358,23 +366,25 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         write_sub_box(&mut moov, b"mvhd", &mvhd);
 
         // trak
-        let trak = self.build_trak(mdat_offset);
+        let trak = self.build_trak(mdat_offset)?;
         write_sub_box(&mut moov, b"trak", &trak);
 
-        moov
+        Ok(moov)
     }
 
     fn build_mvhd(&self) -> Vec<u8> {
         let num_samples = self.sample_sizes.len() as u64;
         let timescale = self.config.sample_rate;
-        let duration = num_samples * self.sample_delta as u64;
+        let duration = num_samples
+            .saturating_mul(self.sample_delta as u64)
+            .min(u32::MAX as u64) as u32;
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
         buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
         buf.extend_from_slice(&timescale.to_be_bytes());
-        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&duration.to_be_bytes());
         buf.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate = 1.0
         buf.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
         buf.extend_from_slice(&[0u8; 10]); // reserved
@@ -387,21 +397,23 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_trak(&self, mdat_offset: u64) -> Vec<u8> {
+    fn build_trak(&self, mdat_offset: u64) -> Result<Vec<u8>> {
         let mut trak = Vec::new();
 
         let tkhd = self.build_tkhd();
         write_sub_box(&mut trak, b"tkhd", &tkhd);
 
-        let mdia = self.build_mdia(mdat_offset);
+        let mdia = self.build_mdia(mdat_offset)?;
         write_sub_box(&mut trak, b"mdia", &mdia);
 
-        trak
+        Ok(trak)
     }
 
     fn build_tkhd(&self) -> Vec<u8> {
         let num_samples = self.sample_sizes.len() as u64;
-        let duration = num_samples * self.sample_delta as u64;
+        let duration = num_samples
+            .saturating_mul(self.sample_delta as u64)
+            .min(u32::MAX as u64) as u32;
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&0x00000003u32.to_be_bytes()); // version 0 + flags (enabled+in_movie)
@@ -409,7 +421,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
         buf.extend_from_slice(&1u32.to_be_bytes()); // track_id
         buf.extend_from_slice(&0u32.to_be_bytes()); // reserved
-        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&duration.to_be_bytes());
         buf.extend_from_slice(&[0u8; 8]); // reserved
         buf.extend_from_slice(&0u16.to_be_bytes()); // layer
         buf.extend_from_slice(&0u16.to_be_bytes()); // alternate_group
@@ -424,7 +436,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_mdia(&self, mdat_offset: u64) -> Vec<u8> {
+    fn build_mdia(&self, mdat_offset: u64) -> Result<Vec<u8>> {
         let mut mdia = Vec::new();
 
         let mdhd = self.build_mdhd();
@@ -433,23 +445,25 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let hdlr = self.build_hdlr();
         write_sub_box(&mut mdia, b"hdlr", &hdlr);
 
-        let minf = self.build_minf(mdat_offset);
+        let minf = self.build_minf(mdat_offset)?;
         write_sub_box(&mut mdia, b"minf", &minf);
 
-        mdia
+        Ok(mdia)
     }
 
     fn build_mdhd(&self) -> Vec<u8> {
         let num_samples = self.sample_sizes.len() as u64;
         let timescale = self.config.sample_rate;
-        let duration = num_samples * self.sample_delta as u64;
+        let duration = num_samples
+            .saturating_mul(self.sample_delta as u64)
+            .min(u32::MAX as u64) as u32;
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
         buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
         buf.extend_from_slice(&timescale.to_be_bytes());
-        buf.extend_from_slice(&(duration as u32).to_be_bytes());
+        buf.extend_from_slice(&duration.to_be_bytes());
         buf.extend_from_slice(&0x55C40000u32.to_be_bytes()); // language 'und' + pre_defined
         buf
     }
@@ -464,7 +478,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_minf(&self, mdat_offset: u64) -> Vec<u8> {
+    fn build_minf(&self, mdat_offset: u64) -> Result<Vec<u8>> {
         let mut minf = Vec::new();
 
         // smhd (sound media header)
@@ -486,13 +500,13 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         write_sub_box(&mut dinf, b"dref", &dref);
         write_sub_box(&mut minf, b"dinf", &dinf);
 
-        let stbl = self.build_stbl(mdat_offset);
+        let stbl = self.build_stbl(mdat_offset)?;
         write_sub_box(&mut minf, b"stbl", &stbl);
 
-        minf
+        Ok(minf)
     }
 
-    fn build_stbl(&self, mdat_offset: u64) -> Vec<u8> {
+    fn build_stbl(&self, mdat_offset: u64) -> Result<Vec<u8>> {
         let mut stbl = Vec::new();
 
         let stsd = self.build_stsd();
@@ -509,10 +523,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
         // mdat data starts at mdat_offset + 8 (box header)
         let data_start = mdat_offset + 8;
-        let stco = self.build_stco(data_start);
+        let stco = self.build_stco(data_start)?;
         write_sub_box(&mut stbl, b"stco", &stco);
 
-        stbl
+        Ok(stbl)
     }
 
     fn build_stsd(&self) -> Vec<u8> {
@@ -566,10 +580,17 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
 
+        // Guard: no samples — emit an empty variable-size stsz (default_sample_size=0, count=0)
+        if self.sample_sizes.is_empty() {
+            buf.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size = 0
+            buf.extend_from_slice(&0u32.to_be_bytes()); // sample_count = 0
+            return buf;
+        }
+
         // Check if all samples are the same size
         let all_same = self.sample_sizes.windows(2).all(|w| w[0] == w[1]);
 
-        if all_same && !self.sample_sizes.is_empty() {
+        if all_same {
             buf.extend_from_slice(&self.sample_sizes[0].to_be_bytes());
             buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes());
         } else {
@@ -582,12 +603,18 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_stco(&self, data_start: u64) -> Vec<u8> {
+    fn build_stco(&self, data_start: u64) -> Result<Vec<u8>> {
+        if data_start > u32::MAX as u64 {
+            return Err(TarangError::Pipeline(format!(
+                "stco offset overflow: mdat data offset {data_start} exceeds u32::MAX; \
+                 file is too large for a 32-bit chunk-offset box (stco)"
+            )));
+        }
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
         buf.extend_from_slice(&(data_start as u32).to_be_bytes());
-        buf
+        Ok(buf)
     }
 }
 
@@ -631,7 +658,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
             .map_err(io_err)?;
 
         // Write moov box
-        let moov_data = self.build_moov(self.mdat_offset);
+        let moov_data = self.build_moov(self.mdat_offset)?;
         self.write_box(b"moov", &moov_data)?;
 
         self.writer.flush().map_err(io_err)?;

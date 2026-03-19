@@ -37,8 +37,13 @@ pub(crate) fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
 ///
 /// This is always safe — f32 has no invalid bit patterns.
 pub(crate) fn f32_to_bytes(samples: &[f32]) -> &[u8] {
+    let byte_len = samples.len().checked_mul(4).unwrap_or(0);
+    if byte_len == 0 {
+        return &[];
+    }
     // Safety: f32 is Pod-like — every bit pattern is valid when read as u8.
-    unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) }
+    // byte_len is validated above via checked_mul.
+    unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, byte_len) }
 }
 
 /// Create an `AudioBuffer` from f32 samples (test utility, available to all audio test modules).

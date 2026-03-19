@@ -9,11 +9,7 @@
 ## Engineering Backlog
 
 ### Testing
-- [ ] Code review and audit pass — review all changes from 2026-03-19 refactor session (main.rs modularization, safety fixes, shared utilities, performance optimizations, FLAC LPC, Mp4Muxer streaming, SIMD resampler) for correctness, edge cases, and regressions
 - [ ] FLAC encoder validation — decode FLAC output with symphonia or an external decoder to verify bitstream correctness for fixed prediction orders 1-4, Rice coding, and CRC checksums
 - [ ] Expand FLAC test coverage — test 24-bit encoding, multi-block files, edge cases (single-sample blocks, max-amplitude signals, DC offset), verify compression ratio on real audio
 - [ ] Mp4Muxer streaming write regression tests — verify large file handling (>4GB mdat), seek-back patching correctness, and roundtrip with Mp4Demuxer after the streaming refactor
 - [ ] Resampler accuracy tests — compare SIMD-optimized linear resampler output against reference (pre-optimization) output to verify bit-exact equivalence
-
-### Features
-- [x] **tarang-audio/encode_flac**: Linear LPC prediction (Levinson-Durbin) — autocorrelation, Levinson-Durbin coefficient computation, quantization, LPC orders 1-8 tried alongside fixed 0-4, best method selected per channel *(done 2026-03-19)*

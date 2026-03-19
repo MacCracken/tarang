@@ -265,10 +265,10 @@ pub struct AudioBuffer {
 /// Compute the byte size of a YUV420p frame with the given dimensions.
 /// Uses ceiling division for chroma planes (correct for odd sizes).
 pub fn yuv420p_frame_size(width: u32, height: u32) -> usize {
-    let y_size = (width as usize) * (height as usize);
+    let y_size = (width as usize).checked_mul(height as usize).unwrap_or(0);
     let chroma_w = (width as usize).div_ceil(2);
     let chroma_h = (height as usize).div_ceil(2);
-    y_size + 2 * chroma_w * chroma_h
+    y_size.saturating_add(2_usize.saturating_mul(chroma_w).saturating_mul(chroma_h))
 }
 
 /// Validate video encoder dimensions (must be non-zero and even).

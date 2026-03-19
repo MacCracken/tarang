@@ -18,10 +18,15 @@ const LUMA_B: f64 = 0.114;
 pub fn extract_luminance(frame: &VideoFrame) -> Vec<u8> {
     match frame.pixel_format {
         PixelFormat::Yuv420p | PixelFormat::Yuv422p | PixelFormat::Yuv444p | PixelFormat::Nv12 => {
-            let y_size = (frame.width * frame.height) as usize;
+            let y_size = (frame.width as usize)
+                .checked_mul(frame.height as usize)
+                .unwrap_or(0);
             frame.data[..y_size.min(frame.data.len())].to_vec()
         }
         PixelFormat::Rgb24 => {
+            if !frame.data.len().is_multiple_of(3) {
+                return Vec::new();
+            }
             let pixels = frame.data.len() / 3;
             (0..pixels)
                 .map(|i| {
@@ -33,6 +38,9 @@ pub fn extract_luminance(frame: &VideoFrame) -> Vec<u8> {
                 .collect()
         }
         PixelFormat::Rgba32 => {
+            if !frame.data.len().is_multiple_of(4) {
+                return Vec::new();
+            }
             let pixels = frame.data.len() / 4;
             (0..pixels)
                 .map(|i| {

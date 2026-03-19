@@ -47,12 +47,12 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     // compiler can auto-vectorize the inner interpolation loops.
     let mut idx0s = Vec::with_capacity(dst_frames);
     let mut idx1s = Vec::with_capacity(dst_frames);
-    let mut fracs = Vec::with_capacity(dst_frames);
+    let mut fracs: Vec<f64> = Vec::with_capacity(dst_frames);
 
     for frame in 0..dst_frames {
         let src_pos = frame as f64 / ratio;
         let src_idx = src_pos as usize;
-        let frac = (src_pos - src_idx as f64) as f32;
+        let frac = src_pos - src_idx as f64;
         idx0s.push(src_idx.min(src_frames - 1));
         idx1s.push((src_idx + 1).min(src_frames - 1));
         fracs.push(frac);
@@ -66,19 +66,19 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
             for k in 0..4 {
                 let frame = base + k;
                 let s0 = src[idx0s[frame]];
-                dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
+                dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame] as f32;
             }
         }
         for frame in (chunks * 4)..dst_frames {
             let s0 = src[idx0s[frame]];
-            dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
+            dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame] as f32;
         }
     } else if ch == 2 {
         // Stereo fast path: process both channels per frame together
         for frame in 0..dst_frames {
             let i0 = idx0s[frame] * 2;
             let i1 = idx1s[frame] * 2;
-            let f = fracs[frame];
+            let f = fracs[frame] as f32;
             let s0l = src[i0];
             let s0r = src[i0 + 1];
             dst[frame * 2] = s0l + (src[i1] - s0l) * f;
@@ -89,7 +89,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         for frame in 0..dst_frames {
             let i0 = idx0s[frame];
             let i1 = idx1s[frame];
-            let f = fracs[frame];
+            let f = fracs[frame] as f32;
             for c in 0..ch {
                 let s0 = src[i0 * ch + c];
                 dst[frame * ch + c] = s0 + (src[i1 * ch + c] - s0) * f;
@@ -128,6 +128,11 @@ pub fn resample_sinc(
     }
     if buf.sample_rate == 0 || buf.channels == 0 || buf.num_samples == 0 {
         return Err(TarangError::Pipeline("invalid source buffer".to_string()));
+    }
+    if window_size == 0 || window_size > 1024 {
+        return Err(TarangError::Pipeline(
+            "window_size must be between 1 and 1024".to_string(),
+        ));
     }
     if buf.sample_rate == target_rate {
         return Ok(AudioBuffer {
@@ -199,6 +204,9 @@ pub fn resample_sinc(
                     continue;
                 }
                 let i = lut_src_indices[base + tap];
+                if i < 0 || i >= src_frames as i64 {
+                    continue;
+                }
                 sum += src[i as usize * ch + c] as f64 * w;
             }
 

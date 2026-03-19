@@ -211,7 +211,8 @@ fn lpc_residuals(samples: &[i32], coeffs: &[i32], order: usize, shift: i32) -> V
     for i in order..samples.len() {
         let mut predicted: i64 = 0;
         for j in 0..order {
-            predicted += coeffs[j] as i64 * samples[i - 1 - j] as i64;
+            predicted = predicted
+                .saturating_add((coeffs[j] as i64).saturating_mul(samples[i - 1 - j] as i64));
         }
         predicted >>= shift;
         residuals.push(samples[i] - predicted as i32);
@@ -251,15 +252,21 @@ fn fixed_residuals(samples: &[i32], order: usize) -> Vec<i32> {
         let predicted = match order {
             0 => 0i64,
             1 => samples[i - 1] as i64,
-            2 => 2 * samples[i - 1] as i64 - samples[i - 2] as i64,
-            3 => 3 * samples[i - 1] as i64 - 3 * samples[i - 2] as i64 + samples[i - 3] as i64,
-            4 => {
-                4 * samples[i - 1] as i64 - 6 * samples[i - 2] as i64 + 4 * samples[i - 3] as i64
-                    - samples[i - 4] as i64
-            }
+            2 => (2i64)
+                .saturating_mul(samples[i - 1] as i64)
+                .saturating_sub(samples[i - 2] as i64),
+            3 => (3i64)
+                .saturating_mul(samples[i - 1] as i64)
+                .saturating_sub((3i64).saturating_mul(samples[i - 2] as i64))
+                .saturating_add(samples[i - 3] as i64),
+            4 => (4i64)
+                .saturating_mul(samples[i - 1] as i64)
+                .saturating_sub((6i64).saturating_mul(samples[i - 2] as i64))
+                .saturating_add((4i64).saturating_mul(samples[i - 3] as i64))
+                .saturating_sub(samples[i - 4] as i64),
             _ => 0,
         };
-        residuals.push((samples[i] as i64 - predicted) as i32);
+        residuals.push((samples[i] as i64).saturating_sub(predicted) as i32);
     }
     residuals
 }
@@ -483,7 +490,7 @@ impl FlacEncoder {
 
             // Try fixed orders 0-4
             for order in 0..=4 {
-                if num_frames <= order {
+                if num_frames <= order + 1 {
                     continue;
                 }
                 let res = fixed_residuals(&channel_samples, order);
@@ -662,6 +669,11 @@ impl FlacEncoder {
 
 impl AudioEncoder for FlacEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
+        if self.channels > 8 {
+            return Err(TarangError::UnsupportedCodec(
+                "FLAC supports max 8 channels".to_string(),
+            ));
+        }
         let float_samples = bytes_to_f32(&buf.data);
         let num_frames = buf.num_samples;
         let ch = self.channels as usize;

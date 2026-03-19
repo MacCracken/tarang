@@ -11,6 +11,9 @@ use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 /// For multi-channel buffers, only the first channel is extracted.
 /// Supports F32 and I16 input formats.
 pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
+    if buf.channels == 0 {
+        return Err(TarangError::DecodeError("zero channels".into()));
+    }
     let channels = buf.channels as usize;
     match buf.sample_format {
         SampleFormat::F32 => {
@@ -18,7 +21,10 @@ pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
             let num_samples = total_values / channels;
             let mut mono = Vec::with_capacity(num_samples);
             for i in 0..num_samples {
-                let offset = i * channels * 4;
+                let offset = match i.checked_mul(channels).and_then(|v| v.checked_mul(4)) {
+                    Some(o) => o,
+                    None => continue,
+                };
                 if offset + 4 <= buf.data.len() {
                     let sample = f32::from_le_bytes([
                         buf.data[offset],
@@ -36,10 +42,13 @@ pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
             let num_samples = total_values / channels;
             let mut mono = Vec::with_capacity(num_samples);
             for i in 0..num_samples {
-                let offset = i * channels * 2;
+                let offset = match i.checked_mul(channels).and_then(|v| v.checked_mul(2)) {
+                    Some(o) => o,
+                    None => continue,
+                };
                 if offset + 2 <= buf.data.len() {
                     let sample = i16::from_le_bytes([buf.data[offset], buf.data[offset + 1]]);
-                    mono.push(sample as f32 / 32768.0);
+                    mono.push(sample as f32 / 32767.0);
                 }
             }
             Ok(mono)
@@ -100,9 +109,9 @@ mod tests {
 
     #[test]
     fn i16_mono_conversion() {
-        // i16 max (32767) -> ~0.99997
+        // i16 max (32767) -> 1.0 (exact with 32767.0 divisor)
         // i16 0 -> 0.0
-        // i16 -32768 -> -1.0
+        // i16 -32768 -> slightly below -1.0
         let samples: Vec<i16> = vec![0, 32767, -32768];
         let mut data = Vec::new();
         for s in &samples {
@@ -112,8 +121,8 @@ mod tests {
         let mono = extract_mono_f32(&buf).unwrap();
         assert_eq!(mono.len(), 3);
         assert_eq!(mono[0], 0.0);
-        assert!((mono[1] - 32767.0 / 32768.0).abs() < 1e-5);
-        assert_eq!(mono[2], -1.0);
+        assert!((mono[1] - 1.0).abs() < 1e-5);
+        assert!((mono[2] - (-32768.0 / 32767.0)).abs() < 1e-5);
     }
 
     #[test]
@@ -127,8 +136,8 @@ mod tests {
         let buf = make_audio(SampleFormat::I16, 2, data);
         let mono = extract_mono_f32(&buf).unwrap();
         assert_eq!(mono.len(), 2);
-        assert!((mono[0] - 16384.0 / 32768.0).abs() < 1e-5);
-        assert!((mono[1] - 8192.0 / 32768.0).abs() < 1e-5);
+        assert!((mono[0] - 16384.0 / 32767.0).abs() < 1e-5);
+        assert!((mono[1] - 8192.0 / 32767.0).abs() < 1e-5);
     }
 
     #[test]
