@@ -1,62 +1,71 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/tarang-core",
-    "crates/tarang-demux",
-    "crates/tarang-audio",
-    "crates/tarang-video",
-    "crates/tarang-ai",
-]
-
-[workspace.package]
-version = "2026.3.18"
+[package]
+name = "tarang"
+version = "2026.3.19"
 edition = "2024"
+rust-version = "1.89"
 license = "GPL-3.0"
+description = "AI-native Rust media framework — container parsing, audio/video decoding, codec bindings, media analysis"
+homepage = "https://github.com/MacCracken/tarang"
+repository = "https://github.com/MacCracken/tarang"
+readme = "README.md"
+keywords = ["media", "audio", "video", "codec", "demux"]
+categories = ["multimedia", "multimedia::audio", "multimedia::video"]
 
-[workspace.dependencies]
+[features]
+default = []
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "pipewire", "opus-enc", "aac-enc"]
+# Video
+dav1d = ["dep:dav1d"]
+vpx = ["dep:env-libvpx-sys"]
+vpx-enc = ["dep:env-libvpx-sys"]
+rav1e = ["dep:rav1e"]
+openh264 = ["dep:openh264"]
+openh264-enc = ["dep:openh264"]
+vaapi = ["dep:cros-libva"]
+# Audio
+pipewire = ["dep:pipewire"]
+opus-enc = ["dep:opus"]
+aac-enc = ["dep:fdk-aac"]
+
+[dependencies]
+# Core
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "io-std"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 anyhow = "1"
+bytes = "1"
+
+# Async / networking
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "io-util", "io-std"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "multipart"] }
+
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
 clap = { version = "4", features = ["derive"] }
+
+# Audio decoding (pure Rust)
 symphonia = { version = "0.5", features = ["all"] }
-bytes = "1"
-pipewire = "0.9"
-opus = "0.3"
-fdk-aac = "0.8"
-dav1d = "0.11"
-env-libvpx-sys = { version = "5.1", features = ["generate"] }
-rav1e = { version = "0.8", features = ["asm"] }
-openh264 = "0.9"
-cros-libva = "0.0.13"
+
+# AI / analysis
 rustfft = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
-[package]
-name = "tarang"
-version.workspace = true
-edition.workspace = true
-description = "AI-native Rust media framework for AGNOS — container parsing, audio/video decoding, media pipeline"
-license.workspace = true
+# Optional audio encoders
+pipewire = { version = "0.9", optional = true }
+opus = { version = "0.3", optional = true }
+fdk-aac = { version = "0.8", optional = true }
 
-[dependencies]
-tarang-core = { path = "crates/tarang-core" }
-tarang-demux = { path = "crates/tarang-demux" }
-tarang-audio = { path = "crates/tarang-audio" }
-tarang-video = { path = "crates/tarang-video" }
-tarang-ai = { path = "crates/tarang-ai" }
-clap = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-anyhow = { workspace = true }
-serde_json = { workspace = true }
+# Optional video codecs
+dav1d = { version = "0.11", optional = true }
+env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
+rav1e = { version = "0.8", features = ["asm"], optional = true }
+openh264 = { version = "0.9", optional = true }
+cros-libva = { version = "0.0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::fs::File;
-use tarang_core::MediaInfo;
+use tarang::core::MediaInfo;
 
 /// Build an MCP error response.
 pub fn error_response(msg: impl std::fmt::Display) -> Value {
@@ -25,7 +25,7 @@ pub fn require_path(args: &Value) -> Result<&str, Value> {
 pub fn open_and_probe(path: &str) -> Result<(File, MediaInfo), Value> {
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
     let info =
-        tarang_audio::probe_audio(file).map_err(|e| error_response(format!("probe error: {e}")))?;
+        tarang::audio::probe_audio(file).map_err(|e| error_response(format!("probe error: {e}")))?;
     // Re-open so callers can still use the file if needed (probe consumed the first handle)
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
     Ok((file, info))
@@ -52,18 +52,18 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             };
             match open_and_probe(path) {
                 Ok((_file, info)) => {
-                    let analysis = tarang_ai::analyze_media(&info);
+                    let analysis = tarang::ai::analyze_media(&info);
                     success_response(serde_json::to_string_pretty(&analysis).unwrap_or_default())
                 }
                 Err(e) => e,
             }
         }
         "tarang_codecs" => {
-            let audio: Vec<String> = tarang_audio::supported_codecs()
+            let audio: Vec<String> = tarang::audio::supported_codecs()
                 .iter()
                 .map(|c| c.to_string())
                 .collect();
-            let video: Vec<String> = tarang_video::supported_codecs()
+            let video: Vec<String> = tarang::video::supported_codecs()
                 .iter()
                 .map(|(c, b)| format!("{c} ({b})"))
                 .collect();
@@ -80,7 +80,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             };
             let lang = args["language"].as_str().map(String::from);
             match open_and_probe(path) {
-                Ok((_file, info)) => match tarang_ai::prepare_transcription(&info, lang) {
+                Ok((_file, info)) => match tarang::ai::prepare_transcription(&info, lang) {
                     Some(req) => {
                         success_response(serde_json::to_string_pretty(&req).unwrap_or_default())
                     }
@@ -97,7 +97,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             match std::fs::read(path) {
                 Ok(data) => {
                     let header = &data[..data.len().min(32)];
-                    match tarang_core::ContainerFormat::from_magic(header) {
+                    match tarang::core::ContainerFormat::from_magic(header) {
                         Some(fmt) => success_response(format!(
                             "Detected: {fmt} (extensions: {})",
                             fmt.extensions().join(", ")
@@ -129,21 +129,21 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             // Decode audio and compute fingerprint
-            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path))
+            let buffer = match tarang::audio::FileDecoder::open_path(std::path::Path::new(path))
                 .and_then(|mut d| d.decode_all())
             {
                 Ok(b) => b,
                 Err(e) => return error_response(format!("decode error: {e}")),
             };
 
-            let config = tarang_ai::FingerprintConfig::default();
-            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
+            let config = tarang::ai::FingerprintConfig::default();
+            let fingerprint = match tarang::ai::compute_fingerprint(&buffer, &config) {
                 Ok(fp) => fp,
                 Err(e) => return error_response(format!("fingerprint error: {e}")),
             };
 
-            let analysis = tarang_ai::analyze_media(&info);
-            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
+            let analysis = tarang::ai::analyze_media(&info);
+            let daimon = match tarang::ai::DaimonClient::new(tarang::ai::DaimonConfig::default()) {
                 Ok(c) => c,
                 Err(e) => return error_response(format!("daimon client error: {e}")),
             };
@@ -186,20 +186,20 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
             let top_k = args["top_k"].as_u64().unwrap_or(5) as usize;
 
-            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path))
+            let buffer = match tarang::audio::FileDecoder::open_path(std::path::Path::new(path))
                 .and_then(|mut d| d.decode_all())
             {
                 Ok(b) => b,
                 Err(e) => return error_response(format!("decode error: {e}")),
             };
 
-            let config = tarang_ai::FingerprintConfig::default();
-            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
+            let config = tarang::ai::FingerprintConfig::default();
+            let fingerprint = match tarang::ai::compute_fingerprint(&buffer, &config) {
                 Ok(fp) => fp,
                 Err(e) => return error_response(format!("fingerprint error: {e}")),
             };
 
-            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
+            let daimon = match tarang::ai::DaimonClient::new(tarang::ai::DaimonConfig::default()) {
                 Ok(c) => c,
                 Err(e) => return error_response(format!("daimon client error: {e}")),
             };
@@ -221,8 +221,8 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
                 Err(e) => return e,
             };
 
-            let analysis = tarang_ai::analyze_media(&info);
-            let hoosh = match tarang_ai::HooshLlmClient::new(tarang_ai::HooshLlmConfig::default()) {
+            let analysis = tarang::ai::analyze_media(&info);
+            let hoosh = match tarang::ai::HooshLlmClient::new(tarang::ai::HooshLlmConfig::default()) {
                 Ok(c) => c,
                 Err(e) => return error_response(format!("hoosh client error: {e}")),
             };

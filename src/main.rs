@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 
 fn cmd_probe(path: &str) -> Result<()> {
     let file = std::fs::File::open(path)?;
-    let info = tarang_audio::probe_audio(file)?;
+    let info = tarang::audio::probe_audio(file)?;
 
     println!("Format:   {}", info.format);
     if let Some(d) = info.duration {
@@ -74,19 +74,19 @@ fn cmd_probe(path: &str) -> Result<()> {
 
     for (i, stream) in info.streams.iter().enumerate() {
         match stream {
-            tarang_core::StreamInfo::Audio(a) => {
+            tarang::core::StreamInfo::Audio(a) => {
                 println!(
                     "  [{}] Audio: {} {}Hz {}ch",
                     i, a.codec, a.sample_rate, a.channels
                 );
             }
-            tarang_core::StreamInfo::Video(v) => {
+            tarang::core::StreamInfo::Video(v) => {
                 println!(
                     "  [{}] Video: {} {}x{} {:.1}fps",
                     i, v.codec, v.width, v.height, v.frame_rate
                 );
             }
-            tarang_core::StreamInfo::Subtitle { language } => {
+            tarang::core::StreamInfo::Subtitle { language } => {
                 println!(
                     "  [{}] Subtitle: {}",
                     i,
@@ -101,8 +101,8 @@ fn cmd_probe(path: &str) -> Result<()> {
 
 fn cmd_analyze(path: &str) -> Result<()> {
     let file = std::fs::File::open(path)?;
-    let info = tarang_audio::probe_audio(file)?;
-    let analysis = tarang_ai::analyze_media(&info);
+    let info = tarang::audio::probe_audio(file)?;
+    let analysis = tarang::ai::analyze_media(&info);
 
     println!("Content type: {}", analysis.content_type);
     println!("Quality:      {:.0}/100", analysis.quality_score);
@@ -117,12 +117,12 @@ fn cmd_analyze(path: &str) -> Result<()> {
 
 fn cmd_codecs() {
     println!("Audio codecs (pure Rust via symphonia):");
-    for codec in tarang_audio::supported_codecs() {
+    for codec in tarang::audio::supported_codecs() {
         println!("  {codec}");
     }
     println!();
     println!("Video codecs (C FFI backends):");
-    for (codec, backend) in tarang_video::supported_codecs() {
+    for (codec, backend) in tarang::video::supported_codecs() {
         println!("  {codec} — {backend}");
     }
 }

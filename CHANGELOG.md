@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026.3.19
+
+Crates.io publishing, FLAC compression, EBML parser, MCP extraction, backlog cleanup.
+
+### crates.io publishing
+- Workspace crates now publishable to crates.io in dependency order
+- Internal path dependencies carry version constraints for registry resolution
+- Release workflow: version verification (VERSION + Cargo.toml + git tag) before publish
+- `cargo publish --dry-run` supported for pre-release validation
+
+### FLAC encoding (`encode_flac.rs`)
+- Full pure-Rust FLAC encoder: fixed-predictor selection, residual Rice coding, MD5 checksumming
+- Stereo decorrelation (independent, mid-side, left-side, right-side) with automatic mode selection
+- Configurable compression level, block size, and bit depth (16/24)
+- STREAMINFO, PADDING, and SEEKTABLE metadata block generation
+
+### EBML parser (`ebml.rs`)
+- Generic EBML element parser for MKV/WebM containers
+- Variable-width integer (VINT) decoding, element tree traversal
+- Used by MKV demuxer for more robust container parsing
+
+### MCP server extraction
+- Extracted MCP server from monolithic `main.rs` into `src/mcp/` module
+- `mcp/mod.rs`: server lifecycle, JSON-RPC dispatch
+- `mcp/tools.rs`: tool implementations (probe, analyze, codecs, transcribe, formats)
+
+### AI module improvements
+- `audio_utils.rs` / `video_utils.rs`: shared preprocessing helpers extracted from AI features
+- Daimon client: full implementation for LLM-powered media analysis
+- Scene detector: improved transition thresholds and debouncing
+- Thumbnail generator: better frame scoring heuristics
+
+### Codec & demuxer fixes
+- MP4: improved box parsing with better size validation
+- MKV: SimpleBlock parsing hardened against malformed input
+- OGG: seek and CRC improvements
+- rav1e encoder: expanded configuration options and validation
+- dav1d decoder: improved plane stride handling
+- AAC/Opus encoders: additional safety checks on truncated buffers
+
+### Audio pipeline
+- Resampler: expanded interpolation and edge-case handling
+- PipeWire output: additional runtime safety checks
+- Mixer: improved channel handling
+
+### Engineering
+- `scripts/version-bump.sh`: automated version bumping across VERSION + Cargo.toml workspace
+- `docs/building.md`: build instructions for all platforms and feature flags
+- Release workflow gates on CI + version verification before publish and binary packaging
+
 ## 2026.3.16-1
 
 F3 AI features — all four items complete. Security audit, bug fixes, and test coverage hardening.

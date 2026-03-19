@@ -6,10 +6,11 @@ set -euo pipefail
 #
 # Updates the version in all locations:
 #   - VERSION (source of truth, read by CI/CD)
-#   - Cargo.toml workspace version
+#   - Cargo.toml package version
 #
 # After running, commit and tag:
-#   git add -A && git commit -m "bump to $VERSION"
+#   git add VERSION Cargo.toml Cargo.lock
+#   git commit -m "bump to $VERSION"
 #   git tag $VERSION && git push && git push --tags
 
 if [ $# -ne 1 ]; then
@@ -31,15 +32,15 @@ fi
 
 echo "Bumping $OLD_VERSION -> $NEW_VERSION"
 
-# 1. VERSION file (source of truth for CI/CD artifact naming)
+# 1. VERSION file (source of truth for CI/CD)
 printf '%s\n' "$NEW_VERSION" > "$ROOT/VERSION"
 echo "  updated VERSION"
 
-# 2. Cargo.toml workspace version
+# 2. Cargo.toml package version
 sed -i "s/^version = \"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" "$ROOT/Cargo.toml"
 echo "  updated Cargo.toml"
 
-# 3. Verify Cargo.lock updates
+# 3. Regenerate Cargo.lock
 cd "$ROOT"
 cargo generate-lockfile --quiet 2>/dev/null || true
 echo "  updated Cargo.lock"
