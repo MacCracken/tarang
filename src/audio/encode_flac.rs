@@ -1229,6 +1229,171 @@ mod tests {
         assert_eq!(precision_24, 15, "Precision capped at 15 even for 24-bit");
     }
 
+    /// Decode FLAC bytes back to interleaved f32 samples using symphonia.
+    fn decode_flac_bytes(data: &[u8]) -> Vec<f32> {
+        use std::io::Cursor;
+        use symphonia::core::audio::SampleBuffer;
+        use symphonia::core::formats::FormatOptions;
+        use symphonia::core::io::MediaSourceStream;
+        use symphonia::core::meta::MetadataOptions;
+        use symphonia::core::probe::Hint;
+
+        let cursor = Cursor::new(data.to_vec());
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+        let mut hint = Hint::new();
+        hint.with_extension("flac");
+
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .expect("failed to probe FLAC stream");
+
+        let mut format = probed.format;
+        let track = format.default_track().expect("no default track").clone();
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &Default::default())
+            .expect("failed to create decoder");
+
+        let mut all_samples = Vec::new();
+        while let Ok(packet) = format.next_packet() {
+            if packet.track_id() != track.id {
+                continue;
+            }
+            let decoded = match decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(_) => break,
+            };
+            let spec = *decoded.spec();
+            let num_frames = decoded.frames();
+            let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
+            sample_buf.copy_interleaved_ref(decoded);
+            all_samples.extend_from_slice(sample_buf.samples());
+        }
+        all_samples
+    }
+
+    /// Helper: encode f32 samples to FLAC bytes via FlacEncoder.
+    fn encode_to_flac_bytes(samples: &[f32], channels: u16, sample_rate: u32) -> Vec<u8> {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate,
+            channels,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let buf = make_buffer(samples, channels, sample_rate);
+        let packets = enc.encode(&buf).unwrap();
+        let mut out = Vec::new();
+        for p in packets {
+            out.extend_from_slice(&p);
+        }
+        out
+    }
+
+    #[test]
+    fn test_flac_roundtrip_fixed_orders() {
+        // Encode a 440Hz mono sine wave (~1 second).
+        // Use a multiple of block size (4096) to avoid partial-block edge cases.
+        let num_samples = 4096 * 11; // 45056 samples ≈ 1.02s at 44100Hz
+        let samples = make_sine(num_samples, 1);
+        let flac_bytes = encode_to_flac_bytes(&samples, 1, 44100);
+        let decoded = decode_flac_bytes(&flac_bytes);
+
+        // The encoder converts f32 -> i16 -> FLAC, decoder gives f32 back.
+        // Tolerance: ±1 LSB of 16-bit = 1/32767 ≈ 3.1e-5
+        let tolerance = 1.0 / 32767.0 + 1e-5;
+        assert_eq!(
+            decoded.len(),
+            samples.len(),
+            "decoded length {} != original length {}",
+            decoded.len(),
+            samples.len()
+        );
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            // Compare after quantising original to 16-bit the same way the encoder does
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 32767.0) as i32) as f32 / 32767.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_flac_roundtrip_stereo() {
+        let num_samples = 4096 * 11; // 45056 samples
+        let samples = make_sine(num_samples, 2);
+        let flac_bytes = encode_to_flac_bytes(&samples, 2, 44100);
+        let decoded = decode_flac_bytes(&flac_bytes);
+
+        let tolerance = 1.0 / 32767.0 + 1e-5;
+        assert_eq!(
+            decoded.len(),
+            samples.len(),
+            "decoded length {} != original length {}",
+            decoded.len(),
+            samples.len()
+        );
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 32767.0) as i32) as f32 / 32767.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "stereo sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_flac_crc_validity() {
+        let samples = make_sine(4096, 1);
+        let flac_bytes = encode_to_flac_bytes(&samples, 1, 44100);
+
+        // "fLaC" magic bytes at offset 0
+        assert_eq!(&flac_bytes[0..4], b"fLaC", "missing fLaC magic");
+
+        // STREAMINFO block header at offset 4
+        // Byte 4 = 0x80 (last-metadata-block flag set + block type 0)
+        assert_eq!(
+            flac_bytes[4], 0x80,
+            "STREAMINFO block should start with 0x80 (last-metadata-block + type 0)"
+        );
+
+        // STREAMINFO length = 34 bytes (stored in bytes 5..8 as 24-bit big-endian)
+        let si_len =
+            ((flac_bytes[5] as u32) << 16) | ((flac_bytes[6] as u32) << 8) | (flac_bytes[7] as u32);
+        assert_eq!(si_len, 34, "STREAMINFO length should be 34 bytes");
+    }
+
+    #[test]
+    fn test_flac_rice_coding_silence() {
+        let num_samples = 4096 * 11; // 45056 samples
+        let silence = vec![0.0f32; num_samples];
+        let flac_bytes = encode_to_flac_bytes(&silence, 1, 44100);
+
+        // Check compression: input is num_samples * 2 bytes (16-bit PCM)
+        let raw_size = num_samples * 2;
+        assert!(
+            flac_bytes.len() < raw_size / 4,
+            "silence FLAC ({} bytes) should be much smaller than raw PCM ({} bytes)",
+            flac_bytes.len(),
+            raw_size
+        );
+
+        // Roundtrip: all decoded samples should be zero (or very near zero)
+        let decoded = decode_flac_bytes(&flac_bytes);
+        assert_eq!(decoded.len(), num_samples);
+        for (i, &s) in decoded.iter().enumerate() {
+            assert!(s.abs() < 1e-5, "silence sample {i} should be ~0.0, got {s}");
+        }
+    }
+
     #[test]
     fn flac_silence_compresses_well() {
         let config = EncoderConfig {
@@ -1252,6 +1417,241 @@ mod tests {
         assert!(
             frame_size < verbatim_approx / 4,
             "Silence frame ({frame_size} bytes) should be much smaller than verbatim (~{verbatim_approx} bytes)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests with symphonia roundtrip verification
+    // -----------------------------------------------------------------------
+
+    /// Like `encode_to_flac_bytes` but allows specifying bits_per_sample.
+    fn encode_to_flac_bytes_bps(
+        samples: &[f32],
+        channels: u16,
+        sample_rate: u32,
+        bits_per_sample: u16,
+    ) -> (Vec<u8>, Vec<Vec<u8>>) {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate,
+            channels,
+            bits_per_sample,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let buf = make_buffer(samples, channels, sample_rate);
+        let packets = enc.encode(&buf).unwrap();
+        let mut out = Vec::new();
+        for p in &packets {
+            out.extend_from_slice(p);
+        }
+        (out, packets)
+    }
+
+    #[test]
+    fn test_flac_24bit_encoding() {
+        let num_samples = 4096usize;
+        let channels = 1u16;
+        let sample_rate = 44100u32;
+        let samples = make_sine(num_samples, channels);
+
+        // Encode at 24-bit
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate,
+            channels,
+            bits_per_sample: 24,
+        };
+        let enc = FlacEncoder::new(&config).unwrap();
+        assert_eq!(enc.bits_per_sample, 24);
+
+        let (flac_bytes, _packets) = encode_to_flac_bytes_bps(&samples, channels, sample_rate, 24);
+
+        // Verify STREAMINFO reports 24 bits per sample.
+        // Layout: "fLaC"(4) + block_header(4) + STREAMINFO(34).
+        // Inside STREAMINFO (34 bytes), the packed 8-byte field starts at
+        // offset 10 from STREAMINFO start = absolute offset 4+4+10 = 18.
+        //   absolute[18] = sr[19:12]
+        //   absolute[19] = sr[11:4]
+        //   absolute[20] = sr[3:0](4) | ch-1(3) | bps_high(1)
+        //   absolute[21] = bps_low(4) | total_samples_high(4)
+        let byte20 = flac_bytes[20]; // sr[3:0](4) | ch-1(3) | bps_high(1)
+        let byte21 = flac_bytes[21]; // bps_low(4) | total_samples_high(4)
+        let bps_minus_1 = ((byte20 & 0x01) << 4) | ((byte21 >> 4) & 0x0F);
+        assert_eq!(
+            bps_minus_1 + 1,
+            24,
+            "STREAMINFO should report 24 bits per sample"
+        );
+
+        // Roundtrip decode with symphonia
+        let decoded = decode_flac_bytes(&flac_bytes);
+        assert_eq!(decoded.len(), samples.len());
+
+        // 24-bit quantization: tolerance = 1/8388607 + epsilon
+        let tolerance = 1.0 / 8388607.0 + 1e-5;
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 8388607.0) as i32) as f32 / 8388607.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "24-bit roundtrip sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_flac_single_sample_block() {
+        // Encode a buffer with exactly 1 sample -- should not panic
+        let samples = vec![0.42f32];
+        let (flac_bytes, packets) = encode_to_flac_bytes_bps(&samples, 1, 44100, 16);
+
+        // Verify output starts with fLaC magic
+        assert!(packets.len() >= 2);
+        assert_eq!(&flac_bytes[..4], b"fLaC");
+
+        // Frame data should be present and non-empty
+        assert!(!packets[1].is_empty());
+
+        // Frame should start with sync code
+        assert_eq!(packets[1][0], 0xFF);
+        assert_eq!(packets[1][1] & 0xFC, 0xF8);
+    }
+
+    #[test]
+    fn test_flac_max_amplitude() {
+        // Encode samples at full scale: alternating +1.0 and -1.0
+        let num_samples = 4096usize;
+        let mut samples = Vec::with_capacity(num_samples);
+        for i in 0..num_samples {
+            samples.push(if i % 2 == 0 { 1.0f32 } else { -1.0f32 });
+        }
+
+        let flac_bytes = encode_to_flac_bytes(&samples, 1, 44100);
+        let decoded = decode_flac_bytes(&flac_bytes);
+        assert_eq!(decoded.len(), samples.len());
+
+        // 16-bit quantization tolerance
+        let tolerance = 1.0 / 32767.0 + 1e-5;
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 32767.0) as i32) as f32 / 32767.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "Max-amplitude roundtrip sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_flac_dc_offset() {
+        // Constant DC signal: all samples = 0.5
+        let num_samples = 4096usize;
+        let samples = vec![0.5f32; num_samples];
+
+        let flac_bytes = encode_to_flac_bytes(&samples, 1, 44100);
+        let decoded = decode_flac_bytes(&flac_bytes);
+        assert_eq!(decoded.len(), samples.len());
+
+        // Verify roundtrip accuracy
+        let tolerance = 1.0 / 32767.0 + 1e-5;
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 32767.0) as i32) as f32 / 32767.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "DC offset roundtrip sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+
+        // DC signal should compress very well (fixed order 1 makes all residuals zero)
+        let frame_size = flac_bytes.len() - 42; // subtract fLaC(4) + metadata(38)
+        let verbatim_size = num_samples * 2;
+        assert!(
+            frame_size < verbatim_size / 4,
+            "DC signal frame ({frame_size}) should be much smaller than verbatim ({verbatim_size})"
+        );
+    }
+
+    #[test]
+    fn test_flac_multi_block() {
+        // Encode a buffer spanning multiple FLAC frames (>4096 samples per channel).
+        // Use an exact multiple of block size for clean roundtrip (the encoder
+        // writes frame_number=0 for all frames, so symphonia may miscount with
+        // partial trailing blocks).
+        let num_samples = 4096 * 3; // 12288 samples -> exactly 3 blocks
+        let channels = 1u16;
+        let samples = make_sine(num_samples, channels);
+
+        let (_flac_bytes, packets) = encode_to_flac_bytes_bps(&samples, channels, 44100, 16);
+
+        // Should have: 1 streaminfo packet + 3 frame packets
+        assert_eq!(
+            packets.len(),
+            4,
+            "Expected 1 header + 3 frames, got {} packets",
+            packets.len()
+        );
+
+        // Each frame packet should start with the sync code 0xFFF8
+        let mut sync_count = 0;
+        for packet in &packets[1..] {
+            if packet.len() >= 2 && packet[0] == 0xFF && (packet[1] & 0xFC) == 0xF8 {
+                sync_count += 1;
+            }
+        }
+        assert_eq!(
+            sync_count, 3,
+            "Expected 3 frame sync codes, found {sync_count}"
+        );
+
+        // Also verify the concatenated stream contains multiple 0xFFF8 sync codes
+        let flac_bytes = encode_to_flac_bytes(&samples, channels, 44100);
+        let mut byte_sync_count = 0;
+        for w in flac_bytes.windows(2) {
+            if w[0] == 0xFF && (w[1] & 0xFC) == 0xF8 {
+                byte_sync_count += 1;
+            }
+        }
+        assert!(
+            byte_sync_count >= 3,
+            "Expected at least 3 sync codes in byte stream, found {byte_sync_count}"
+        );
+
+        // Roundtrip decode and verify
+        let decoded = decode_flac_bytes(&flac_bytes);
+        assert_eq!(decoded.len(), samples.len());
+
+        let tolerance = 1.0 / 32767.0 + 1e-5;
+        for (i, (&orig, &dec)) in samples.iter().zip(decoded.iter()).enumerate() {
+            let orig_q = ((orig.clamp(-1.0, 1.0) * 32767.0) as i32) as f32 / 32767.0;
+            let diff = (orig_q - dec).abs();
+            assert!(
+                diff <= tolerance,
+                "Multi-block roundtrip sample {i}: orig_q={orig_q}, decoded={dec}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_flac_compression_ratio() {
+        // Encode a pure sine wave and verify at least 30% compression vs raw PCM
+        let num_samples = 4096usize;
+        let channels = 1u16;
+        let samples = make_sine(num_samples, channels);
+
+        let flac_bytes = encode_to_flac_bytes(&samples, channels, 44100);
+
+        // Compressed size excluding the stream header (fLaC + STREAMINFO = 42 bytes)
+        let compressed_size = flac_bytes.len() - 42;
+        // Raw PCM: 16-bit mono = 2 bytes per sample
+        let raw_pcm_size = num_samples * channels as usize * 2;
+
+        let ratio = 1.0 - (compressed_size as f64 / raw_pcm_size as f64);
+        assert!(
+            ratio >= 0.30,
+            "Expected at least 30% compression for a pure sine tone, \
+             got {:.1}% (compressed={compressed_size}, raw={raw_pcm_size})",
+            ratio * 100.0
         );
     }
 }

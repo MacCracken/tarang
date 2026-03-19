@@ -1183,6 +1183,214 @@ mod tests {
         assert_eq!(packet.data.len(), 64);
     }
 
+    // ---- MP4 Muxer regression tests ----
+
+    /// Helper: scan top-level ISOBMFF boxes and return a vec of (offset, size, type).
+    fn scan_top_level_boxes(data: &[u8]) -> Vec<(usize, u32, [u8; 4])> {
+        let mut boxes = Vec::new();
+        let mut pos = 0;
+        while pos + 8 <= data.len() {
+            let size = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap());
+            let mut btype = [0u8; 4];
+            btype.copy_from_slice(&data[pos + 4..pos + 8]);
+            boxes.push((pos, size, btype));
+            if size == 0 {
+                break;
+            }
+            pos += size as usize;
+        }
+        boxes
+    }
+
+    /// Helper: create a muxed MP4 from packets of given sizes, returning the
+    /// raw output bytes.
+    fn mux_mp4_packets(packet_sizes: &[usize]) -> Vec<u8> {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        mux.write_header().unwrap();
+        for (i, &sz) in packet_sizes.iter().enumerate() {
+            // Fill with a recognizable per-packet byte so we can verify offsets
+            let data = vec![(i & 0xFF) as u8; sz];
+            mux.write_packet(&data).unwrap();
+        }
+        mux.finalize().unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn test_mp4_roundtrip_basic() {
+        let packet_sizes: Vec<usize> = vec![128, 256, 64, 512, 100];
+        let output = mux_mp4_packets(&packet_sizes);
+
+        // Parse with the MP4 demuxer
+        let cursor = Cursor::new(output.clone());
+        let mut demuxer = crate::demux::Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        // ftyp present — verified implicitly by successful probe (demuxer
+        // checks for ftyp). Also check raw bytes.
+        assert_eq!(&output[4..8], b"ftyp");
+
+        // moov present — scan boxes
+        let boxes = scan_top_level_boxes(&output);
+        assert!(
+            boxes.iter().any(|(_, _, t)| t == b"moov"),
+            "moov box must be present"
+        );
+
+        // Verify track info
+        assert_eq!(info.format, crate::core::ContainerFormat::Mp4);
+        let audio: Vec<_> = info.audio_streams().collect();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].codec, AudioCodec::Aac);
+        assert_eq!(audio[0].sample_rate, 44100);
+        assert_eq!(audio[0].channels, 2);
+
+        // Read all packets back and verify count + sizes
+        let mut read_sizes = Vec::new();
+        loop {
+            match demuxer.next_packet() {
+                Ok(p) => read_sizes.push(p.data.len()),
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert_eq!(
+            read_sizes.len(),
+            packet_sizes.len(),
+            "sample count mismatch"
+        );
+        assert_eq!(read_sizes, packet_sizes, "sample sizes mismatch");
+    }
+
+    #[test]
+    fn test_mp4_empty_track() {
+        // Finalize without writing any packets — must not panic.
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = Mp4Muxer::new(&mut buf, config);
+        mux.write_header().unwrap();
+        mux.finalize().unwrap();
+
+        let output = buf.into_inner();
+
+        // Verify ftyp + mdat + moov are all present as top-level boxes
+        let boxes = scan_top_level_boxes(&output);
+        let types: Vec<[u8; 4]> = boxes.iter().map(|(_, _, t)| *t).collect();
+        assert!(types.contains(b"ftyp"), "ftyp must be present");
+        assert!(types.contains(b"mdat"), "mdat must be present");
+        assert!(types.contains(b"moov"), "moov must be present");
+
+        // mdat should be exactly 8 bytes (header only, no data)
+        let mdat_box = boxes.iter().find(|(_, _, t)| t == b"mdat").unwrap();
+        assert_eq!(
+            mdat_box.1, 8,
+            "mdat size should be 8 (header only) for empty track"
+        );
+    }
+
+    #[test]
+    fn test_mp4_single_sample() {
+        let output = mux_mp4_packets(&[42]);
+
+        // Roundtrip through the demuxer
+        let cursor = Cursor::new(output);
+        let mut demuxer = crate::demux::Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio: Vec<_> = info.audio_streams().collect();
+        assert_eq!(audio.len(), 1);
+
+        let packet = demuxer.next_packet().unwrap();
+        assert_eq!(packet.data.len(), 42);
+
+        // Should be end of stream after the single sample
+        match demuxer.next_packet() {
+            Err(TarangError::EndOfStream) => {}
+            other => panic!("expected EndOfStream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_mp4_seek_back_patching() {
+        let packet_sizes: Vec<usize> = vec![100, 200, 300];
+        let total_data: usize = packet_sizes.iter().sum();
+        let output = mux_mp4_packets(&packet_sizes);
+
+        // Find the mdat box
+        let boxes = scan_top_level_boxes(&output);
+        let mdat_box = boxes
+            .iter()
+            .find(|(_, _, t)| t == b"mdat")
+            .expect("mdat must exist");
+        let (mdat_offset, mdat_size, _) = *mdat_box;
+
+        // The mdat box size must equal 8 (header) + total data written
+        assert_eq!(
+            mdat_size as usize,
+            8 + total_data,
+            "mdat size must be header(8) + data({total_data})"
+        );
+
+        // Read the raw mdat header bytes at the mdat offset to double-check
+        let raw_size = u32::from_be_bytes(output[mdat_offset..mdat_offset + 4].try_into().unwrap());
+        assert_eq!(raw_size as usize, 8 + total_data);
+        assert_eq!(&output[mdat_offset + 4..mdat_offset + 8], b"mdat");
+    }
+
+    #[test]
+    fn test_mp4_stco_offsets() {
+        // Write packets of known, varying sizes
+        let packet_sizes: Vec<usize> = vec![100, 200, 50, 300, 75];
+        let output = mux_mp4_packets(&packet_sizes);
+
+        // The muxer puts all samples in a single chunk. The stco offset
+        // should point to mdat_offset + 8 (start of sample data).
+        let boxes = scan_top_level_boxes(&output);
+        let mdat_box = boxes.iter().find(|(_, _, t)| t == b"mdat").unwrap();
+        let mdat_data_start = mdat_box.0 + 8; // past the 8-byte mdat header
+
+        // Parse with the demuxer and verify each packet reads from the right
+        // place by checking the actual data content.
+        let cursor = Cursor::new(output.clone());
+        let mut demuxer = crate::demux::Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        let mut offset_in_mdat = 0usize;
+        for (i, &sz) in packet_sizes.iter().enumerate() {
+            let packet = demuxer.next_packet().unwrap();
+            assert_eq!(packet.data.len(), sz, "packet {i} size mismatch");
+
+            // Verify the data matches what we wrote (each packet filled with
+            // (i & 0xFF) by mux_mp4_packets)
+            let expected_byte = (i & 0xFF) as u8;
+            assert!(
+                packet.data.iter().all(|&b| b == expected_byte),
+                "packet {i} data content mismatch"
+            );
+
+            // Also verify directly in the raw output that the bytes at the
+            // expected offset match.
+            let abs_offset = mdat_data_start + offset_in_mdat;
+            assert_eq!(
+                output[abs_offset], expected_byte,
+                "raw byte at offset {abs_offset} for packet {i} should be {expected_byte:#x}"
+            );
+            offset_in_mdat += sz;
+        }
+    }
+
     #[test]
     fn webm_muxer_format() {
         let mut buf = Cursor::new(Vec::new());

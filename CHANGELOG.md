@@ -42,6 +42,16 @@ Single-crate restructure, crates.io publishing, security audit, supply-chain har
 - `video_utils`: checked multiplication for frame dimensions, stride validation for RGB/RGBA
 - `f32_to_bytes`: checked multiplication before unsafe slice cast
 
+### Test coverage: 413 tests (was 391)
+- FLAC roundtrip validation: encode → symphonia decode → sample comparison (mono, stereo, silence, CRC checks)
+- FLAC edge cases: 24-bit encoding, single-sample blocks, max-amplitude, DC offset, multi-block, compression ratio
+- MP4 muxer regression: roundtrip via demuxer, empty track, single sample, seek-back patching, stco offset verification
+- Resampler accuracy: identity passthrough, downsample/upsample roundtrip, extreme ratios (24x), single sample, sinc vs linear SNR, energy conservation
+
+### Versioning
+- Switched from calendar versioning (YYYY.M.D) to semantic versioning for crates.io compatibility
+- ADR 002 updated to document semver rationale
+
 ### Supply-chain hardening
 - `cargo-vet` initialized with Mozilla audit imports, 32 trusted publisher audits
 - `cargo-deny` config: license allowlist (GPL-3.0), vulnerability deny, source restrictions

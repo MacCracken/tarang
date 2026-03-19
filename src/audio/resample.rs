@@ -397,4 +397,209 @@ mod tests {
         let out = resample(&buf, 48000).unwrap();
         assert_eq!(out.sample_format, SampleFormat::F32);
     }
+
+    // ── accuracy tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_resample_identity() {
+        let samples = make_sine(440.0, 44100, 4410, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let out = resample(&buf, 44100).unwrap();
+        // Same-rate resample must be bit-exact (Bytes clone, no interpolation).
+        assert_eq!(out.data, buf.data);
+        assert_eq!(out.num_samples, buf.num_samples);
+    }
+
+    #[test]
+    fn test_resample_downsample_upsample_roundtrip() {
+        let n = 48000; // 1 second at 48 kHz
+        let original = make_sine(440.0, 48000, n, 1);
+        let buf = make_buffer(&original, 1, 48000);
+
+        let down = resample(&buf, 16000).unwrap();
+        let roundtrip = resample(&down, 48000).unwrap();
+
+        let rt_samples = bytes_to_f32(&roundtrip.data);
+
+        // Use the shorter length for comparison (may differ by ±1 frame).
+        let len = original.len().min(rt_samples.len());
+
+        // Pearson correlation — measures shape preservation.
+        let mean_a: f64 = original[..len].iter().map(|s| *s as f64).sum::<f64>() / len as f64;
+        let mean_b: f64 = rt_samples[..len].iter().map(|s| *s as f64).sum::<f64>() / len as f64;
+
+        let mut cov = 0.0f64;
+        let mut var_a = 0.0f64;
+        let mut var_b = 0.0f64;
+        for i in 0..len {
+            let da = original[i] as f64 - mean_a;
+            let db = rt_samples[i] as f64 - mean_b;
+            cov += da * db;
+            var_a += da * da;
+            var_b += db * db;
+        }
+        let corr = cov / (var_a.sqrt() * var_b.sqrt());
+        assert!(corr > 0.95, "roundtrip correlation too low: {corr:.4}");
+    }
+
+    #[test]
+    fn test_resample_extreme_ratio_up() {
+        // 8000 → 192000 (24x)
+        let n = 800;
+        let samples = make_sine(440.0, 8000, n, 1);
+        let buf = make_buffer(&samples, 1, 8000);
+        let out = resample(&buf, 192000).unwrap();
+
+        // Frame count ≈ 24x
+        let expected = (n as f64 * 24.0).round() as usize;
+        assert!(
+            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            "expected ~{expected} frames, got {}",
+            out.num_samples
+        );
+
+        // No NaN / Inf
+        let dst = bytes_to_f32(&out.data);
+        for (i, &s) in dst.iter().enumerate() {
+            assert!(s.is_finite(), "non-finite sample at index {i}: {s}");
+        }
+
+        // Energy approximately preserved (compare per-sample energy scaled by duration)
+        let src_energy: f64 = samples.iter().map(|s| (*s as f64).powi(2)).sum();
+        let dst_energy: f64 = dst.iter().map(|s| (*s as f64).powi(2)).sum();
+        // Normalise to per-second energy (energy * rate / num_frames cancels to sum/frames * rate)
+        let src_power = src_energy / n as f64;
+        let dst_power = dst_energy / out.num_samples as f64;
+        let rel = (src_power - dst_power).abs() / src_power;
+        assert!(
+            rel < 0.10,
+            "energy diverged after 24x upsample: src_power={src_power:.4}, dst_power={dst_power:.4}, rel={rel:.4}"
+        );
+    }
+
+    #[test]
+    fn test_resample_extreme_ratio_down() {
+        // 192000 → 8000 (24x downsample)
+        let n = 19200; // 0.1 s at 192 kHz
+        let samples = make_sine(440.0, 192000, n, 1);
+        let buf = make_buffer(&samples, 1, 192000);
+        let out = resample(&buf, 8000).unwrap();
+
+        let expected = (n as f64 / 24.0).round() as usize;
+        assert!(
+            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            "expected ~{expected} frames, got {}",
+            out.num_samples
+        );
+
+        let dst = bytes_to_f32(&out.data);
+        for (i, &s) in dst.iter().enumerate() {
+            assert!(s.is_finite(), "non-finite sample at index {i}: {s}");
+        }
+
+        let src_power: f64 = samples.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / n as f64;
+        let dst_power: f64 =
+            dst.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / out.num_samples as f64;
+        let rel = (src_power - dst_power).abs() / src_power;
+        assert!(
+            rel < 0.10,
+            "energy diverged after 24x downsample: src_power={src_power:.4}, dst_power={dst_power:.4}, rel={rel:.4}"
+        );
+    }
+
+    #[test]
+    fn test_resample_single_sample() {
+        let samples = vec![0.5f32];
+        let buf = make_buffer(&samples, 1, 8000);
+        let out = resample(&buf, 48000).unwrap();
+        // Should not panic and produce at least 1 sample.
+        assert!(
+            out.num_samples >= 1,
+            "expected at least 1 output sample, got {}",
+            out.num_samples
+        );
+        // Rough expectation: target_rate / source_rate = 6
+        let expected = (48000.0_f64 / 8000.0_f64).round() as usize;
+        assert!(
+            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            "expected ~{expected} samples, got {}",
+            out.num_samples
+        );
+    }
+
+    #[test]
+    fn test_resample_sinc_vs_linear_quality() {
+        // Resample 440 Hz sine from 44100→48000 with both methods, then compare
+        // each against an analytically generated reference at 48000 Hz.
+        let n = 44100; // 1 second
+        let src_samples = make_sine(440.0, 44100, n, 1);
+        let buf = make_buffer(&src_samples, 1, 44100);
+
+        let out_linear = resample(&buf, 48000).unwrap();
+        let out_sinc = resample_sinc(&buf, 48000, 32).unwrap();
+
+        // Analytically perfect 440 Hz at 48000 Hz
+        let ref_samples = make_sine(440.0, 48000, out_linear.num_samples, 1);
+
+        let lin_data = bytes_to_f32(&out_linear.data);
+        let sinc_data = bytes_to_f32(&out_sinc.data);
+
+        let snr_linear = compute_snr(&ref_samples, lin_data);
+        let snr_sinc = compute_snr(
+            &make_sine(440.0, 48000, out_sinc.num_samples, 1),
+            sinc_data,
+        );
+
+        assert!(
+            snr_sinc > snr_linear,
+            "sinc SNR ({snr_sinc:.1} dB) should exceed linear SNR ({snr_linear:.1} dB)"
+        );
+        // Sinc with 32-tap window should achieve decent SNR
+        assert!(snr_sinc > 40.0, "sinc SNR too low: {snr_sinc:.1} dB");
+    }
+
+    #[test]
+    fn test_resample_energy_conservation() {
+        // Resample white noise 44100 → 48000 using sinc interpolation.
+        // Compare RMS (root-mean-square) which is rate-independent.
+        let n = 44100;
+        let mut noise = Vec::with_capacity(n);
+        // Deterministic pseudo-random (xorshift32)
+        let mut state: u32 = 0xDEAD_BEEF;
+        for _ in 0..n {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let s = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            noise.push(s);
+        }
+
+        let buf = make_buffer(&noise, 1, 44100);
+        let out = resample_sinc(&buf, 48000, 32).unwrap();
+
+        let src_rms = rms(&noise);
+        let dst_samples = bytes_to_f32(&out.data);
+        let dst_rms = rms(dst_samples);
+
+        let rel = (src_rms - dst_rms).abs() / src_rms;
+        assert!(
+            rel < 0.05,
+            "energy not conserved: src_rms={src_rms:.4}, dst_rms={dst_rms:.4}, rel={rel:.4}"
+        );
+    }
+
+    /// Compute SNR in dB between a reference signal and a test signal.
+    fn compute_snr(reference: &[f32], test: &[f32]) -> f64 {
+        let len = reference.len().min(test.len());
+        let signal_power: f64 = reference[..len].iter().map(|s| (*s as f64).powi(2)).sum();
+        let noise_power: f64 = reference[..len]
+            .iter()
+            .zip(test[..len].iter())
+            .map(|(r, t)| ((*r as f64) - (*t as f64)).powi(2))
+            .sum();
+        if noise_power < 1e-20 {
+            return 200.0; // effectively perfect
+        }
+        10.0 * (signal_power / noise_power).log10()
+    }
 }
