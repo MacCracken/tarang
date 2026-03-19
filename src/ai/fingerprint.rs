@@ -487,4 +487,21 @@ mod tests {
         let fp = compute_fingerprint(&buf, &config).unwrap();
         assert!(!fp.hashes.is_empty());
     }
+
+    #[test]
+    fn test_fingerprint_empty_audio() {
+        // Zero-length buffer should produce an empty fingerprint
+        let buf = AudioBuffer {
+            data: Bytes::new(),
+            sample_format: SampleFormat::F32,
+            channels: 1,
+            sample_rate: 16000,
+            num_samples: 0,
+            timestamp: Duration::ZERO,
+        };
+        let config = FingerprintConfig::default();
+        let fp = compute_fingerprint(&buf, &config).unwrap();
+        assert!(fp.hashes.is_empty());
+        assert_eq!(fp.duration_secs, 0.0);
+    }
 }

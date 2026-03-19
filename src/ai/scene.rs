@@ -73,7 +73,12 @@ impl SceneDetector {
     }
 
     /// Feed a decoded video frame. Returns a boundary if one is detected.
+    ///
+    /// Returns `None` immediately if frame dimensions are zero.
     pub fn feed_frame(&mut self, frame: &VideoFrame) -> Option<SceneBoundary> {
+        if frame.width == 0 || frame.height == 0 {
+            return None;
+        }
         let histogram = compute_luminance_histogram(frame, self.config.histogram_bins);
         self.frame_index += 1;
 
@@ -464,5 +469,46 @@ mod tests {
         // Should get at least the first hard cut
         assert!(!boundaries.is_empty());
         assert_eq!(boundaries[0].boundary_type, SceneBoundaryType::HardCut);
+    }
+
+    #[test]
+    fn test_scene_zero_frame_dimensions() {
+        let config = SceneDetectionConfig::default();
+        let mut detector = SceneDetector::new(config);
+
+        // 0x0 frame should return None without panicking
+        let frame = VideoFrame {
+            data: Bytes::from(vec![]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 0,
+            height: 0,
+            timestamp: Duration::from_millis(0),
+        };
+        assert!(detector.feed_frame(&frame).is_none());
+
+        // 0-width frame
+        let frame = VideoFrame {
+            data: Bytes::from(vec![]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 0,
+            height: 64,
+            timestamp: Duration::from_millis(33),
+        };
+        assert!(detector.feed_frame(&frame).is_none());
+
+        // 0-height frame
+        let frame = VideoFrame {
+            data: Bytes::from(vec![]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 64,
+            height: 0,
+            timestamp: Duration::from_millis(66),
+        };
+        assert!(detector.feed_frame(&frame).is_none());
+
+        // Normal frame after zero frames should still work
+        let frame = make_yuv_frame(32, 32, 128, 100);
+        // No panic — first valid frame, no previous histogram
+        assert!(detector.feed_frame(&frame).is_none());
     }
 }

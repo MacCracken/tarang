@@ -57,6 +57,15 @@ impl Dav1dDecoder {
                 // Use ceiling division for chroma dimensions (correct for odd sizes)
                 let chroma_h = height.div_ceil(2) as usize;
                 let chroma_w = width.div_ceil(2) as usize;
+
+                // Validate that dav1d stride values are sane — stride must be at
+                // least as wide as the plane's pixel row, otherwise row-copy below
+                // would read out of bounds.
+                if stride < width as usize {
+                    return Err(TarangError::DecodeError(format!(
+                        "Y plane stride {stride} is less than width {width}"
+                    )));
+                }
                 let y_size = width as usize * height as usize;
 
                 let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
@@ -79,6 +88,17 @@ impl Dav1dDecoder {
                 let u_plane = pic.plane(dav1d::PlanarImageComponent::U);
                 let v_stride = pic.stride(dav1d::PlanarImageComponent::V) as usize;
                 let v_plane = pic.plane(dav1d::PlanarImageComponent::V);
+
+                if u_stride < chroma_w {
+                    return Err(TarangError::DecodeError(format!(
+                        "U plane stride {u_stride} is less than chroma width {chroma_w}"
+                    )));
+                }
+                if v_stride < chroma_w {
+                    return Err(TarangError::DecodeError(format!(
+                        "V plane stride {v_stride} is less than chroma width {chroma_w}"
+                    )));
+                }
 
                 for row in 0..chroma_h {
                     let start = row * u_stride;
@@ -103,6 +123,9 @@ impl Dav1dDecoder {
                     yuv_data.extend_from_slice(&v_plane[start..end]);
                 }
 
+                // Clamp negative timestamps to 0: dav1d can return negative PTS values
+                // for B-frame reordering or malformed streams. Duration::from_nanos()
+                // requires a u64, so we clamp to avoid wrapping via `as u64`.
                 let timestamp_ns = pic.timestamp().unwrap_or(0).max(0) as u64;
                 self.frames_decoded += 1;
 
@@ -151,14 +174,12 @@ mod tests {
         // Invalid AV1 data should error
         let result = decoder.send_data(&[0xDE, 0xAD, 0xBE, 0xEF], 0);
         // dav1d may accept and buffer invalid data or reject it — both are acceptable
-        match result {
-            Ok(()) => {
-                // If accepted, get_frame should return None (no valid frame)
-                let frame = decoder.get_frame().unwrap();
-                assert!(frame.is_none());
-            }
-            Err(_) => {} // rejection is fine
+        if let Ok(()) = result {
+            // If accepted, get_frame should return None (no valid frame)
+            let frame = decoder.get_frame().unwrap();
+            assert!(frame.is_none());
         }
+        // Err(_) — rejection is fine
     }
 
     #[test]

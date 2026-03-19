@@ -611,4 +611,24 @@ mod tests {
         }
         10.0 * (signal_power / noise_power).log10()
     }
+
+    #[test]
+    fn test_resample_extreme_ratio_rejected() {
+        // Try an absurd upsample: 1 Hz -> 4_000_000_000 Hz with many samples.
+        // The 1GB cap should reject this before allocating.
+        let samples = make_sine(440.0, 8000, 100_000, 1);
+        let buf = make_buffer(&samples, 1, 8000);
+        // 100_000 frames * (4_000_000_000 / 8000) = 100_000 * 500_000 = 50 billion frames
+        // That exceeds the 1GB cap.
+        let result = resample(&buf, 4_000_000_000);
+        assert!(
+            result.is_err(),
+            "absurd resample ratio should be rejected by 1GB cap"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("too large") || err_msg.contains("1GB"),
+            "error should mention size limit, got: {err_msg}"
+        );
+    }
 }

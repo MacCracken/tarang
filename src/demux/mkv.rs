@@ -598,6 +598,15 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
     }
 
     fn seek(&mut self, timestamp: Duration) -> Result<()> {
+        // Validate cluster_offset against a reasonable bound
+        const MAX_REASONABLE_OFFSET: u64 = u64::MAX / 2;
+        if self.cluster_offset > MAX_REASONABLE_OFFSET {
+            return Err(TarangError::DemuxError(format!(
+                "cluster offset {} exceeds reasonable bound",
+                self.cluster_offset
+            )));
+        }
+
         // Simple seek: scan clusters from the beginning
         self.reader
             .seek(SeekFrom::Start(self.cluster_offset))

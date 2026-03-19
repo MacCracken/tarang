@@ -258,6 +258,12 @@ impl VideoDecoder {
             BackendInner::Stub => {
                 let w = if self.width > 0 { self.width } else { 320 };
                 let h = if self.height > 0 { self.height } else { 240 };
+                const MAX_DIM: u32 = 8192;
+                if w > MAX_DIM || h > MAX_DIM {
+                    return Err(TarangError::DecodeError(format!(
+                        "stub decoder: dimensions {w}x{h} exceed maximum {MAX_DIM}x{MAX_DIM}"
+                    )));
+                }
                 let size = crate::core::yuv420p_frame_size(w, h);
                 decoded.push(VideoFrame {
                     data: bytes::Bytes::from(vec![0u8; size]),
@@ -645,5 +651,83 @@ mod tests {
         let mut decoder = VideoDecoder::new(config).unwrap();
         decoder.flush().unwrap();
         assert_eq!(decoder.status(), DecoderStatus::Flushed);
+    }
+
+    #[test]
+    fn test_video_decoder_pending_cap() {
+        // The pending_frames limit is 64. Sending 65 packets without draining
+        // should trigger the "pending_frames limit exceeded" error.
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        decoder.init(&VideoStreamInfo {
+            codec: VideoCodec::Theora,
+            width: 64,
+            height: 64,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 30.0,
+            bitrate: None,
+            duration: None,
+        });
+
+        // Fill up to the 64-frame cap without receiving
+        for i in 0..64 {
+            decoder
+                .send_packet(&[0xAB], Duration::from_millis(i))
+                .unwrap();
+        }
+
+        // The 65th packet should fail because pending_frames is full
+        let result = decoder.send_packet(&[0xAB], Duration::from_millis(65));
+        assert!(
+            result.is_err(),
+            "65th packet should exceed pending_frames cap"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("pending_frames limit"),
+            "error should mention pending_frames limit, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_stub_decoder_max_dimensions() {
+        // Dimensions > 8192 should be rejected by the stub decoder.
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+
+        // Set width beyond the 8192 cap
+        decoder.init(&VideoStreamInfo {
+            codec: VideoCodec::Theora,
+            width: 8194,
+            height: 4320,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 30.0,
+            bitrate: None,
+            duration: None,
+        });
+
+        let result = decoder.send_packet(&[0x01], Duration::ZERO);
+        assert!(result.is_err(), "width > 8192 should be rejected");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("exceed maximum"),
+            "error should mention dimension limit, got: {err_msg}"
+        );
+
+        // Also test with height > 8192
+        let config2 = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder2 = VideoDecoder::new(config2).unwrap();
+        decoder2.init(&VideoStreamInfo {
+            codec: VideoCodec::Theora,
+            width: 1920,
+            height: 16384,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 30.0,
+            bitrate: None,
+            duration: None,
+        });
+
+        let result2 = decoder2.send_packet(&[0x02], Duration::ZERO);
+        assert!(result2.is_err(), "height > 8192 should be rejected");
     }
 }

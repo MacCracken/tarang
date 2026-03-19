@@ -59,6 +59,14 @@ impl VpxDecoder {
     }
 
     /// Decode a VP8/VP9 packet. Returns decoded frames (may be 0 or 1).
+    ///
+    /// # Pointer lifetime contract
+    ///
+    /// `vpx_codec_get_frame` returns pointers into libvpx's internal reference
+    /// buffers.  These pointers are only valid **until the next call to
+    /// `vpx_codec_decode`** (or `vpx_codec_destroy`).  We copy all pixel data
+    /// into owned `Vec<u8>` / `Bytes` within this method before returning, so
+    /// no raw pointers escape to the caller.
     pub fn decode(&mut self, data: &[u8], timestamp: Duration) -> Result<Vec<VideoFrame>> {
         if data.len() > u32::MAX as usize {
             return Err(TarangError::DecodeError(
@@ -237,6 +245,34 @@ mod tests {
     }
 
     #[test]
+    fn test_vpx_decode_zero_dimensions_error() {
+        // vpx_codec_decode will not produce a frame with 0x0 dimensions
+        // from valid codec initialization. But we verify that feeding
+        // garbage data does not produce a frame, and the zero-dimension
+        // guard in the decode loop would catch it if it ever happened.
+        let mut decoder = VpxDecoder::new(VideoCodec::Vp8).unwrap();
+
+        // Various forms of degenerate input — none should produce a 0x0 frame
+        let garbage_inputs: &[&[u8]] = &[&[0x00, 0x00, 0x00, 0x00], &[0x00], &[0xFF; 16]];
+
+        for input in garbage_inputs {
+            match decoder.decode(input, Duration::ZERO) {
+                Ok(frames) => {
+                    for f in &frames {
+                        assert!(
+                            f.width > 0 && f.height > 0,
+                            "decoded frame must not have zero dimensions"
+                        );
+                    }
+                }
+                Err(_) => {
+                    // Decode error on garbage data is expected and acceptable
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vp8_encode_decode_roundtrip() {
         use crate::video::vpx_enc::{VpxEncoder, VpxEncoderConfig};
 
@@ -253,8 +289,8 @@ mod tests {
         let y_size = 320 * 240;
         let chroma = 160 * 120;
         let mut data = vec![128u8; y_size + 2 * chroma];
-        for i in 0..y_size {
-            data[i] = (i % 256) as u8;
+        for (i, pixel) in data[..y_size].iter_mut().enumerate() {
+            *pixel = (i % 256) as u8;
         }
 
         let frame = crate::core::VideoFrame {

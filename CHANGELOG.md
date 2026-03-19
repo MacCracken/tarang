@@ -4,7 +4,43 @@
 
 Single-crate restructure, crates.io publishing, comprehensive security hardening, supply-chain audit.
 
-### Hardening pass (100+ issues audited across all modules)
+### Chunked transcription
+- Configurable `max_wav_bytes` on `HooshConfig` (default 100MB, capped at 1GB)
+- Audio exceeding the limit is automatically chunked into `chunk_duration_secs` segments (default 5 min)
+- Chunks transcribed sequentially, segment timestamps shifted by chunk offset, results merged
+- `HooshConfig::with_max_wav_bytes()` builder for custom limits
+
+### Second hardening pass (435 tests, was 413)
+
+#### Demux — correctness and edge cases
+- MP4: skip stsc entries with samples_per_chunk=0; skip stts entries with delta=0 in seek
+- OGG: cap page body at 65535 bytes; clamp negative granule positions to 0
+- WAV: validate bytes_per_sample > 0 in next_packet; validate seek offset against data_size
+- MKV: validate cluster_offset in seek (reject > u64::MAX/2)
+
+#### Audio — safety and buffer reuse
+- Decoder: validate sample_rate > 0 and channel count <= u16::MAX from symphonia
+- Mixer: bounds validation on source buffer size at entry
+- sample.rs: runtime alignment check in bytes_to_f32 (was debug_assert only)
+- Opus encoder: reuse output buffer across frames (was allocating 4KB per frame)
+- AAC encoder: pre-allocate i16 conversion buffer on construction
+
+#### Video — FFI bounds and limits
+- dav1d: stride validation (>= width), explicit negative timestamp clamping comment
+- openh264 encoder: checked arithmetic on y_size + chroma calculations
+- Stub decoder: cap frame dimensions at 8192
+- Decoder framework: documented pointer lifetime contract for VPX
+
+#### AI — input validation
+- Thumbnail: cap dimensions at 16384, default 0→source
+- Scene detector: reject 0×0 frames in feed_frame
+- Daimon: 10MB response body limit on all endpoints, validate timeout > 0
+- Transcription: configurable max WAV size, chunked ingestion for large audio
+
+#### MCP — protocol
+- BufWriter for stdout responses (was unbuffered println)
+
+### First hardening pass (100+ issues audited across all modules)
 
 #### Demux — input validation and resource limits
 - WAV: reject files with zero channels or zero bits_per_sample (prevented division by zero)

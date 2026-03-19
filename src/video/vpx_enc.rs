@@ -340,12 +340,12 @@ mod tests {
 
     fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
         let y_size = (width as usize) * (height as usize);
-        let chroma_w = ((width + 1) / 2) as usize;
-        let chroma_h = ((height + 1) / 2) as usize;
+        let chroma_w = width.div_ceil(2) as usize;
+        let chroma_h = height.div_ceil(2) as usize;
         let total = y_size + 2 * chroma_w * chroma_h;
         let mut data = vec![128u8; total];
-        for i in 0..y_size {
-            data[i] = (i % 256) as u8;
+        for (i, pixel) in data[..y_size].iter_mut().enumerate() {
+            *pixel = (i % 256) as u8;
         }
         VideoFrame {
             data: Bytes::from(data),

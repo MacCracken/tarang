@@ -39,15 +39,16 @@ pub struct Rav1eEncoder {
 
 impl Rav1eEncoder {
     pub fn new(config: &Rav1eConfig) -> Result<Self> {
-        let mut enc_config = rav1e::EncoderConfig::default();
-        enc_config.width = config.width as usize;
-        enc_config.height = config.height as usize;
-        enc_config.speed_settings =
-            rav1e::config::SpeedSettings::from_preset(config.speed.min(255) as u8);
-        enc_config.bitrate = (config.bitrate_bps).min(i32::MAX as u32) as i32;
-        enc_config.time_base = rav1e::data::Rational {
-            num: config.frame_rate_den as u64,
-            den: config.frame_rate_num as u64,
+        let enc_config = rav1e::EncoderConfig {
+            width: config.width as usize,
+            height: config.height as usize,
+            speed_settings: rav1e::config::SpeedSettings::from_preset(config.speed.min(255) as u8),
+            bitrate: (config.bitrate_bps).min(i32::MAX as u32) as i32,
+            time_base: rav1e::data::Rational {
+                num: config.frame_rate_den as u64,
+                den: config.frame_rate_num as u64,
+            },
+            ..Default::default()
         };
 
         let rav1e_cfg = rav1e::Config::new()
@@ -58,7 +59,7 @@ impl Rav1eEncoder {
             .new_context()
             .map_err(|e| TarangError::Pipeline(format!("rav1e context creation failed: {e}")))?;
 
-        if config.width % 2 != 0 || config.height % 2 != 0 {
+        if !config.width.is_multiple_of(2) || !config.height.is_multiple_of(2) {
             return Err(TarangError::Pipeline(format!(
                 "rav1e requires even dimensions, got {}x{}",
                 config.width, config.height
@@ -229,12 +230,12 @@ mod tests {
         let total = y_size + 2 * chroma_w * chroma_h;
         let mut data = vec![0u8; total];
         // Gradient Y plane
-        for i in 0..y_size {
-            data[i] = (i % 256) as u8;
+        for (i, pixel) in data[..y_size].iter_mut().enumerate() {
+            *pixel = (i % 256) as u8;
         }
         // Flat chroma
-        for i in y_size..total {
-            data[i] = 128;
+        for pixel in &mut data[y_size..total] {
+            *pixel = 128;
         }
         VideoFrame {
             data: Bytes::from(data),

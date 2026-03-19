@@ -76,11 +76,18 @@ impl OpenH264Encoder {
 
         let w = self.width as usize;
         let h = self.height as usize;
-        let y_size = w * h;
+        let y_size = w.checked_mul(h).ok_or_else(|| {
+            TarangError::Pipeline("overflow computing Y plane size (w*h)".to_string())
+        })?;
         // Floor division is safe here — dimensions are validated even in new()
         let chroma_w = w / 2;
         let chroma_h = h / 2;
-        let expected_size = y_size + 2 * chroma_w * chroma_h;
+        let chroma_size = chroma_w.checked_mul(chroma_h).ok_or_else(|| {
+            TarangError::Pipeline("overflow computing chroma plane size".to_string())
+        })?;
+        let expected_size = y_size.checked_add(2 * chroma_size).ok_or_else(|| {
+            TarangError::Pipeline("overflow computing total YUV420p frame size".to_string())
+        })?;
 
         if frame.data.len() < expected_size {
             return Err(TarangError::Pipeline(format!(
@@ -131,11 +138,11 @@ mod tests {
         let total = y_size + 2 * chroma_w * chroma_h;
         // Gradient pattern for Y, flat 128 for U/V
         let mut data = vec![0u8; total];
-        for i in 0..y_size {
-            data[i] = (i % 256) as u8;
+        for (i, pixel) in data[..y_size].iter_mut().enumerate() {
+            *pixel = (i % 256) as u8;
         }
-        for i in y_size..total {
-            data[i] = 128;
+        for pixel in &mut data[y_size..total] {
+            *pixel = 128;
         }
         VideoFrame {
             data: Bytes::from(data),
@@ -254,5 +261,53 @@ mod tests {
             timestamp: Duration::ZERO,
         };
         assert!(encoder.encode(&frame).is_err());
+    }
+
+    #[test]
+    fn test_openh264_enc_frame_size_validation() {
+        // Encoder should reject frames whose data length does not match
+        // the expected YUV420p size for the configured dimensions.
+        let config = OpenH264EncoderConfig {
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        let mut encoder = OpenH264Encoder::new(&config).unwrap();
+
+        // Expected: 320*240 + 2*(160*120) = 76800 + 38400 = 115200
+        let expected = 320 * 240 + 2 * 160 * 120;
+
+        // Too small by 1 byte
+        let frame_small = VideoFrame {
+            data: Bytes::from(vec![0u8; expected - 1]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(
+            encoder.encode(&frame_small).is_err(),
+            "data 1 byte too small should be rejected"
+        );
+
+        // Exactly the right size should succeed
+        let frame_exact = make_yuv420p_frame(320, 240);
+        assert!(
+            encoder.encode(&frame_exact).is_ok(),
+            "correctly-sized frame should be accepted"
+        );
+
+        // Wrong pixel format should fail
+        let frame_rgb = VideoFrame {
+            data: Bytes::from(vec![0u8; expected]),
+            pixel_format: PixelFormat::Rgb24,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(
+            encoder.encode(&frame_rgb).is_err(),
+            "RGB24 pixel format should be rejected"
+        );
     }
 }

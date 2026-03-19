@@ -125,19 +125,37 @@ impl ThumbnailGenerator {
     }
 
     fn compute_target_dims(&self, src_w: u32, src_h: u32) -> (u32, u32) {
-        if self.config.width == 0 && self.config.height == 0 {
-            return (src_w, src_h);
-        }
-        if self.config.height == 0 {
-            let aspect = src_h as f64 / src_w as f64;
-            let h = (self.config.width as f64 * aspect).round() as u32;
-            (self.config.width, h.max(1))
-        } else if self.config.width == 0 {
-            let aspect = src_w as f64 / src_h as f64;
-            let w = (self.config.height as f64 * aspect).round() as u32;
-            (w.max(1), self.config.height)
+        const MAX_DIM: u32 = 16384;
+
+        // Default 0-valued config dimensions to source dimensions
+        let cfg_w = if self.config.width == 0 {
+            0
         } else {
-            (self.config.width, self.config.height)
+            self.config.width.min(MAX_DIM)
+        };
+        let cfg_h = if self.config.height == 0 {
+            0
+        } else {
+            self.config.height.min(MAX_DIM)
+        };
+
+        // Use source dims (capped) when src is 0
+        let eff_src_w = if src_w == 0 { 1 } else { src_w };
+        let eff_src_h = if src_h == 0 { 1 } else { src_h };
+
+        if cfg_w == 0 && cfg_h == 0 {
+            return (eff_src_w.min(MAX_DIM), eff_src_h.min(MAX_DIM));
+        }
+        if cfg_h == 0 {
+            let aspect = eff_src_h as f64 / eff_src_w as f64;
+            let h = (cfg_w as f64 * aspect).round() as u32;
+            (cfg_w, h.clamp(1, MAX_DIM))
+        } else if cfg_w == 0 {
+            let aspect = eff_src_w as f64 / eff_src_h as f64;
+            let w = (cfg_h as f64 * aspect).round() as u32;
+            (w.clamp(1, MAX_DIM), cfg_h)
+        } else {
+            (cfg_w, cfg_h)
         }
     }
 }
@@ -588,5 +606,65 @@ mod tests {
         assert_eq!(config.format, ThumbnailFormat::Jpeg);
         assert_eq!(config.max_thumbnails, 5);
         assert_eq!(config.min_variance, 500.0);
+    }
+
+    #[test]
+    fn test_thumbnail_zero_dimensions_default() {
+        // Config 0x0 with source 0x0 should default to 1x1 (minimum valid)
+        let config = ThumbnailConfig {
+            width: 0,
+            height: 0,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(0, 0);
+        assert_eq!(w, 1);
+        assert_eq!(h, 1);
+
+        // Config 0x0 with valid source should pass through source dims
+        let (w, h) = generator.compute_target_dims(1920, 1080);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+    }
+
+    #[test]
+    fn test_thumbnail_huge_dimensions_capped() {
+        // Config dimensions > 16384 should be capped
+        let config = ThumbnailConfig {
+            width: 20000,
+            height: 20000,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(1920, 1080);
+        assert_eq!(w, 16384);
+        assert_eq!(h, 16384);
+
+        // Only width huge, height auto
+        let config = ThumbnailConfig {
+            width: 20000,
+            height: 0,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(1920, 1080);
+        assert_eq!(w, 16384);
+        assert!(h <= 16384);
+        assert!(h > 0);
+
+        // Source dimensions huge with 0x0 config
+        let config = ThumbnailConfig {
+            width: 0,
+            height: 0,
+            min_variance: 0.0,
+            ..Default::default()
+        };
+        let generator = ThumbnailGenerator::new(config);
+        let (w, h) = generator.compute_target_dims(20000, 20000);
+        assert_eq!(w, 16384);
+        assert_eq!(h, 16384);
     }
 }

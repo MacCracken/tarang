@@ -161,6 +161,13 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             return Err(TarangError::EndOfStream);
         }
 
+        let bytes_per_sample = self.bits_per_sample as u64 / 8;
+        if bytes_per_sample == 0 {
+            return Err(TarangError::DemuxError(
+                "invalid WAV: bytes_per_sample is 0".to_string(),
+            ));
+        }
+
         let chunk_size = 4096.min((self.data_size - self.bytes_read) as usize);
         if chunk_size == 0 {
             return Err(TarangError::EndOfStream);
@@ -176,9 +183,9 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
         }
         buf.truncate(n);
 
-        let bytes_per_sample = (self.bits_per_sample as u64 / 8) * self.channels as u64;
-        let timestamp = if bytes_per_sample > 0 && self.sample_rate > 0 {
-            let samples = self.bytes_read / bytes_per_sample;
+        let frame_size = bytes_per_sample * self.channels as u64;
+        let timestamp = if frame_size > 0 && self.sample_rate > 0 {
+            let samples = self.bytes_read / frame_size;
             Duration::from_secs_f64(samples as f64 / self.sample_rate as f64)
         } else {
             Duration::ZERO
@@ -197,8 +204,21 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
 
     fn seek(&mut self, timestamp: Duration) -> Result<()> {
         let bytes_per_sample = (self.bits_per_sample as u64 / 8) * self.channels as u64;
+        if bytes_per_sample == 0 {
+            return Err(TarangError::DemuxError(
+                "cannot seek: bytes_per_sample is 0".to_string(),
+            ));
+        }
         let target_sample = (timestamp.as_secs_f64() * self.sample_rate as f64) as u64;
         let byte_offset = (target_sample * bytes_per_sample).min(self.data_size);
+
+        // Clamp to data_size to prevent seeking past the data chunk
+        if byte_offset > self.data_size {
+            return Err(TarangError::DemuxError(format!(
+                "seek offset {byte_offset} exceeds data size {}",
+                self.data_size
+            )));
+        }
 
         self.reader
             .seek(std::io::SeekFrom::Start(self.data_offset + byte_offset))
@@ -359,5 +379,55 @@ mod tests {
         let cursor = Cursor::new(wav);
         let mut demuxer = WavDemuxer::new(cursor);
         assert!(demuxer.probe().is_err(), "should fail when channels is 0");
+    }
+
+    #[test]
+    fn test_wav_zero_bps_rejected() {
+        // Create a WAV with bits_per_sample=0 — should be rejected at probe.
+        // We build the raw bytes manually since make_wav would divide by zero.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&100u32.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        // fmt chunk
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&2u16.to_le_bytes()); // channels
+        buf.extend_from_slice(&44100u32.to_le_bytes()); // sample_rate
+        buf.extend_from_slice(&0u32.to_le_bytes()); // byte_rate
+        buf.extend_from_slice(&0u16.to_le_bytes()); // block_align
+        buf.extend_from_slice(&0u16.to_le_bytes()); // bits_per_sample = 0
+        // data chunk
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = WavDemuxer::new(cursor);
+        assert!(
+            demuxer.probe().is_err(),
+            "should fail when bits_per_sample is 0"
+        );
+    }
+
+    #[test]
+    fn test_wav_seek_past_data() {
+        // Build a small WAV and seek far beyond its data — should clamp to data_size
+        let wav = make_wav(100, 44100, 2, 16);
+        let cursor = Cursor::new(wav);
+        let mut demuxer = WavDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek to a timestamp far beyond the actual data duration
+        // The data is 100 samples at 44100Hz ~ 2.3ms. Seek to 1 hour.
+        let result = demuxer.seek(Duration::from_secs(3600));
+        // Should succeed — offset is clamped to data_size
+        assert!(result.is_ok());
+
+        // After seeking past end, next_packet should return EndOfStream
+        match demuxer.next_packet() {
+            Err(TarangError::EndOfStream) => {} // expected
+            other => panic!("expected EndOfStream, got {:?}", other),
+        }
     }
 }

@@ -788,6 +788,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         let num_chunks = track.chunk_offsets.len() as u32;
 
         for (i, &(first_chunk, samples_per_chunk, _)) in track.sample_to_chunk.iter().enumerate() {
+            // Avoid division/modulo by zero from malformed stsc entries
+            if samples_per_chunk == 0 {
+                continue;
+            }
+
             // first_chunk is 1-based
             let start_chunk = first_chunk - 1;
             let end_chunk = if i + 1 < track.sample_to_chunk.len() {
@@ -980,9 +985,8 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             current_ts: 0,
         });
 
-        let ret = info.clone();
         self.info = Some(info);
-        Ok(ret)
+        Ok(self.info.as_ref().unwrap().clone())
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
@@ -1072,14 +1076,17 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         let mut ts: u64 = 0;
 
         for &(count, delta) in &track.time_to_sample {
+            // Skip entries with delta=0 to avoid infinite looping / division by zero
+            if delta == 0 {
+                sample += count;
+                continue;
+            }
             let run_duration = count as u64 * delta as u64;
             if ts + run_duration > target_ts {
                 // Target is within this run
-                if delta > 0 {
-                    let samples_in = ((target_ts - ts) / delta as u64) as u32;
-                    sample += samples_in;
-                    ts += samples_in as u64 * delta as u64;
-                }
+                let samples_in = ((target_ts - ts) / delta as u64) as u32;
+                sample += samples_in;
+                ts += samples_in as u64 * delta as u64;
                 break;
             }
             ts += run_duration;
@@ -1433,5 +1440,294 @@ mod tests {
         let mut demuxer = Mp4Demuxer::new(cursor);
         let result = demuxer.probe();
         assert!(result.is_err(), "should fail with no moov box");
+    }
+
+    /// Build an MP4 with a custom stsc table (samples_per_chunk control).
+    fn make_mp4_custom_stsc(samples_per_chunk: u32, num_samples: u32, sample_size: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+
+        // ftyp box
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        // moov box
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        // mvhd
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        // trak box
+        let trak_start = write_box_header(&mut buf, b"trak");
+
+        // tkhd
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        // mdia box
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+
+        // mdhd
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        // hdlr
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        // minf box
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        // stsd
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        // stts
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1024u32.to_be_bytes());
+        patch_box_size(&mut buf, stts_start);
+
+        // stsc — with custom samples_per_chunk
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
+        buf.extend_from_slice(&samples_per_chunk.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        patch_box_size(&mut buf, stsc_start);
+
+        // stsz
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_size.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        patch_box_size(&mut buf, stsz_start);
+
+        // stco
+        let stco_start = write_box_header(&mut buf, b"stco");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let stco_offset_pos = buf.len();
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, stco_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        // mdat box
+        let mdat_data_offset = buf.len() + 8;
+        buf[stco_offset_pos..stco_offset_pos + 4]
+            .copy_from_slice(&(mdat_data_offset as u32).to_be_bytes());
+        let total_data = num_samples * sample_size;
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        buf.extend_from_slice(&vec![0xAAu8; total_data as usize]);
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    /// Build an MP4 with a custom stts table (delta control).
+    fn make_mp4_custom_stts(stts_entries: &[(u32, u32)], num_samples: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+        let sample_size = 64u32;
+
+        // ftyp box
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        // moov box
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        // mvhd
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        // trak box
+        let trak_start = write_box_header(&mut buf, b"trak");
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        // stsd
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        // stts — custom entries
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&(stts_entries.len() as u32).to_be_bytes());
+        for &(count, delta) in stts_entries {
+            buf.extend_from_slice(&count.to_be_bytes());
+            buf.extend_from_slice(&delta.to_be_bytes());
+        }
+        patch_box_size(&mut buf, stts_start);
+
+        // stsc
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        patch_box_size(&mut buf, stsc_start);
+
+        // stsz
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_size.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        patch_box_size(&mut buf, stsz_start);
+
+        // stco
+        let stco_start = write_box_header(&mut buf, b"stco");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let stco_offset_pos = buf.len();
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, stco_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        let mdat_data_offset = buf.len() + 8;
+        buf[stco_offset_pos..stco_offset_pos + 4]
+            .copy_from_slice(&(mdat_data_offset as u32).to_be_bytes());
+        let total_data = num_samples * sample_size;
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        buf.extend_from_slice(&vec![0xAAu8; total_data as usize]);
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    #[test]
+    fn test_mp4_zero_samples_per_chunk() {
+        // Craft an MP4 with samples_per_chunk=0 in stsc — should not panic
+        let mp4 = make_mp4_custom_stsc(0, 10, 64);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // resolve_sample_offset should return None (not panic) for any sample
+        let track = &demuxer.tracks[0];
+        assert!(demuxer.resolve_sample_offset(track, 0).is_none());
+        assert!(demuxer.resolve_sample_offset(track, 5).is_none());
+    }
+
+    #[test]
+    fn test_mp4_zero_delta_seek() {
+        // Craft an MP4 with stts containing delta=0 entries, then some with delta>0
+        let stts_entries = vec![
+            (5, 0),     // 5 samples with delta=0 (should be skipped)
+            (10, 1024), // 10 samples with normal delta
+        ];
+        let mp4 = make_mp4_custom_stts(&stts_entries, 15);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek should not infinite loop and should succeed
+        demuxer.seek(Duration::from_millis(100)).unwrap();
+
+        // Verify we can read a packet after seeking
+        let packet = demuxer.next_packet().unwrap();
+        assert!(!packet.data.is_empty());
     }
 }

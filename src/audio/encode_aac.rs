@@ -40,10 +40,12 @@ impl AacEncoder {
         })
         .map_err(|e| TarangError::Pipeline(format!("failed to create AAC encoder: {e:?}")))?;
 
+        // Pre-allocate i16 buffer for a typical frame size (1024 samples per channel)
+        let initial_capacity = 1024 * config.channels as usize;
         Ok(Self {
             encoder,
             channels: config.channels,
-            buf_i16: Vec::new(),
+            buf_i16: Vec::with_capacity(initial_capacity),
         })
     }
 }

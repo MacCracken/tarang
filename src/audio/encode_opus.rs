@@ -12,6 +12,8 @@ pub struct OpusEncoder {
     encoder: opus::Encoder,
     channels: u16,
     frame_size: usize,
+    /// Reusable output buffer for encoding (avoids per-frame allocation)
+    out_buf: Vec<u8>,
 }
 
 impl OpusEncoder {
@@ -54,6 +56,7 @@ impl OpusEncoder {
             encoder,
             channels: config.channels,
             frame_size,
+            out_buf: vec![0u8; 4000],
         })
     }
 }
@@ -76,15 +79,13 @@ impl AudioEncoder for OpusEncoder {
             }
             let frame = &float_samples[start..end];
 
-            // Opus can produce up to 4000 bytes per frame
-            let mut out = vec![0u8; 4000];
+            // Reuse the pre-allocated output buffer
             let len = self
                 .encoder
-                .encode_float(frame, &mut out)
+                .encode_float(frame, &mut self.out_buf)
                 .map_err(|e| TarangError::Pipeline(format!("Opus encode error: {e}")))?;
 
-            out.truncate(len);
-            packets.push(out);
+            packets.push(self.out_buf[..len].to_vec());
             offset += self.frame_size;
         }
 

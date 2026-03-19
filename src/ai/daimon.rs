@@ -21,6 +21,7 @@ use super::{AudioFingerprint, MediaAnalysis};
 pub struct DaimonConfig {
     pub endpoint: String,
     pub api_key: Option<String>,
+    pub timeout_secs: u64,
 }
 
 impl Default for DaimonConfig {
@@ -29,6 +30,7 @@ impl Default for DaimonConfig {
             endpoint: std::env::var("DAIMON_URL")
                 .unwrap_or_else(|_| "http://localhost:8090".to_string()),
             api_key: std::env::var("DAIMON_API_KEY").ok(),
+            timeout_secs: 30,
         }
     }
 }
@@ -39,6 +41,7 @@ pub struct HooshLlmConfig {
     pub endpoint: String,
     pub api_key: Option<String>,
     pub model: String,
+    pub timeout_secs: u64,
 }
 
 impl Default for HooshLlmConfig {
@@ -48,6 +51,7 @@ impl Default for HooshLlmConfig {
                 .unwrap_or_else(|_| "http://localhost:8088".to_string()),
             api_key: std::env::var("HOOSH_API_KEY").ok(),
             model: std::env::var("HOOSH_MODEL").unwrap_or_else(|_| "llama3".to_string()),
+            timeout_secs: 60,
         }
     }
 }
@@ -72,8 +76,13 @@ impl DaimonClient {
                 config.endpoint
             )));
         }
+        if config.timeout_secs == 0 {
+            return Err(TarangError::NetworkError(
+                "daimon timeout must be > 0".to_string(),
+            ));
+        }
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
             .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
         Ok(Self { config, http })
@@ -122,13 +131,7 @@ impl DaimonClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body_bytes = resp.bytes().await.unwrap_or_default();
-            if body_bytes.len() > 10_485_760 {
-                return Err(TarangError::NetworkError(format!(
-                    "vector insert returned {status}: response body too large ({} bytes)",
-                    body_bytes.len()
-                )));
-            }
+            let body_bytes = read_body_limited(resp).await.unwrap_or_default();
             let body = String::from_utf8_lossy(&body_bytes);
             return Err(TarangError::NetworkError(format!(
                 "vector insert returned {status}: {body}"
@@ -173,10 +176,7 @@ impl DaimonClient {
             return Ok(Vec::new());
         }
 
-        let result: VectorSearchResponse = resp
-            .json()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("parse search response: {e}")))?;
+        let result: VectorSearchResponse = read_json_limited(resp).await?;
 
         Ok(result
             .results
@@ -257,10 +257,7 @@ impl DaimonClient {
             return Ok(Vec::new());
         }
 
-        let result: RagQueryResponse = resp
-            .json()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("parse RAG response: {e}")))?;
+        let result: RagQueryResponse = read_json_limited(resp).await?;
 
         Ok(result.results)
     }
@@ -351,8 +348,13 @@ impl HooshLlmClient {
                 config.endpoint
             )));
         }
+        if config.timeout_secs == 0 {
+            return Err(TarangError::NetworkError(
+                "hoosh timeout must be > 0".to_string(),
+            ));
+        }
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
             .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
         Ok(Self { config, http })
@@ -396,10 +398,7 @@ impl HooshLlmClient {
             )));
         }
 
-        let result: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("parse LLM response: {e}")))?;
+        let result: serde_json::Value = read_json_limited(resp).await?;
 
         let content = result
             .get("choices")
@@ -463,6 +462,41 @@ struct VectorSearchResult {
 #[derive(Debug, Deserialize)]
 struct RagQueryResponse {
     results: Vec<RagResult>,
+}
+
+// ---------------------------------------------------------------------------
+// Response body helpers
+// ---------------------------------------------------------------------------
+
+/// Maximum response body size (10 MB).
+const MAX_RESPONSE_BYTES: usize = 10_485_760;
+
+/// Read a response body as bytes, rejecting bodies larger than `MAX_RESPONSE_BYTES`.
+async fn read_body_limited(resp: reqwest::Response) -> Result<bytes::Bytes> {
+    let content_length = resp.content_length().unwrap_or(0) as usize;
+    if content_length > MAX_RESPONSE_BYTES {
+        return Err(TarangError::NetworkError(format!(
+            "response body too large: {content_length} bytes (limit: {MAX_RESPONSE_BYTES})"
+        )));
+    }
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| TarangError::NetworkError(format!("failed to read response body: {e}")))?;
+    if body.len() > MAX_RESPONSE_BYTES {
+        return Err(TarangError::NetworkError(format!(
+            "response body too large: {} bytes (limit: {MAX_RESPONSE_BYTES})",
+            body.len()
+        )));
+    }
+    Ok(body)
+}
+
+/// Read a response body and deserialize as JSON, with size limit.
+async fn read_json_limited<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+    let body = read_body_limited(resp).await?;
+    serde_json::from_slice(&body)
+        .map_err(|e| TarangError::NetworkError(format!("failed to parse JSON response: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1101,5 +1135,48 @@ Hope that helps!"#;
         let desc = result.unwrap();
         // Either parsed or fell back — either way summary should be meaningful
         assert!(!desc.summary.is_empty());
+    }
+
+    #[test]
+    fn test_daimon_invalid_endpoint() {
+        // ftp:// scheme should be rejected
+        let config = DaimonConfig {
+            endpoint: "ftp://example.com".to_string(),
+            api_key: None,
+            timeout_secs: 30,
+        };
+        assert!(DaimonClient::new(config).is_err());
+
+        // Empty endpoint should be rejected
+        let config = DaimonConfig {
+            endpoint: String::new(),
+            api_key: None,
+            timeout_secs: 30,
+        };
+        assert!(DaimonClient::new(config).is_err());
+
+        // Valid http:// should succeed
+        let config = DaimonConfig {
+            endpoint: "http://localhost:8090".to_string(),
+            api_key: None,
+            timeout_secs: 30,
+        };
+        assert!(DaimonClient::new(config).is_ok());
+
+        // Valid https:// should succeed
+        let config = DaimonConfig {
+            endpoint: "https://example.com".to_string(),
+            api_key: None,
+            timeout_secs: 30,
+        };
+        assert!(DaimonClient::new(config).is_ok());
+
+        // Zero timeout should be rejected
+        let config = DaimonConfig {
+            endpoint: "http://localhost:8090".to_string(),
+            api_key: None,
+            timeout_secs: 0,
+        };
+        assert!(DaimonClient::new(config).is_err());
     }
 }

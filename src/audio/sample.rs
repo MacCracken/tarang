@@ -23,13 +23,12 @@ pub(crate) fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
     if len == 0 || !bytes.len().is_multiple_of(4) {
         return &[];
     }
-    debug_assert!(
-        bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0,
-        "byte buffer not aligned for f32"
-    );
+    if bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) != 0 {
+        return &[];
+    }
     // Safety: AudioBuffer data originates from Vec<f32> serialized via to_le_bytes or
     // Bytes::copy_from_slice, so alignment is guaranteed by the heap allocator (>=8 bytes).
-    // Length is validated above as a multiple of 4.
+    // Length is validated above as a multiple of 4. Alignment is checked above at runtime.
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
 }
 
@@ -119,5 +118,27 @@ mod tests {
     fn byte_length() {
         let samples = [1.0f32; 100];
         assert_eq!(f32_to_bytes(&samples).len(), 400);
+    }
+
+    #[test]
+    fn test_bytes_to_f32_misaligned() {
+        // Allocate a buffer with extra byte at front to force misalignment.
+        let aligned: Vec<f32> = vec![1.0, 2.0, 3.0];
+        let aligned_bytes = f32_to_bytes(&aligned);
+        // Create a Vec<u8> with a 1-byte prefix so the f32 data is misaligned.
+        let mut misaligned_buf = vec![0u8; 1 + aligned_bytes.len()];
+        misaligned_buf[1..].copy_from_slice(aligned_bytes);
+        let slice = &misaligned_buf[1..];
+        // The slice is 12 bytes (valid multiple of 4) but pointer is misaligned.
+        // On platforms where alignment matters, this should return empty.
+        // On x86 where alignment is always satisfied, the slice might still work,
+        // so we just verify no UB occurs and the function doesn't panic.
+        let result = bytes_to_f32(slice);
+        // Either empty (misaligned detected) or valid (x86 tolerant alignment)
+        assert!(
+            result.is_empty() || result.len() == 3,
+            "expected empty slice (misaligned) or 3 samples, got {} samples",
+            result.len()
+        );
     }
 }

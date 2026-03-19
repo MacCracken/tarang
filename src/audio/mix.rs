@@ -36,7 +36,25 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
 
     let src = bytes_to_f32(&buf.data);
     let frames = buf.num_samples;
-    let mut dst = vec![0.0f32; frames * target_ch];
+    let required_src = frames
+        .checked_mul(src_ch)
+        .ok_or_else(|| TarangError::Pipeline("source size overflow".to_string()))?;
+    if src.len() < required_src {
+        return Err(TarangError::Pipeline(format!(
+            "source buffer too small: need {} samples, have {}",
+            required_src,
+            src.len()
+        )));
+    }
+    let required_dst = frames
+        .checked_mul(target_ch)
+        .ok_or_else(|| TarangError::Pipeline("destination size overflow".to_string()))?;
+    if required_dst.checked_mul(4).is_none() {
+        return Err(TarangError::Pipeline(
+            "destination buffer size exceeds addressable memory".to_string(),
+        ));
+    }
+    let mut dst = vec![0.0f32; required_dst];
 
     match (src_ch, target_ch) {
         // Stereo → Mono: average L+R
@@ -336,5 +354,29 @@ mod tests {
         assert_eq!(out.num_samples, 1);
         let dst = bytes_to_f32(&out.data);
         assert!((dst[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_mix_bounds_validation() {
+        // Create a buffer that claims more samples than data actually present.
+        // The data has only 2 f32 samples (8 bytes) but num_samples says 100 frames of stereo.
+        let buf = AudioBuffer {
+            data: Bytes::copy_from_slice(f32_to_bytes(&[1.0f32, -1.0])),
+            sample_format: SampleFormat::F32,
+            channels: 2,
+            sample_rate: 44100,
+            num_samples: 100, // claims 100 frames but data only has 1 frame
+            timestamp: Duration::ZERO,
+        };
+        let result = mix_channels(&buf, ChannelLayout::Mono);
+        assert!(
+            result.is_err(),
+            "mix should reject undersized source buffer"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("too small"),
+            "error should mention buffer too small, got: {err_msg}"
+        );
     }
 }

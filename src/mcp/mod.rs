@@ -7,7 +7,11 @@ pub use tools::{error_response, open_and_probe, require_path, success_response};
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use std::io::Write;
 use tokio::io::{AsyncBufReadExt, BufReader};
+
+/// Maximum MCP message size in bytes (10 MB).
+pub const MAX_MCP_MESSAGE_BYTES: usize = 10_485_760;
 
 pub async fn cmd_mcp() -> Result<()> {
     let stdin = BufReader::new(tokio::io::stdin());
@@ -15,7 +19,7 @@ pub async fn cmd_mcp() -> Result<()> {
 
     // MCP server loop
     while let Ok(Some(line)) = lines.next_line().await {
-        if line.len() > 10_485_760 {
+        if line.len() > MAX_MCP_MESSAGE_BYTES {
             tracing::warn!("Rejecting oversized message ({} bytes)", line.len());
             continue;
         }
@@ -132,8 +136,43 @@ pub async fn cmd_mcp() -> Result<()> {
             "id": id,
             "result": result
         });
-        println!("{}", serde_json::to_string(&response)?);
+        {
+            let stdout = std::io::stdout();
+            let mut writer = std::io::BufWriter::new(stdout.lock());
+            serde_json::to_writer(&mut writer, &response)?;
+            writeln!(writer)?;
+            writer.flush()?;
+        }
     }
 
     Ok(())
+}
+
+/// Check whether a message exceeds the MCP size limit. Returns true if rejected.
+#[allow(dead_code)]
+pub fn is_oversized_message(msg: &str) -> bool {
+    msg.len() > MAX_MCP_MESSAGE_BYTES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_oversized_message_rejected() {
+        // Exactly at limit should pass
+        let at_limit = "x".repeat(MAX_MCP_MESSAGE_BYTES);
+        assert!(!is_oversized_message(&at_limit));
+
+        // One byte over limit should be rejected
+        let over_limit = "x".repeat(MAX_MCP_MESSAGE_BYTES + 1);
+        assert!(is_oversized_message(&over_limit));
+
+        // Empty message should pass
+        assert!(!is_oversized_message(""));
+
+        // Normal-sized message should pass
+        let normal = r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#;
+        assert!(!is_oversized_message(normal));
+    }
 }

@@ -33,6 +33,15 @@ impl std::fmt::Display for WhisperModel {
     }
 }
 
+/// Maximum allowed WAV upload size (1GB).
+const MAX_WAV_UPLOAD_BYTES: usize = 1_073_741_824;
+
+/// Default WAV upload size limit (100MB).
+const DEFAULT_MAX_WAV_BYTES: usize = 104_857_600;
+
+/// Default chunk duration for chunked transcription (5 minutes).
+const DEFAULT_CHUNK_SECS: f64 = 300.0;
+
 /// Configuration for the hoosh transcription endpoint.
 #[derive(Debug, Clone)]
 pub struct HooshConfig {
@@ -40,6 +49,10 @@ pub struct HooshConfig {
     pub api_key: Option<String>,
     pub model: WhisperModel,
     pub timeout: Duration,
+    /// Max WAV bytes per upload. Capped at 1GB. Default 100MB.
+    pub max_wav_bytes: usize,
+    /// Chunk duration in seconds for chunked transcription. Default 300s (5 min).
+    pub chunk_duration_secs: f64,
 }
 
 impl Default for HooshConfig {
@@ -49,7 +62,17 @@ impl Default for HooshConfig {
             api_key: None,
             model: WhisperModel::Base,
             timeout: Duration::from_secs(300),
+            max_wav_bytes: DEFAULT_MAX_WAV_BYTES,
+            chunk_duration_secs: DEFAULT_CHUNK_SECS,
         }
+    }
+}
+
+impl HooshConfig {
+    /// Set max WAV upload size. Clamped to 1GB.
+    pub fn with_max_wav_bytes(mut self, max: usize) -> Self {
+        self.max_wav_bytes = max.min(MAX_WAV_UPLOAD_BYTES);
+        self
     }
 }
 
@@ -70,20 +93,32 @@ impl HooshClient {
     }
 
     /// Transcribe an audio buffer via hoosh.
+    ///
+    /// If the WAV exceeds `config.max_wav_bytes`, automatically chunks
+    /// the audio into segments of `config.chunk_duration_secs` and
+    /// concatenates the results.
     pub async fn transcribe(
         &self,
         request: &TranscriptionRequest,
         audio: &AudioBuffer,
     ) -> Result<TranscriptionResult> {
         let wav_bytes = encode_wav_bytes(audio)?;
+        let max = self.config.max_wav_bytes.min(MAX_WAV_UPLOAD_BYTES);
 
-        if wav_bytes.len() > 104_857_600 {
-            return Err(TarangError::AiError(format!(
-                "WAV data too large for upload ({} bytes, max 100MB)",
-                wav_bytes.len()
-            )));
+        if wav_bytes.len() <= max {
+            return self.transcribe_single(request, wav_bytes).await;
         }
 
+        // Audio too large — chunk it
+        self.transcribe_chunked(request, audio).await
+    }
+
+    /// Transcribe a single WAV payload.
+    async fn transcribe_single(
+        &self,
+        request: &TranscriptionRequest,
+        wav_bytes: Vec<u8>,
+    ) -> Result<TranscriptionResult> {
         let mut form = reqwest::multipart::Form::new()
             .text("model", self.config.model.to_string())
             .text("sample_rate", request.sample_rate.to_string())
@@ -117,12 +152,92 @@ impl HooshClient {
             )));
         }
 
-        let result: TranscriptionResult = response
+        response
             .json()
             .await
-            .map_err(|e| TarangError::NetworkError(format!("failed to parse response: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("failed to parse response: {e}")))
+    }
 
-        Ok(result)
+    /// Split audio into time-based chunks, transcribe each, and merge results.
+    async fn transcribe_chunked(
+        &self,
+        request: &TranscriptionRequest,
+        audio: &AudioBuffer,
+    ) -> Result<TranscriptionResult> {
+        let chunk_secs = self.config.chunk_duration_secs.max(1.0);
+        let chunk_samples = (audio.sample_rate as f64 * chunk_secs) as usize;
+        let total_samples = audio.num_samples;
+        let channels = audio.channels as usize;
+        let bps = audio.sample_format.bytes_per_sample();
+        let frame_bytes = channels * bps;
+
+        let mut all_text = String::new();
+        let mut all_segments = Vec::new();
+        let mut best_language = String::new();
+        let mut total_confidence = 0.0f32;
+        let mut chunk_count = 0usize;
+        let mut offset_samples = 0usize;
+
+        while offset_samples < total_samples {
+            let end_samples = (offset_samples + chunk_samples).min(total_samples);
+            let n = end_samples - offset_samples;
+            let byte_start = offset_samples * frame_bytes;
+            let byte_end = end_samples * frame_bytes;
+
+            if byte_end > audio.data.len() {
+                break;
+            }
+
+            let chunk_buf = AudioBuffer {
+                data: audio.data.slice(byte_start..byte_end),
+                sample_format: audio.sample_format,
+                channels: audio.channels,
+                sample_rate: audio.sample_rate,
+                num_samples: n,
+                timestamp: Duration::from_secs_f64(
+                    offset_samples as f64 / audio.sample_rate as f64,
+                ),
+            };
+
+            let wav_bytes = encode_wav_bytes(&chunk_buf)?;
+            let chunk_offset_secs = offset_samples as f64 / audio.sample_rate as f64;
+
+            let result = self.transcribe_single(request, wav_bytes).await?;
+
+            if !result.text.is_empty() {
+                if !all_text.is_empty() {
+                    all_text.push(' ');
+                }
+                all_text.push_str(&result.text);
+            }
+
+            // Shift segment timestamps by chunk offset
+            for mut seg in result.segments {
+                seg.start += chunk_offset_secs;
+                seg.end += chunk_offset_secs;
+                all_segments.push(seg);
+            }
+
+            if best_language.is_empty() {
+                best_language = result.language;
+            }
+            total_confidence += result.confidence;
+            chunk_count += 1;
+            offset_samples = end_samples;
+        }
+
+        let avg_confidence = if chunk_count > 0 {
+            total_confidence / chunk_count as f32
+        } else {
+            0.0
+        };
+
+        Ok(TranscriptionResult {
+            text: all_text,
+            language: best_language,
+            confidence: avg_confidence,
+            segments: all_segments,
+        })
     }
 }
 
@@ -541,5 +656,98 @@ mod tests {
         let parsed: TranscriptionRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.audio_codec, "Opus");
         assert_eq!(parsed.language_hint, Some("es".to_string()));
+    }
+
+    #[test]
+    fn config_max_wav_bytes_capped_at_1gb() {
+        let config = HooshConfig::default().with_max_wav_bytes(2_000_000_000);
+        assert_eq!(config.max_wav_bytes, MAX_WAV_UPLOAD_BYTES); // 1GB cap
+    }
+
+    #[test]
+    fn config_max_wav_bytes_custom() {
+        let config = HooshConfig::default().with_max_wav_bytes(50_000_000);
+        assert_eq!(config.max_wav_bytes, 50_000_000);
+    }
+
+    #[test]
+    fn config_defaults() {
+        let config = HooshConfig::default();
+        assert_eq!(config.max_wav_bytes, DEFAULT_MAX_WAV_BYTES);
+        assert_eq!(config.chunk_duration_secs, DEFAULT_CHUNK_SECS);
+    }
+
+    #[test]
+    fn chunk_audio_buffer() {
+        // Verify we can split a buffer into chunks and each chunk is valid WAV
+        let sample_rate = 16000u32;
+        let chunk_secs = 2.0;
+        let total_secs = 7.0; // should produce 4 chunks: 2+2+2+1
+        let total_samples = (sample_rate as f64 * total_secs) as usize;
+        let buf = make_f32_buffer(1, sample_rate, total_samples);
+
+        let chunk_samples = (sample_rate as f64 * chunk_secs) as usize;
+        let channels = 1usize;
+        let bps = 4; // f32
+        let frame_bytes = channels * bps;
+
+        let mut chunk_count = 0;
+        let mut offset = 0;
+        while offset < total_samples {
+            let end = (offset + chunk_samples).min(total_samples);
+            let n = end - offset;
+            let byte_start = offset * frame_bytes;
+            let byte_end = end * frame_bytes;
+
+            let chunk = AudioBuffer {
+                data: buf.data.slice(byte_start..byte_end),
+                sample_format: buf.sample_format,
+                channels: buf.channels,
+                sample_rate: buf.sample_rate,
+                num_samples: n,
+                timestamp: Duration::from_secs_f64(offset as f64 / sample_rate as f64),
+            };
+
+            let wav = encode_wav_bytes(&chunk).unwrap();
+            assert_eq!(&wav[..4], b"RIFF");
+            assert_eq!(&wav[8..12], b"WAVE");
+
+            let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+            assert_eq!(data_size as usize, n * 2); // PCM16 = 2 bytes per sample
+
+            chunk_count += 1;
+            offset = end;
+        }
+        assert_eq!(chunk_count, 4); // 2+2+2+1 = 7s total
+    }
+
+    #[test]
+    fn chunk_timestamps_advance() {
+        let sample_rate = 16000u32;
+        let chunk_secs = 1.0;
+        let total_samples = (sample_rate as f64 * 3.5) as usize;
+        let buf = make_f32_buffer(1, sample_rate, total_samples);
+
+        let chunk_samples = (sample_rate as f64 * chunk_secs) as usize;
+        let bps = 4;
+
+        let mut timestamps = Vec::new();
+        let mut offset = 0;
+        while offset < total_samples {
+            let end = (offset + chunk_samples).min(total_samples);
+            let ts = offset as f64 / sample_rate as f64;
+            timestamps.push(ts);
+
+            let byte_end = end * bps;
+            assert!(byte_end <= buf.data.len());
+
+            offset = end;
+        }
+
+        assert_eq!(timestamps.len(), 4);
+        assert!((timestamps[0] - 0.0).abs() < 0.001);
+        assert!((timestamps[1] - 1.0).abs() < 0.001);
+        assert!((timestamps[2] - 2.0).abs() < 0.001);
+        assert!((timestamps[3] - 3.0).abs() < 0.001);
     }
 }
