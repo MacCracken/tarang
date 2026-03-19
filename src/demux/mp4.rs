@@ -267,7 +267,12 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         // First pass: find mdia to check handler type and get track info
         self.parse_trak_children(trak_end, &mut track, &mut is_audio)?;
 
-        if is_audio && track.sample_rate > 0 {
+        if is_audio {
+            if track.sample_rate == 0 {
+                return Err(TarangError::DemuxError(
+                    "audio track has sample_rate of 0".to_string(),
+                ));
+            }
             self.tracks.push(track);
         }
 
@@ -553,6 +558,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         Ok(())
     }
 
+    /// Maximum entries allowed in stts/stsz/stsc/stco/co64 tables to prevent OOM.
+    const MAX_TABLE_ENTRIES: u32 = 50_000_000;
+
     /// Parse stts (time-to-sample) table.
     fn parse_stts(&mut self, header: &BoxHeader, track: &mut Mp4Track) -> Result<()> {
         self.reader
@@ -568,6 +576,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .try_into()
                 .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
         );
+
+        if entry_count > Self::MAX_TABLE_ENTRIES {
+            return Err(TarangError::DemuxError(format!(
+                "stts entry count {entry_count} exceeds maximum ({})",
+                Self::MAX_TABLE_ENTRIES
+            )));
+        }
 
         track.time_to_sample.clear();
         for _ in 0..entry_count {
@@ -606,6 +621,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .try_into()
                 .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
         );
+
+        if entry_count > Self::MAX_TABLE_ENTRIES {
+            return Err(TarangError::DemuxError(format!(
+                "stsc entry count {entry_count} exceeds maximum ({})",
+                Self::MAX_TABLE_ENTRIES
+            )));
+        }
 
         track.sample_to_chunk.clear();
         for _ in 0..entry_count {
@@ -658,6 +680,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
         );
 
+        if sample_count > Self::MAX_TABLE_ENTRIES {
+            return Err(TarangError::DemuxError(format!(
+                "stsz sample count {sample_count} exceeds maximum ({})",
+                Self::MAX_TABLE_ENTRIES
+            )));
+        }
+
         track.sample_sizes.clear();
         if track.default_sample_size == 0 {
             // Variable sizes — read per-sample sizes
@@ -694,6 +723,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
         );
 
+        if entry_count > Self::MAX_TABLE_ENTRIES {
+            return Err(TarangError::DemuxError(format!(
+                "stco entry count {entry_count} exceeds maximum ({})",
+                Self::MAX_TABLE_ENTRIES
+            )));
+        }
+
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
             let mut offset = [0u8; 4];
@@ -721,6 +757,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .try_into()
                 .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
         );
+
+        if entry_count > Self::MAX_TABLE_ENTRIES {
+            return Err(TarangError::DemuxError(format!(
+                "co64 entry count {entry_count} exceeds maximum ({})",
+                Self::MAX_TABLE_ENTRIES
+            )));
+        }
 
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
@@ -773,7 +816,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 let first_sample_in_chunk = sample_cursor + chunk_in_run * samples_per_chunk;
                 for s in first_sample_in_chunk..(first_sample_in_chunk + sample_in_chunk) {
                     if let Some(&size) = track.sample_sizes.get(s as usize) {
-                        offset += size as u64;
+                        offset = offset.checked_add(size as u64)?;
                     }
                 }
 
@@ -931,14 +974,14 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             "MP4 probe complete"
         );
 
-        let ret = info.clone();
-        self.info = Some(info);
         self.playback = Some(PlaybackState {
             track_index: 0,
             current_sample: 0,
             current_ts: 0,
         });
 
+        let ret = info.clone();
+        self.info = Some(info);
         Ok(ret)
     }
 

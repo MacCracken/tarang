@@ -480,10 +480,12 @@ impl FlacEncoder {
         let verbatim_size = estimate_verbatim_size(num_frames, bps);
 
         let mut plans: Vec<SubframeKind> = Vec::with_capacity(ch);
+        let mut channel_samples: Vec<i32> = Vec::with_capacity(num_frames);
 
         for c in 0..ch {
-            // Extract this channel's samples
-            let channel_samples: Vec<i32> = (0..num_frames).map(|f| samples[f * ch + c]).collect();
+            // Extract this channel's samples, reusing the pre-allocated Vec
+            channel_samples.clear();
+            channel_samples.extend((0..num_frames).map(|f| samples[f * ch + c]));
 
             let mut best_size = verbatim_size;
             let mut best_plan = SubframeKind::Verbatim;
@@ -555,9 +557,11 @@ impl FlacEncoder {
         bits.write_bits(0, 8);
 
         // Subframes
+        // Reuse channel_samples Vec from prediction phase
         for c in 0..ch {
             let plan = &plans[c];
-            let channel_samples: Vec<i32> = (0..num_frames).map(|f| samples[f * ch + c]).collect();
+            channel_samples.clear();
+            channel_samples.extend((0..num_frames).map(|f| samples[f * ch + c]));
 
             match plan {
                 SubframeKind::Verbatim => {

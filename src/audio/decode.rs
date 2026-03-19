@@ -219,6 +219,8 @@ impl FileDecoder {
         let mut sr = self.sample_rate;
         let mut ch = self.channels;
 
+        const MAX_DECODED_BYTES: usize = 536_870_912; // 512 MB as f32 values
+
         loop {
             match self.next_buffer() {
                 Ok(buf) => {
@@ -228,6 +230,13 @@ impl FileDecoder {
                     // buf.data is f32 samples as bytes
                     let floats: &[f32] = bytemuck_bytes_to_f32(&buf.data);
                     all_data.extend_from_slice(floats);
+
+                    if all_data.len() * std::mem::size_of::<f32>() > MAX_DECODED_BYTES {
+                        return Err(TarangError::DecodeError(format!(
+                            "decoded audio exceeds 512MB limit ({} bytes)",
+                            all_data.len() * std::mem::size_of::<f32>()
+                        )));
+                    }
                 }
                 Err(TarangError::EndOfStream) => break,
                 Err(e) => return Err(e),

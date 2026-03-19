@@ -77,6 +77,13 @@ impl HooshClient {
     ) -> Result<TranscriptionResult> {
         let wav_bytes = encode_wav_bytes(audio)?;
 
+        if wav_bytes.len() > 104_857_600 {
+            return Err(TarangError::AiError(format!(
+                "WAV data too large for upload ({} bytes, max 100MB)",
+                wav_bytes.len()
+            )));
+        }
+
         let mut form = reqwest::multipart::Form::new()
             .text("model", self.config.model.to_string())
             .text("sample_rate", request.sample_rate.to_string())

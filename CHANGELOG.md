@@ -2,7 +2,41 @@
 
 ## 0.19.3
 
-Single-crate restructure, crates.io publishing, security audit, supply-chain hardening.
+Single-crate restructure, crates.io publishing, comprehensive security hardening, supply-chain audit.
+
+### Hardening pass (100+ issues audited across all modules)
+
+#### Demux — input validation and resource limits
+- WAV: reject files with zero channels or zero bits_per_sample (prevented division by zero)
+- MP4: cap stts/stsz/stsc/stco tables at 50M entries; reject sample_rate=0 tracks; overflow check in sample offset accumulation; 64MB per-sample read cap
+- MKV: cap string reads at 64KB; cap tracks at 128
+- OGG: cap concurrent streams at 64
+
+#### Audio — memory bounds and safety
+- PipeWire ring buffer: modulo before write, bounds check after (prevented out-of-bounds unsafe write)
+- Resampler: 1GB output cap on both linear and sinc paths; overflow guard on dst_frames × channels
+- Decoder: 512MB cap on decode_all() accumulation (prevented unbounded memory growth)
+- PCM encoder: checked_mul on num_samples × channels (prevented overflow)
+- FLAC encoder: pre-allocate and reuse channel_samples Vec instead of per-frame allocation
+
+#### Video — FFI safety and bounds checking
+- VPX decoder: stride validation (stride >= width); checked_mul on row × stride; error on zero dimensions
+- VPX encoder: bounds check src_start + width <= data.len() before unsafe copy; checked_mul on row offsets
+- openh264 decoder: return error on invalid stride instead of silent empty frame
+- rav1e encoder: checked_mul on (height-1) × stride for all planes
+- Decoder framework: cap pending_frames queue at 64
+
+#### AI — network and input safety
+- Daimon: improved URL validation (require http:// or https://); response body 10MB size limit
+- Transcription: 100MB WAV upload size limit
+- Scene detector: validate histogram_bins > 0, default to 64
+
+#### MCP server — protocol hardening
+- Removed double File::open in probe (halved filesystem I/O per request)
+- tarang_formats: read only first 32 bytes instead of entire file
+- Max JSON-RPC message size: 10MB
+- top_k parameter capped at 100
+- Serialization errors now return proper error responses instead of empty strings
 
 ### Crate restructure
 - Flattened workspace into single `tarang` crate — 5 sub-crates become modules (`core`, `demux`, `audio`, `video`, `ai`)

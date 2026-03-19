@@ -100,7 +100,12 @@ impl Rav1eEncoder {
         {
             let stride = enc_frame.planes[0].cfg.stride;
             let plane = enc_frame.planes[0].data_origin_mut();
-            let needed = (self.height as usize - 1) * stride + self.width as usize;
+            let needed = (self.height as usize - 1)
+                .checked_mul(stride)
+                .ok_or_else(|| {
+                    TarangError::Pipeline("Y plane (height-1)*stride overflow".to_string())
+                })?
+                + self.width as usize;
             if plane.len() < needed {
                 return Err(TarangError::Pipeline(format!(
                     "rav1e Y plane buffer too small: {} < {needed}",
@@ -121,7 +126,9 @@ impl Rav1eEncoder {
             let u_offset = y_size;
             let stride = enc_frame.planes[1].cfg.stride;
             let plane = enc_frame.planes[1].data_origin_mut();
-            let needed = (chroma_h - 1) * stride + chroma_w;
+            let needed = (chroma_h - 1).checked_mul(stride).ok_or_else(|| {
+                TarangError::Pipeline("U plane (chroma_h-1)*stride overflow".to_string())
+            })? + chroma_w;
             if plane.len() < needed {
                 return Err(TarangError::Pipeline(format!(
                     "rav1e U plane buffer too small: {} < {needed}",
@@ -142,7 +149,9 @@ impl Rav1eEncoder {
             let v_offset = y_size + chroma_w * chroma_h;
             let stride = enc_frame.planes[2].cfg.stride;
             let plane = enc_frame.planes[2].data_origin_mut();
-            let needed = (chroma_h - 1) * stride + chroma_w;
+            let needed = (chroma_h - 1).checked_mul(stride).ok_or_else(|| {
+                TarangError::Pipeline("V plane (chroma_h-1)*stride overflow".to_string())
+            })? + chroma_w;
             if plane.len() < needed {
                 return Err(TarangError::Pipeline(format!(
                     "rav1e V plane buffer too small: {} < {needed}",

@@ -58,7 +58,10 @@ pub struct SceneDetector {
 }
 
 impl SceneDetector {
-    pub fn new(config: SceneDetectionConfig) -> Self {
+    pub fn new(mut config: SceneDetectionConfig) -> Self {
+        if config.histogram_bins == 0 {
+            config.histogram_bins = 64;
+        }
         Self {
             config,
             prev_histogram: None,

@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::fs::File;
+use std::io::Read;
 use tarang::core::MediaInfo;
 
 /// Build an MCP error response.
@@ -20,15 +21,13 @@ pub fn require_path(args: &Value) -> Result<&str, Value> {
     }
 }
 
-/// Open a file and probe its media info. Returns the open file handle and
-/// parsed [`MediaInfo`], or an MCP error [`Value`] on failure.
-pub fn open_and_probe(path: &str) -> Result<(File, MediaInfo), Value> {
+/// Open a file and probe its media info, returning the parsed [`MediaInfo`]
+/// or an MCP error [`Value`] on failure.
+pub fn open_and_probe(path: &str) -> Result<MediaInfo, Value> {
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
     let info = tarang::audio::probe_audio(file)
         .map_err(|e| error_response(format!("probe error: {e}")))?;
-    // Re-open so callers can still use the file if needed (probe consumed the first handle)
-    let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
-    Ok((file, info))
+    Ok(info)
 }
 
 pub fn handle_tool_call(name: &str, args: &Value) -> Value {
@@ -39,9 +38,10 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
                 Err(e) => return e,
             };
             match open_and_probe(path) {
-                Ok((_file, info)) => {
-                    success_response(serde_json::to_string_pretty(&info).unwrap_or_default())
-                }
+                Ok(info) => match serde_json::to_string_pretty(&info) {
+                    Ok(json) => success_response(json),
+                    Err(e) => error_response(format!("serialization error: {e}")),
+                },
                 Err(e) => e,
             }
         }
@@ -51,9 +51,12 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
                 Err(e) => return e,
             };
             match open_and_probe(path) {
-                Ok((_file, info)) => {
+                Ok(info) => {
                     let analysis = tarang::ai::analyze_media(&info);
-                    success_response(serde_json::to_string_pretty(&analysis).unwrap_or_default())
+                    match serde_json::to_string_pretty(&analysis) {
+                        Ok(json) => success_response(json),
+                        Err(e) => error_response(format!("serialization error: {e}")),
+                    }
                 }
                 Err(e) => e,
             }
@@ -80,10 +83,11 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             };
             let lang = args["language"].as_str().map(String::from);
             match open_and_probe(path) {
-                Ok((_file, info)) => match tarang::ai::prepare_transcription(&info, lang) {
-                    Some(req) => {
-                        success_response(serde_json::to_string_pretty(&req).unwrap_or_default())
-                    }
+                Ok(info) => match tarang::ai::prepare_transcription(&info, lang) {
+                    Some(req) => match serde_json::to_string_pretty(&req) {
+                        Ok(json) => success_response(json),
+                        Err(e) => error_response(format!("serialization error: {e}")),
+                    },
                     None => error_response("no audio stream found"),
                 },
                 Err(e) => e,
@@ -94,10 +98,14 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match std::fs::read(path) {
-                Ok(data) => {
-                    let header = &data[..data.len().min(32)];
-                    match tarang::core::ContainerFormat::from_magic(header) {
+            match File::open(path) {
+                Ok(mut file) => {
+                    let mut header = [0u8; 32];
+                    let n = match file.read(&mut header) {
+                        Ok(n) => n,
+                        Err(e) => return error_response(format!("file error: {e}")),
+                    };
+                    match tarang::core::ContainerFormat::from_magic(&header[..n]) {
                         Some(fmt) => success_response(format!(
                             "Detected: {fmt} (extensions: {})",
                             fmt.extensions().join(", ")
@@ -123,7 +131,7 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let (_file, info) = match open_and_probe(path) {
+            let info = match open_and_probe(path) {
                 Ok(v) => v,
                 Err(e) => return e,
             };
@@ -184,7 +192,7 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let top_k = args["top_k"].as_u64().unwrap_or(5) as usize;
+            let top_k = (args["top_k"].as_u64().unwrap_or(5) as usize).min(100);
 
             let buffer = match tarang::audio::FileDecoder::open_path(std::path::Path::new(path))
                 .and_then(|mut d| d.decode_all())
@@ -205,9 +213,10 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             match daimon.search_similar(&fingerprint, top_k).await {
-                Ok(results) => {
-                    success_response(serde_json::to_string_pretty(&results).unwrap_or_default())
-                }
+                Ok(results) => match serde_json::to_string_pretty(&results) {
+                    Ok(json) => success_response(json),
+                    Err(e) => error_response(format!("serialization error: {e}")),
+                },
                 Err(e) => error_response(format!("search error: {e}")),
             }
         }
@@ -216,7 +225,7 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let (_file, info) = match open_and_probe(path) {
+            let info = match open_and_probe(path) {
                 Ok(v) => v,
                 Err(e) => return e,
             };
@@ -229,9 +238,10 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             match hoosh.describe_content(&info, &analysis).await {
-                Ok(desc) => {
-                    success_response(serde_json::to_string_pretty(&desc).unwrap_or_default())
-                }
+                Ok(desc) => match serde_json::to_string_pretty(&desc) {
+                    Ok(json) => success_response(json),
+                    Err(e) => error_response(format!("serialization error: {e}")),
+                },
                 Err(e) => error_response(format!("describe error: {e}")),
             }
         }

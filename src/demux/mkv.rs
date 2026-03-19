@@ -193,8 +193,20 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         }
     }
 
+    /// Maximum string allocation size (64 KiB) to prevent OOM from malformed files.
+    const MAX_STRING_SIZE: u64 = 65536;
+
+    /// Maximum number of tracks to prevent excessive memory use.
+    const MAX_TRACKS: usize = 128;
+
     /// Read a UTF-8 string of `size` bytes.
     fn read_string(&mut self, size: u64) -> Result<String> {
+        if size > Self::MAX_STRING_SIZE {
+            return Err(TarangError::DemuxError(format!(
+                "string size {size} exceeds maximum ({})",
+                Self::MAX_STRING_SIZE
+            )));
+        }
         let mut buf = vec![0u8; size as usize];
         self.reader
             .read_exact(&mut buf)
@@ -313,6 +325,12 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         }
 
         if track.number > 0 {
+            if self.tracks.len() >= Self::MAX_TRACKS {
+                return Err(TarangError::DemuxError(format!(
+                    "too many tracks: exceeds maximum ({})",
+                    Self::MAX_TRACKS
+                )));
+            }
             self.tracks.push(track);
         }
         Ok(())

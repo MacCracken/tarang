@@ -270,6 +270,11 @@ impl VideoDecoder {
         }
 
         for frame in decoded {
+            if self.pending_frames.len() >= 64 {
+                return Err(TarangError::DecodeError(
+                    "pending_frames limit exceeded (64)".to_string(),
+                ));
+            }
             if self.width == 0 {
                 self.width = frame.width;
                 self.height = frame.height;

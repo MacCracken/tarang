@@ -64,7 +64,9 @@ pub struct DaimonClient {
 
 impl DaimonClient {
     pub fn new(config: DaimonConfig) -> Result<Self> {
-        if config.endpoint.is_empty() || !config.endpoint.starts_with("http") {
+        if config.endpoint.is_empty()
+            || !(config.endpoint.starts_with("http://") || config.endpoint.starts_with("https://"))
+        {
             return Err(TarangError::NetworkError(format!(
                 "invalid daimon endpoint: {:?}",
                 config.endpoint
@@ -120,7 +122,14 @@ impl DaimonClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body_bytes = resp.bytes().await.unwrap_or_default();
+            if body_bytes.len() > 10_485_760 {
+                return Err(TarangError::NetworkError(format!(
+                    "vector insert returned {status}: response body too large ({} bytes)",
+                    body_bytes.len()
+                )));
+            }
+            let body = String::from_utf8_lossy(&body_bytes);
             return Err(TarangError::NetworkError(format!(
                 "vector insert returned {status}: {body}"
             )));
@@ -334,7 +343,9 @@ pub struct HooshLlmClient {
 
 impl HooshLlmClient {
     pub fn new(config: HooshLlmConfig) -> Result<Self> {
-        if config.endpoint.is_empty() || !config.endpoint.starts_with("http") {
+        if config.endpoint.is_empty()
+            || !(config.endpoint.starts_with("http://") || config.endpoint.starts_with("https://"))
+        {
             return Err(TarangError::NetworkError(format!(
                 "invalid hoosh LLM endpoint: {:?}",
                 config.endpoint

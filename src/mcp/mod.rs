@@ -15,6 +15,10 @@ pub async fn cmd_mcp() -> Result<()> {
 
     // MCP server loop
     while let Ok(Some(line)) = lines.next_line().await {
+        if line.len() > 10_485_760 {
+            tracing::warn!("Rejecting oversized message ({} bytes)", line.len());
+            continue;
+        }
         let request: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {

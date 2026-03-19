@@ -440,6 +440,11 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             if page.header_type & HEADER_TYPE_BOS != 0 {
                 // BOS page — identify the codec from first packet
                 if let Some(first_packet) = page.packets.first() {
+                    if self.streams.len() >= 64 {
+                        return Err(TarangError::DemuxError(
+                            "too many OGG streams: exceeds maximum (64)".to_string(),
+                        ));
+                    }
                     match Self::identify_codec(first_packet) {
                         Ok(stream) => {
                             self.stream_indices.push(page.serial_number);

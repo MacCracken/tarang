@@ -41,6 +41,12 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         return Err(TarangError::Pipeline("resampled to 0 frames".to_string()));
     }
 
+    if dst_frames.checked_mul(ch).is_none() || dst_frames * ch * 4 >= 1_073_741_824 {
+        return Err(TarangError::Pipeline(format!(
+            "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
+        )));
+    }
+
     let mut dst = vec![0.0f32; dst_frames * ch];
 
     // Pre-compute interpolation parameters into parallel arrays so the
@@ -154,6 +160,12 @@ pub fn resample_sinc(
 
     if dst_frames == 0 {
         return Err(TarangError::Pipeline("resampled to 0 frames".to_string()));
+    }
+
+    if dst_frames.checked_mul(ch).is_none() || dst_frames * ch * 4 >= 1_073_741_824 {
+        return Err(TarangError::Pipeline(format!(
+            "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
+        )));
     }
 
     let half_win = window_size as i64;
@@ -545,10 +557,7 @@ mod tests {
         let sinc_data = bytes_to_f32(&out_sinc.data);
 
         let snr_linear = compute_snr(&ref_samples, lin_data);
-        let snr_sinc = compute_snr(
-            &make_sine(440.0, 48000, out_sinc.num_samples, 1),
-            sinc_data,
-        );
+        let snr_sinc = compute_snr(&make_sine(440.0, 48000, out_sinc.num_samples, 1), sinc_data);
 
         assert!(
             snr_sinc > snr_linear,

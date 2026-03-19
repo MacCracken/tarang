@@ -53,14 +53,19 @@ impl RingBuffer {
         let to_write = samples.len().min(self.free_space());
         let mut wp = self.write_pos.load(Ordering::Relaxed);
         for &sample in samples.iter().take(to_write) {
+            wp = wp % self.capacity;
+            if wp >= self.capacity {
+                return to_write;
+            }
             // Safety: single producer, wp is only modified here.
             // data[wp] is not read by consumer until write_pos is updated.
             unsafe {
                 let ptr = self.data.as_ptr().add(wp) as *mut f32;
                 std::ptr::write(ptr, sample);
             }
-            wp = (wp + 1) % self.capacity;
+            wp += 1;
         }
+        wp = wp % self.capacity;
         self.write_pos.store(wp, Ordering::Release);
         to_write
     }

@@ -96,7 +96,9 @@ impl VpxDecoder {
             let height = img.d_h;
 
             if width == 0 || height == 0 {
-                continue;
+                return Err(TarangError::DecodeError(
+                    "decoded frame has zero width or height".to_string(),
+                ));
             }
 
             // Verify I420 format — VP9 profile 1+ can produce 4:2:2/4:4:4
@@ -113,13 +115,38 @@ impl VpxDecoder {
             let y_size = width as usize * height as usize;
             let mut yuv_data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
 
+            // Validate strides before accessing plane data
+            let y_stride = img.stride[0] as isize;
+            let u_stride = img.stride[1] as isize;
+            let v_stride = img.stride[2] as isize;
+            if (y_stride.unsigned_abs()) < width as usize {
+                return Err(TarangError::DecodeError(format!(
+                    "Y plane stride {} is less than width {width}",
+                    y_stride
+                )));
+            }
+            if (u_stride.unsigned_abs()) < chroma_w {
+                return Err(TarangError::DecodeError(format!(
+                    "U plane stride {} is less than chroma width {chroma_w}",
+                    u_stride
+                )));
+            }
+            if (v_stride.unsigned_abs()) < chroma_w {
+                return Err(TarangError::DecodeError(format!(
+                    "V plane stride {} is less than chroma width {chroma_w}",
+                    v_stride
+                )));
+            }
+
             // Copy YUV420p planes using isize stride arithmetic (handles negative strides).
             // Safety: libvpx guarantees planes[0..3] point to valid I420 image data with
             // stride[0..3] bytes per row. Format was validated above. Pointers remain valid
             // until the next vpx_codec_decode call, which we don't make within this scope.
             // Y plane
             for row in 0..height as isize {
-                let offset = row * img.stride[0] as isize;
+                let offset = row.checked_mul(y_stride).ok_or_else(|| {
+                    TarangError::DecodeError("Y plane row*stride overflow".to_string())
+                })?;
                 let ptr = unsafe { img.planes[0].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, width as usize) };
                 yuv_data.extend_from_slice(slice);
@@ -127,7 +154,9 @@ impl VpxDecoder {
 
             // U plane
             for row in 0..chroma_h as isize {
-                let offset = row * img.stride[1] as isize;
+                let offset = row.checked_mul(u_stride).ok_or_else(|| {
+                    TarangError::DecodeError("U plane row*stride overflow".to_string())
+                })?;
                 let ptr = unsafe { img.planes[1].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };
                 yuv_data.extend_from_slice(slice);
@@ -135,7 +164,9 @@ impl VpxDecoder {
 
             // V plane
             for row in 0..chroma_h as isize {
-                let offset = row * img.stride[2] as isize;
+                let offset = row.checked_mul(v_stride).ok_or_else(|| {
+                    TarangError::DecodeError("V plane row*stride overflow".to_string())
+                })?;
                 let ptr = unsafe { img.planes[2].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };
                 yuv_data.extend_from_slice(slice);

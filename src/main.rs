@@ -414,7 +414,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let result = open_and_probe(path);
         assert!(result.is_ok());
-        let (_file, info) = result.unwrap();
+        let info = result.unwrap();
         assert_eq!(info.format.to_string(), "WAV");
         assert!(!info.streams.is_empty());
     }

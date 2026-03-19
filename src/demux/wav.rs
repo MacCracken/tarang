@@ -98,6 +98,18 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             return Err(TarangError::DemuxError("no fmt chunk found".to_string()));
         }
 
+        if self.channels == 0 {
+            return Err(TarangError::DemuxError(
+                "invalid WAV: channels is 0".to_string(),
+            ));
+        }
+
+        if self.bits_per_sample == 0 {
+            return Err(TarangError::DemuxError(
+                "invalid WAV: bits_per_sample is 0".to_string(),
+            ));
+        }
+
         let bytes_per_sample = self.bits_per_sample as u64 / 8;
         let total_samples = if bytes_per_sample > 0 && self.channels > 0 {
             self.data_size / (bytes_per_sample * self.channels as u64)
@@ -342,15 +354,10 @@ mod tests {
 
     #[test]
     fn wav_zero_channels() {
-        // Create a WAV with 0 channels — should probe but produce
-        // zero-duration or degenerate metadata.
+        // Create a WAV with 0 channels — should be rejected.
         let wav = make_wav(100, 44100, 0, 16);
         let cursor = Cursor::new(wav);
         let mut demuxer = WavDemuxer::new(cursor);
-        let info = demuxer.probe().unwrap();
-
-        let audio = info.audio_streams().collect::<Vec<_>>();
-        assert_eq!(audio[0].channels, 0);
-        // With 0 channels, data_size is 0, so duration should be 0 or handled gracefully
+        assert!(demuxer.probe().is_err(), "should fail when channels is 0");
     }
 }

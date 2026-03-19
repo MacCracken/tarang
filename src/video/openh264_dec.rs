@@ -9,7 +9,7 @@ use openh264::formats::YUVSource;
 use std::time::Duration;
 
 /// Extract tightly-packed YUV420p data from a decoded YUV frame.
-fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
+fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> Result<VideoFrame> {
     let (width, height) = yuv.dimensions();
     let width = width as u32;
     let height = height as u32;
@@ -20,13 +20,9 @@ fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
 
     // Validate strides to prevent out-of-bounds access
     if y_stride < width as usize || u_stride < chroma_w || v_stride < chroma_w {
-        return VideoFrame {
-            data: Bytes::new(),
-            pixel_format: PixelFormat::Yuv420p,
-            width,
-            height,
-            timestamp,
-        };
+        return Err(TarangError::DecodeError(format!(
+            "invalid strides: y={y_stride} u={u_stride} v={v_stride} for {width}x{height}"
+        )));
     }
 
     let y_size = width as usize * height as usize;
@@ -50,13 +46,13 @@ fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
         yuv_data.extend_from_slice(&v_plane[start..start + chroma_w]);
     }
 
-    VideoFrame {
+    Ok(VideoFrame {
         data: Bytes::from(yuv_data),
         pixel_format: PixelFormat::Yuv420p,
         width,
         height,
         timestamp,
-    }
+    })
 }
 
 /// H.264 decoder powered by openh264
@@ -90,7 +86,7 @@ impl OpenH264Decoder {
         };
 
         self.frames_decoded += 1;
-        Ok(Some(extract_yuv420p(&yuv, timestamp)))
+        Ok(Some(extract_yuv420p(&yuv, timestamp)?))
     }
 
     /// Flush remaining buffered frames from the decoder.
@@ -105,7 +101,7 @@ impl OpenH264Decoder {
             let ts_ms = yuv.timestamp().as_millis();
             let timestamp = Duration::from_millis(ts_ms);
             self.frames_decoded += 1;
-            frames.push(extract_yuv420p(yuv, timestamp));
+            frames.push(extract_yuv420p(yuv, timestamp)?);
         }
 
         Ok(frames)

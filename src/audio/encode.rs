@@ -50,7 +50,15 @@ impl PcmEncoder {
 impl AudioEncoder for PcmEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
         let samples = bytes_to_f32(&buf.data);
-        let expected = buf.num_samples * self.channels as usize;
+        let expected = buf
+            .num_samples
+            .checked_mul(self.channels as usize)
+            .ok_or_else(|| {
+                TarangError::Pipeline(format!(
+                    "overflow computing expected samples: {} * {}",
+                    buf.num_samples, self.channels
+                ))
+            })?;
         if samples.len() < expected {
             return Err(TarangError::Pipeline(format!(
                 "buffer has {} samples but expected {}",

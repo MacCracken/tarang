@@ -184,7 +184,17 @@ impl VpxEncoder {
         // planes[0..3] and stride[0..3] are valid for the allocated dimensions.
         // Y plane
         for row in 0..self.height as usize {
-            let src_start = row * self.width as usize;
+            let src_start = row
+                .checked_mul(self.width as usize)
+                .ok_or_else(|| TarangError::Pipeline("Y plane row*width overflow".to_string()))?;
+            if src_start + self.width as usize > frame.data.len() {
+                return Err(TarangError::Pipeline(format!(
+                    "Y plane src out of bounds: {} + {} > {}",
+                    src_start,
+                    self.width,
+                    frame.data.len()
+                )));
+            }
             let dst_offset = row as isize * guard.img.stride[0] as isize;
             let dst_ptr = unsafe { guard.img.planes[0].offset(dst_offset) };
             unsafe {
@@ -199,7 +209,18 @@ impl VpxEncoder {
         // U plane
         let u_offset = y_size;
         for row in 0..chroma_h {
-            let src_start = u_offset + row * chroma_w;
+            let row_offset = row
+                .checked_mul(chroma_w)
+                .ok_or_else(|| TarangError::Pipeline("U plane row*width overflow".to_string()))?;
+            let src_start = u_offset + row_offset;
+            if src_start + chroma_w > frame.data.len() {
+                return Err(TarangError::Pipeline(format!(
+                    "U plane src out of bounds: {} + {} > {}",
+                    src_start,
+                    chroma_w,
+                    frame.data.len()
+                )));
+            }
             let dst_offset = row as isize * guard.img.stride[1] as isize;
             let dst_ptr = unsafe { guard.img.planes[1].offset(dst_offset) };
             unsafe {
@@ -210,7 +231,18 @@ impl VpxEncoder {
         // V plane
         let v_offset = u_offset + chroma_w * chroma_h;
         for row in 0..chroma_h {
-            let src_start = v_offset + row * chroma_w;
+            let row_offset = row
+                .checked_mul(chroma_w)
+                .ok_or_else(|| TarangError::Pipeline("V plane row*width overflow".to_string()))?;
+            let src_start = v_offset + row_offset;
+            if src_start + chroma_w > frame.data.len() {
+                return Err(TarangError::Pipeline(format!(
+                    "V plane src out of bounds: {} + {} > {}",
+                    src_start,
+                    chroma_w,
+                    frame.data.len()
+                )));
+            }
             let dst_offset = row as isize * guard.img.stride[2] as isize;
             let dst_ptr = unsafe { guard.img.planes[2].offset(dst_offset) };
             unsafe {
