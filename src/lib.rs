@@ -5,8 +5,8 @@
 //! for video codecs (dav1d, openh264, libvpx, rav1e), and LLM integration
 //! through hoosh.
 
+pub mod ai;
+pub mod audio;
 pub mod core;
 pub mod demux;
-pub mod audio;
 pub mod video;
-pub mod ai;

@@ -3,9 +3,9 @@
 //! Safe Rust wrapper around the dav1d AV1 decoder.
 //! Requires the `dav1d` feature and libdav1d system library.
 
+use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;
 use std::time::Duration;
-use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 
 /// AV1 decoder powered by dav1d
 pub struct Dav1dDecoder {

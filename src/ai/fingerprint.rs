@@ -4,9 +4,9 @@
 //! compute spectrograms via FFT, extract chroma features, and
 //! hash into compact fingerprints for content identification.
 
+use crate::core::{AudioBuffer, Result};
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
-use crate::core::{AudioBuffer, Result};
 
 /// A compact audio fingerprint for content identification.
 #[derive(Debug, Clone)]
@@ -236,9 +236,9 @@ fn hash_chroma_frames(frames: &[Vec<f64>]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::SampleFormat;
     use bytes::Bytes;
     use std::time::Duration;
-    use crate::core::SampleFormat;
 
     fn make_sine_buffer(freq: f32, duration_secs: f32, sample_rate: u32) -> AudioBuffer {
         let num_samples = (sample_rate as f32 * duration_secs) as usize;

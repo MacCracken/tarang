@@ -3,9 +3,9 @@
 //! Safe Rust wrapper around libvpx for VP8 and VP9 decoding.
 //! Requires the `vpx` feature and libvpx system library.
 
+use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
 use bytes::Bytes;
 use std::time::Duration;
-use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
 
 /// VP8/VP9 decoder powered by libvpx
 pub struct VpxDecoder {

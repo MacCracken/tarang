@@ -2,8 +2,8 @@
 //!
 //! Operates on interleaved F32 audio buffers.
 
-use bytes::Bytes;
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
+use bytes::Bytes;
 
 /// Target channel layout for mixing
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

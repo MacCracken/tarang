@@ -16,9 +16,9 @@ pub use mux::{MkvMuxer, Mp4Muxer, MuxConfig, Muxer, OggMuxer, WavMuxer};
 pub use ogg::OggDemuxer;
 pub use wav::WavDemuxer;
 
+use crate::core::{ContainerFormat, Result, TarangError};
 use bytes::Bytes;
 use std::time::Duration;
-use crate::core::{ContainerFormat, Result, TarangError};
 
 /// A raw packet extracted from a container
 #[derive(Debug, Clone)]

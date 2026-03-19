@@ -4,13 +4,13 @@
 //! metadata and produce raw codec packets. Supports AAC, ALAC, FLAC, Opus, and MP3
 //! audio tracks.
 
-use bytes::Bytes;
-use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,
     TarangError,
 };
+use bytes::Bytes;
+use std::io::{Read, Seek, SeekFrom};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::{Demuxer, Packet};
@@ -1160,7 +1160,7 @@ mod tests {
         buf.extend_from_slice(&16u16.to_be_bytes()); // sample_size (bits)
         buf.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
         buf.extend_from_slice(&0u16.to_be_bytes()); // reserved
-        buf.extend_from_slice(&((sample_rate as u32) << 16).to_be_bytes()); // sample_rate 16.16
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes()); // sample_rate 16.16
         patch_box_size(&mut buf, mp4a_start);
 
         patch_box_size(&mut buf, stsd_start);

@@ -1,12 +1,12 @@
 //! WAV container demuxer (pure Rust)
 
-use bytes::Bytes;
-use std::io::{Read, Seek};
-use std::time::Duration;
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,
     TarangError,
 };
+use bytes::Bytes;
+use std::io::{Read, Seek};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::{Demuxer, Packet};

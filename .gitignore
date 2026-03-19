@@ -1,2 +1,8 @@
 /target
+*.swp
+*.swo
+*~
+.DS_Store
 tarpaulin-report.json
+lcov.info
+*.profraw

@@ -134,7 +134,7 @@ mod tests {
         let y_size = (w * h) as usize;
         let mut data = vec![100u8; y_size];
         // Add chroma planes
-        data.extend(std::iter::repeat(128u8).take(y_size / 2));
+        data.extend(std::iter::repeat_n(128u8, y_size / 2));
 
         let frame = make_frame(PixelFormat::Yuv420p, w, h, data);
         let luma = extract_luminance(&frame);

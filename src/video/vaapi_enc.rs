@@ -8,10 +8,10 @@
 //! slice headers, rate control) — we manage surfaces, buffers, and the
 //! encode→sync→readback lifecycle.
 
+use crate::core::{Result, TarangError, VideoCodec, VideoFrame};
 use cros_libva::{Display, VAEntrypoint, VAProfile};
 use std::path::Path;
 use std::rc::Rc;
-use crate::core::{Result, TarangError, VideoCodec, VideoFrame};
 
 /// VA-API encoder configuration
 #[derive(Debug, Clone)]

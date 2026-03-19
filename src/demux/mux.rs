@@ -3,8 +3,8 @@
 //! Provides muxers that write encoded audio packets into container files.
 //! Currently supports WAV and OGG containers.
 
-use std::io::{Seek, Write};
 use crate::core::{AudioCodec, Result, TarangError};
+use std::io::{Seek, Write};
 
 /// Trait for container muxers (writers)
 pub trait Muxer {

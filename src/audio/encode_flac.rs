@@ -1121,13 +1121,13 @@ mod tests {
         let sr = 44100.0f64;
         let freqs = [261.63, 329.63, 392.0, 523.25, 659.25]; // C major chord + octave
         let mut samples = vec![0.0f32; num_samples];
-        for i in 0..num_samples {
+        for (i, sample) in samples.iter_mut().enumerate() {
             let t = i as f64 / sr;
             let mut val = 0.0f64;
             for &f in &freqs {
                 val += (2.0 * std::f64::consts::PI * f * t).sin();
             }
-            samples[i] = (val / freqs.len() as f64) as f32;
+            *sample = (val / freqs.len() as f64) as f32;
         }
 
         let config = EncoderConfig {
@@ -1187,7 +1187,7 @@ mod tests {
 
         assert_eq!(precision, 15, "Precision should be min(15, bps-1) = 15");
         assert!(
-            shift >= -16 && shift <= 15,
+            (-16..=15).contains(&shift),
             "Shift {shift} out of FLAC range"
         );
         assert_eq!(qcoeffs.len(), coeffs.len());

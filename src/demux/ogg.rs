@@ -3,14 +3,14 @@
 //! Parses OGG bitstream pages and extracts codec packets.
 //! Identifies Vorbis, Opus, and FLAC streams from their identification headers.
 
-use bytes::Bytes;
-use std::collections::HashMap;
-use std::io::{Read, Seek};
-use std::time::Duration;
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,
     TarangError,
 };
+use bytes::Bytes;
+use std::collections::HashMap;
+use std::io::{Read, Seek};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::{Demuxer, Packet};
@@ -753,7 +753,7 @@ mod tests {
 
         // --- Data page with dummy audio data ---
         let data = vec![0x42u8; num_data_bytes];
-        let granule = (sample_rate as i64) * 1; // 1 second of audio
+        let granule = sample_rate as i64; // 1 second of audio
 
         write_ogg_page(&mut buf, HEADER_TYPE_EOS, granule, serial, 1, &[&data]);
 
@@ -811,9 +811,7 @@ mod tests {
             let len = packet.len();
             let full_segments = len / 255;
             let remainder = len % 255;
-            for _ in 0..full_segments {
-                segment_table.push(255u8);
-            }
+            segment_table.extend(std::iter::repeat_n(255u8, full_segments));
             // Terminal segment (< 255) — unless this is the last packet and it's
             // exactly a multiple of 255, in which case we need a 0-length terminator
             if remainder > 0 || (len > 0 && len % 255 == 0) {

@@ -29,9 +29,9 @@ pub use transcribe::{
     HooshClient, HooshConfig, WhisperModel, encode_wav_bytes, prepare_audio_for_transcription,
 };
 
+use crate::core::{AudioCodec, MediaInfo, VideoCodec};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use crate::core::{AudioCodec, MediaInfo, VideoCodec};
 
 /// Media content classification
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

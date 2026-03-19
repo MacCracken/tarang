@@ -3,10 +3,10 @@
 //! Safe Rust wrapper around openh264 for H.264 decoding.
 //! Requires the `openh264` feature.
 
+use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;
 use openh264::formats::YUVSource;
 use std::time::Duration;
-use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 
 /// Extract tightly-packed YUV420p data from a decoded YUV frame.
 fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {

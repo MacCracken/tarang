@@ -7,9 +7,9 @@
 //! VDPAU is not supported — Mesa removed VDPAU from all open-source
 //! drivers; VA-API is the standard for Linux hardware video acceleration.
 
+use crate::core::VideoCodec;
 use cros_libva::{Display, VAEntrypoint, VAProfile};
 use std::path::Path;
-use crate::core::VideoCodec;
 
 /// Direction a hardware codec operates in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

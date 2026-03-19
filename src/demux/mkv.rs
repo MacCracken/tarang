@@ -3,14 +3,14 @@
 //! Parses EBML-encoded Matroska containers to extract audio and video stream
 //! metadata and produce raw codec packets from Clusters.
 
-use bytes::Bytes;
-use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, PixelFormat, Result, SampleFormat,
     StreamInfo, TarangError, VideoCodec, VideoStreamInfo,
 };
+use bytes::Bytes;
+use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::{Demuxer, Packet};

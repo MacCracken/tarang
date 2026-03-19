@@ -184,7 +184,7 @@ mod tests {
         let mut buf = Vec::new();
         write_vint(&mut buf, 128);
         assert_eq!(buf.len(), 2);
-        assert_eq!(buf[0], 0x40 | 0x00);
+        assert_eq!(buf[0], 0x40);
         assert_eq!(buf[1], 0x80);
     }
 

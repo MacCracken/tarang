@@ -209,9 +209,9 @@ impl Rav1eEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::PixelFormat;
     use bytes::Bytes;
     use std::time::Duration;
-    use crate::core::PixelFormat;
 
     fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
         let y_size = (width * height) as usize;

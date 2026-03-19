@@ -3,8 +3,8 @@
 //! Converts audio between sample rates using windowed sinc interpolation.
 //! Operates on interleaved F32 buffers.
 
-use bytes::Bytes;
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
+use bytes::Bytes;
 
 /// Resample an audio buffer to a target sample rate.
 ///

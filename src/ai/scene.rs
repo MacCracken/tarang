@@ -5,9 +5,9 @@
 //! (chi-squared histogram distance) and gradual transitions
 //! (rolling standard deviation of frame differences).
 
+use crate::core::VideoFrame;
 use std::collections::VecDeque;
 use std::time::Duration;
-use crate::core::VideoFrame;
 
 /// Type of scene boundary detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,12 +200,12 @@ fn rolling_std_dev(scores: &VecDeque<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::core::PixelFormat;
+    use bytes::Bytes;
 
     fn make_yuv_frame(width: u32, height: u32, y_value: u8, timestamp_ms: u64) -> VideoFrame {
         let y_size = (width * height) as usize;
-        let chroma_size = ((width + 1) / 2) as usize * ((height + 1) / 2) as usize;
+        let chroma_size = width.div_ceil(2) as usize * height.div_ceil(2) as usize;
         let mut data = vec![y_value; y_size + 2 * chroma_size];
         // Set chroma to neutral
         for byte in &mut data[y_size..] {

@@ -3,9 +3,9 @@
 //! Safe Rust wrapper around openh264 for H.264 encoding.
 //! Requires the `openh264-enc` feature.
 
+use crate::core::{Result, TarangError, VideoFrame};
 use openh264::Timestamp;
 use openh264::formats::YUVSlices;
-use crate::core::{Result, TarangError, VideoFrame};
 
 /// H.264 encoder configuration
 #[derive(Debug, Clone)]
@@ -120,9 +120,9 @@ impl OpenH264Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::PixelFormat;
     use bytes::Bytes;
     use std::time::Duration;
-    use crate::core::PixelFormat;
 
     fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
         let y_size = (width * height) as usize;

@@ -3,6 +3,7 @@
 //! `FileDecoder` wraps symphonia's format reader + codec decoder to produce
 //! interleaved F32 `AudioBuffer`s from any supported audio file.
 
+use crate::core::{AudioBuffer, AudioCodec, Result, SampleFormat, TarangError};
 use bytes::Bytes;
 use std::time::Duration;
 use symphonia::core::audio::SampleBuffer;
@@ -13,7 +14,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
-use crate::core::{AudioBuffer, AudioCodec, Result, SampleFormat, TarangError};
 
 use super::probe::map_symphonia_codec;
 

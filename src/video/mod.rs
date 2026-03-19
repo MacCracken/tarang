@@ -43,8 +43,8 @@ pub use vpx_dec::VpxDecoder;
 #[cfg(feature = "vpx-enc")]
 pub use vpx_enc::{VpxEncoder, VpxEncoderConfig};
 
-use std::time::Duration;
 use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};
+use std::time::Duration;
 
 /// Video decoder status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

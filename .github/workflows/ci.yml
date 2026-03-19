@@ -44,8 +44,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit
-      - name: Run security audit
+      - name: Audit
         run: cargo audit
+
+  deny:
+    name: Supply Chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  vet:
+    name: Supply Chain (cargo-vet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-vet
+        run: cargo install cargo-vet
+      - name: Vet
+        run: cargo vet
 
   test:
     name: Test
@@ -66,7 +84,7 @@ jobs:
 
   build:
     name: Build Release
-    needs: [check, test, security]
+    needs: [check, test, security, deny, vet]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

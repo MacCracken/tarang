@@ -110,9 +110,9 @@ impl AudioOutput for NullOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::SampleFormat;
     use bytes::Bytes;
     use std::time::Duration;
-    use crate::core::SampleFormat;
 
     fn make_buffer(num_samples: usize, channels: u16, sample_rate: u32) -> AudioBuffer {
         let data = vec![0.5f32; num_samples * channels as usize];

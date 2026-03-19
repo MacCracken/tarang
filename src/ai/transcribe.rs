@@ -4,8 +4,8 @@
 //! encodes as in-memory WAV, and routes to a hoosh endpoint for
 //! Whisper-based speech-to-text.
 
-use std::time::Duration;
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
+use std::time::Duration;
 
 use super::{TranscriptionRequest, TranscriptionResult};
 

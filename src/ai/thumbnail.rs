@@ -3,12 +3,12 @@
 //! Selects representative video frames based on visual variance and
 //! scene boundaries, then encodes them as JPEG or PNG thumbnails.
 
+use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::{ImageBuffer, ImageEncoder, Rgb, RgbImage};
 use std::sync::Arc;
 use std::time::Duration;
-use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 
 use super::scene::SceneBoundary;
 
@@ -283,8 +283,8 @@ mod tests {
 
     fn make_yuv_frame(width: u32, height: u32, pattern: u8, timestamp_ms: u64) -> VideoFrame {
         let y_size = (width * height) as usize;
-        let chroma_w = ((width + 1) / 2) as usize;
-        let chroma_h = ((height + 1) / 2) as usize;
+        let chroma_w = width.div_ceil(2) as usize;
+        let chroma_h = height.div_ceil(2) as usize;
         let mut data = Vec::with_capacity(y_size + 2 * chroma_w * chroma_h);
 
         // Y plane with pattern
@@ -305,8 +305,8 @@ mod tests {
 
     fn make_solid_yuv_frame(width: u32, height: u32, y_val: u8) -> VideoFrame {
         let y_size = (width * height) as usize;
-        let chroma_w = ((width + 1) / 2) as usize;
-        let chroma_h = ((height + 1) / 2) as usize;
+        let chroma_w = width.div_ceil(2) as usize;
+        let chroma_h = height.div_ceil(2) as usize;
         let mut data = vec![y_val; y_size];
         data.resize(y_size + 2 * chroma_w * chroma_h, 128);
         VideoFrame {

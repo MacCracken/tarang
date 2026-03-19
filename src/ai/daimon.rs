@@ -6,8 +6,8 @@
 //! - Multimodal agent registration: Audio + Vision modalities
 //! - LLM content description: route thumbnails/metadata to hoosh for richer analysis
 
-use serde::{Deserialize, Serialize};
 use crate::core::{MediaInfo, Result, TarangError};
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::{AudioFingerprint, MediaAnalysis};
@@ -610,8 +610,8 @@ fn parse_description_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use crate::core::*;
+    use std::time::Duration;
     use uuid::Uuid;
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         assert!(emb[99] > 0.95);
         // All values should be in [0, 1]
         for &v in &emb {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 

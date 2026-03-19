@@ -24,8 +24,8 @@ pub fn require_path(args: &Value) -> Result<&str, Value> {
 /// parsed [`MediaInfo`], or an MCP error [`Value`] on failure.
 pub fn open_and_probe(path: &str) -> Result<(File, MediaInfo), Value> {
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
-    let info =
-        tarang::audio::probe_audio(file).map_err(|e| error_response(format!("probe error: {e}")))?;
+    let info = tarang::audio::probe_audio(file)
+        .map_err(|e| error_response(format!("probe error: {e}")))?;
     // Re-open so callers can still use the file if needed (probe consumed the first handle)
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
     Ok((file, info))
@@ -222,7 +222,8 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             let analysis = tarang::ai::analyze_media(&info);
-            let hoosh = match tarang::ai::HooshLlmClient::new(tarang::ai::HooshLlmConfig::default()) {
+            let hoosh = match tarang::ai::HooshLlmClient::new(tarang::ai::HooshLlmConfig::default())
+            {
                 Ok(c) => c,
                 Err(e) => return error_response(format!("hoosh client error: {e}")),
             };
