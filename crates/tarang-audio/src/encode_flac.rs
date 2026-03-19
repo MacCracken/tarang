@@ -1,7 +1,19 @@
 //! Pure Rust FLAC encoder
 //!
-//! Implements a minimal FLAC encoder using fixed linear prediction and Rice coding.
-//! Produces valid FLAC frames suitable for writing into FLAC or OGG containers.
+//! Implements a minimal FLAC encoder using 0th-order fixed prediction (verbatim
+//! subframes). Produces valid FLAC frames suitable for writing into FLAC or OGG
+//! containers.
+//!
+//! ## Limitations
+//!
+//! - **No compression** — verbatim subframes store raw samples (~1:1 ratio).
+//!   Adding LPC prediction (Levinson-Durbin autocorrelation, quantized
+//!   coefficients, Rice-coded residuals) would achieve ~2:1 for 16-bit audio.
+//!   The architecture supports this: add `encode_frame_lpc` alongside
+//!   `encode_frame_verbatim` and select based on an encoder quality setting.
+//! - **CRC stubs** — CRC-8 (frame header) and CRC-16 (frame footer) are
+//!   written as 0. Most decoders tolerate this but full spec compliance
+//!   requires computing them.
 
 use tarang_core::{AudioBuffer, AudioCodec, Result, TarangError};
 

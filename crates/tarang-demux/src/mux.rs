@@ -298,17 +298,19 @@ impl<W: Write> Muxer for OggMuxer<W> {
 
 /// MP4/M4A container muxer — writes ISOBMFF boxes for audio-only MP4 files.
 ///
-/// Accumulates sample data and metadata, then writes the full file on `finalize()`
-/// (moov-at-end strategy, simple and correct).
+/// Streams sample data directly to the writer and patches the mdat size on
+/// `finalize()` (moov-at-end strategy, constant memory per sample).
 pub struct Mp4Muxer<W: Write + Seek> {
     writer: W,
     config: MuxConfig,
-    /// Collected encoded sample data
-    samples: Vec<Vec<u8>>,
     /// Per-sample sizes for stsz
     sample_sizes: Vec<u32>,
     /// Sample delta for stts (constant for audio)
     sample_delta: u32,
+    /// Offset where the mdat box starts (for patching size in finalize)
+    mdat_offset: u64,
+    /// Running total of sample data written into mdat
+    mdat_data_size: u64,
     header_written: bool,
 }
 
@@ -323,9 +325,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         Self {
             writer,
             config,
-            samples: Vec::new(),
             sample_sizes: Vec::new(),
             sample_delta,
+            mdat_offset: 0,
+            mdat_data_size: 0,
             header_written: false,
         }
     }
@@ -362,7 +365,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     fn build_mvhd(&self) -> Vec<u8> {
-        let num_samples = self.samples.len() as u64;
+        let num_samples = self.sample_sizes.len() as u64;
         let timescale = self.config.sample_rate;
         let duration = num_samples * self.sample_delta as u64;
 
@@ -397,7 +400,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     fn build_tkhd(&self) -> Vec<u8> {
-        let num_samples = self.samples.len() as u64;
+        let num_samples = self.sample_sizes.len() as u64;
         let duration = num_samples * self.sample_delta as u64;
 
         let mut buf = Vec::new();
@@ -437,7 +440,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     fn build_mdhd(&self) -> Vec<u8> {
-        let num_samples = self.samples.len() as u64;
+        let num_samples = self.sample_sizes.len() as u64;
         let timescale = self.config.sample_rate;
         let duration = num_samples * self.sample_delta as u64;
 
@@ -544,7 +547,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-        buf.extend_from_slice(&(self.samples.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes());
         buf.extend_from_slice(&self.sample_delta.to_be_bytes());
         buf
     }
@@ -554,7 +557,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
         buf.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
-        buf.extend_from_slice(&(self.samples.len() as u32).to_be_bytes()); // samples_per_chunk
+        buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes()); // samples_per_chunk
         buf.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index
         buf
     }
@@ -593,6 +596,14 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
         // Write ftyp immediately
         let ftyp = self.build_ftyp();
         self.write_box(b"ftyp", &ftyp)?;
+
+        // Remember where mdat starts and write placeholder header
+        self.mdat_offset = self.writer.stream_position().map_err(io_err)?;
+        self.writer
+            .write_all(&0u32.to_be_bytes())
+            .map_err(io_err)?; // placeholder size
+        self.writer.write_all(b"mdat").map_err(io_err)?;
+
         self.header_written = true;
         Ok(())
     }
@@ -601,28 +612,28 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
         if !self.header_written {
             return Err(TarangError::Pipeline("header not written".to_string()));
         }
+        self.writer.write_all(data).map_err(io_err)?;
         self.sample_sizes.push(data.len() as u32);
-        self.samples.push(data.to_vec());
+        self.mdat_data_size += data.len() as u64;
         Ok(())
     }
 
     fn finalize(&mut self) -> Result<()> {
-        // Write mdat box
-        let total_data: usize = self.samples.iter().map(|s| s.len()).sum();
-        let mdat_size = (8 + total_data) as u32;
-
-        let mdat_offset = self.writer.stream_position().map_err(io_err)?;
-
+        // Patch mdat box size
+        let mdat_size = (8 + self.mdat_data_size) as u32;
+        let current_pos = self.writer.stream_position().map_err(io_err)?;
+        self.writer
+            .seek(std::io::SeekFrom::Start(self.mdat_offset))
+            .map_err(io_err)?;
         self.writer
             .write_all(&mdat_size.to_be_bytes())
             .map_err(io_err)?;
-        self.writer.write_all(b"mdat").map_err(io_err)?;
-        for sample in &self.samples {
-            self.writer.write_all(sample).map_err(io_err)?;
-        }
+        self.writer
+            .seek(std::io::SeekFrom::Start(current_pos))
+            .map_err(io_err)?;
 
         // Write moov box
-        let moov_data = self.build_moov(mdat_offset);
+        let moov_data = self.build_moov(self.mdat_offset);
         self.write_box(b"moov", &moov_data)?;
 
         self.writer.flush().map_err(io_err)?;

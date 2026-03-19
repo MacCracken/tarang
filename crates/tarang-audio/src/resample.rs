@@ -43,19 +43,57 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
 
     let mut dst = vec![0.0f32; dst_frames * ch];
 
+    // Pre-compute interpolation parameters into parallel arrays so the
+    // compiler can auto-vectorize the inner interpolation loops.
+    let mut idx0s = Vec::with_capacity(dst_frames);
+    let mut idx1s = Vec::with_capacity(dst_frames);
+    let mut fracs = Vec::with_capacity(dst_frames);
+
     for frame in 0..dst_frames {
-        // Map destination frame back to source position
         let src_pos = frame as f64 / ratio;
         let src_idx = src_pos as usize;
         let frac = (src_pos - src_idx as f64) as f32;
+        idx0s.push(src_idx.min(src_frames - 1));
+        idx1s.push((src_idx + 1).min(src_frames - 1));
+        fracs.push(frac);
+    }
 
-        let idx0 = src_idx.min(src_frames - 1);
-        let idx1 = (src_idx + 1).min(src_frames - 1);
-
-        for c in 0..ch {
-            let s0 = src[idx0 * ch + c];
-            let s1 = src[idx1 * ch + c];
-            dst[frame * ch + c] = s0 + (s1 - s0) * frac;
+    if ch == 1 {
+        // Mono fast path: process 4 frames at a time for auto-vectorization
+        let chunks = dst_frames / 4;
+        for chunk in 0..chunks {
+            let base = chunk * 4;
+            for k in 0..4 {
+                let frame = base + k;
+                let s0 = src[idx0s[frame]];
+                dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
+            }
+        }
+        for frame in (chunks * 4)..dst_frames {
+            let s0 = src[idx0s[frame]];
+            dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
+        }
+    } else if ch == 2 {
+        // Stereo fast path: process both channels per frame together
+        for frame in 0..dst_frames {
+            let i0 = idx0s[frame] * 2;
+            let i1 = idx1s[frame] * 2;
+            let f = fracs[frame];
+            let s0l = src[i0];
+            let s0r = src[i0 + 1];
+            dst[frame * 2] = s0l + (src[i1] - s0l) * f;
+            dst[frame * 2 + 1] = s0r + (src[i1 + 1] - s0r) * f;
+        }
+    } else {
+        // Generic fallback for ch > 2
+        for frame in 0..dst_frames {
+            let i0 = idx0s[frame];
+            let i1 = idx1s[frame];
+            let f = fracs[frame];
+            for c in 0..ch {
+                let s0 = src[i0 * ch + c];
+                dst[frame * ch + c] = s0 + (src[i1 * ch + c] - s0) * f;
+            }
         }
     }
 
