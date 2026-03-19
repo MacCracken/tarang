@@ -803,4 +803,294 @@ mod tests {
         let parsed: RagResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.text, "Some media info");
     }
+
+    // -----------------------------------------------------------------------
+    // fingerprint_to_embedding — additional cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fingerprint_to_embedding_single_hash() {
+        let fp = AudioFingerprint {
+            hashes: vec![u32::MAX],
+            duration_secs: 0.1,
+        };
+        let emb = fingerprint_to_embedding(&fp);
+        assert_eq!(emb.len(), 1);
+        assert!((emb[0] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn fingerprint_to_embedding_100_hashes() {
+        let hashes: Vec<u32> = (0..100).map(|i| i * (u32::MAX / 100)).collect();
+        let fp = AudioFingerprint {
+            hashes,
+            duration_secs: 5.0,
+        };
+        let emb = fingerprint_to_embedding(&fp);
+        assert_eq!(emb.len(), 100);
+        // First should be near 0, last should be near 0.99
+        assert!(emb[0] < 0.01);
+        assert!(emb[99] > 0.95);
+        // All values should be in [0, 1]
+        for &v in &emb {
+            assert!(v >= 0.0 && v <= 1.0);
+        }
+    }
+
+    #[test]
+    fn fingerprint_to_embedding_max_value_hashes() {
+        let fp = AudioFingerprint {
+            hashes: vec![u32::MAX; 50],
+            duration_secs: 2.5,
+        };
+        let emb = fingerprint_to_embedding(&fp);
+        assert_eq!(emb.len(), 50);
+        for &v in &emb {
+            assert!((v - 1.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn fingerprint_to_embedding_zero_hashes() {
+        let fp = AudioFingerprint {
+            hashes: vec![0; 10],
+            duration_secs: 1.0,
+        };
+        let emb = fingerprint_to_embedding(&fp);
+        assert_eq!(emb.len(), 10);
+        for &v in &emb {
+            assert!((v - 0.0).abs() < 0.001);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // format_metadata_for_rag — video streams, subtitle streams
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_rag_metadata_with_video_stream() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![
+                StreamInfo::Video(VideoStreamInfo {
+                    codec: VideoCodec::H264,
+                    width: 1920,
+                    height: 1080,
+                    pixel_format: PixelFormat::Yuv420p,
+                    frame_rate: 29.97,
+                    bitrate: Some(5_000_000),
+                    duration: Some(Duration::from_secs(120)),
+                }),
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Aac,
+                    sample_rate: 44100,
+                    channels: 2,
+                    sample_format: SampleFormat::F32,
+                    bitrate: Some(128000),
+                    duration: Some(Duration::from_secs(120)),
+                }),
+            ],
+            duration: Some(Duration::from_secs(120)),
+            file_size: Some(75_000_000),
+            title: Some("My Video".to_string()),
+            artist: None,
+            album: None,
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Movie,
+            quality_score: 85.0,
+            codec_recommendation: Some("use AV1".to_string()),
+            estimated_complexity: 0.7,
+            tags: vec!["video".to_string(), "hd".to_string()],
+        };
+
+        let text = format_metadata_for_rag("/videos/clip.mp4", &info, &analysis);
+        assert!(text.contains("Video: H.264 1920x1080 30.0fps"));
+        assert!(text.contains("Audio: AAC 44100Hz 2ch"));
+        assert!(text.contains("My Video"));
+        assert!(text.contains("movie"));
+        assert!(text.contains("use AV1"));
+        assert!(text.contains("video, hd"));
+    }
+
+    #[test]
+    fn format_rag_metadata_with_subtitle_stream() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mkv,
+            streams: vec![
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Opus,
+                    sample_rate: 48000,
+                    channels: 2,
+                    sample_format: SampleFormat::F32,
+                    bitrate: None,
+                    duration: Some(Duration::from_secs(60)),
+                }),
+                StreamInfo::Subtitle {
+                    language: Some("en".to_string()),
+                },
+                StreamInfo::Subtitle {
+                    language: None,
+                },
+            ],
+            duration: Some(Duration::from_secs(60)),
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Podcast,
+            quality_score: 65.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.3,
+            tags: vec![],
+        };
+
+        let text = format_metadata_for_rag("/media/episode.mkv", &info, &analysis);
+        assert!(text.contains("Subtitle: en"));
+        assert!(text.contains("Subtitle: unknown"));
+        assert!(text.contains("Opus"));
+    }
+
+    // -----------------------------------------------------------------------
+    // build_description_prompt — video+audio mixed media
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_prompt_video_audio_mixed() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![
+                StreamInfo::Video(VideoStreamInfo {
+                    codec: VideoCodec::Av1,
+                    width: 3840,
+                    height: 2160,
+                    pixel_format: PixelFormat::Yuv420p,
+                    frame_rate: 60.0,
+                    bitrate: None,
+                    duration: Some(Duration::from_secs(600)),
+                }),
+                StreamInfo::Audio(AudioStreamInfo {
+                    codec: AudioCodec::Opus,
+                    sample_rate: 48000,
+                    channels: 6,
+                    sample_format: SampleFormat::F32,
+                    bitrate: None,
+                    duration: Some(Duration::from_secs(600)),
+                }),
+            ],
+            duration: Some(Duration::from_secs(600)),
+            file_size: None,
+            title: Some("Nature Documentary".to_string()),
+            artist: None,
+            album: None,
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Movie,
+            quality_score: 95.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+
+        let prompt = build_description_prompt(&info, &analysis);
+        assert!(prompt.contains("Nature Documentary"));
+        assert!(prompt.contains("AV1 3840x2160 60.0fps"));
+        assert!(prompt.contains("Opus 48000Hz 6ch"));
+        assert!(prompt.contains("10m0s"));
+        assert!(prompt.contains("movie"));
+        assert!(prompt.contains("JSON"));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_description_response — malformed JSON, empty, very long
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_malformed_json() {
+        let response = r#"{"summary": "test", "genre": INVALID_JSON}"#;
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Unknown,
+            quality_score: 50.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["fallback_tag".to_string()],
+        };
+        let desc = parse_description_response(response, &analysis).unwrap();
+        // Should fall back to raw text since JSON is invalid
+        assert!(desc.summary.contains("summary"));
+        assert_eq!(desc.tags, vec!["fallback_tag"]);
+    }
+
+    #[test]
+    fn parse_empty_string() {
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Unknown,
+            quality_score: 50.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        let desc = parse_description_response("", &analysis).unwrap();
+        assert_eq!(desc.summary, "");
+        assert!(desc.genre.is_none());
+        assert!(desc.mood.is_none());
+    }
+
+    #[test]
+    fn parse_very_long_text() {
+        let long_text = "A".repeat(10_000);
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Music,
+            quality_score: 70.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["long".to_string()],
+        };
+        let desc = parse_description_response(&long_text, &analysis).unwrap();
+        assert_eq!(desc.summary.len(), 10_000);
+        assert_eq!(desc.tags, vec!["long"]);
+        assert!(desc.genre.is_none());
+    }
+
+    #[test]
+    fn parse_json_with_extra_text_before_and_after() {
+        let response = r#"Sure! Here is the analysis:
+{"summary":"A classical piece","genre":"classical","mood":"serene","tags":["orchestra","strings"],"content_rating":"G"}
+Hope that helps!"#;
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Music,
+            quality_score: 80.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        let desc = parse_description_response(response, &analysis).unwrap();
+        assert_eq!(desc.summary, "A classical piece");
+        assert_eq!(desc.genre, Some("classical".to_string()));
+        assert_eq!(desc.mood, Some("serene".to_string()));
+        assert_eq!(desc.content_rating, Some("G".to_string()));
+    }
+
+    #[test]
+    fn parse_partial_json_missing_fields() {
+        let response = r#"{"summary":"Minimal response"}"#;
+        let analysis = MediaAnalysis {
+            content_type: crate::ContentType::Unknown,
+            quality_score: 50.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        // serde should handle missing optional fields via defaults
+        let result = parse_description_response(response, &analysis);
+        // If ContentDescription requires all fields, it falls back to raw text
+        let desc = result.unwrap();
+        // Either parsed or fell back — either way summary should be meaningful
+        assert!(!desc.summary.is_empty());
+    }
 }

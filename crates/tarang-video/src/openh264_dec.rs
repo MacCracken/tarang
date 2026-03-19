@@ -17,6 +17,18 @@ fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> VideoFrame {
 
     let chroma_w = width.div_ceil(2) as usize;
     let chroma_h = height.div_ceil(2) as usize;
+
+    // Validate strides to prevent out-of-bounds access
+    if y_stride < width as usize || u_stride < chroma_w || v_stride < chroma_w {
+        return VideoFrame {
+            data: Bytes::new(),
+            pixel_format: PixelFormat::Yuv420p,
+            width,
+            height,
+            timestamp,
+        };
+    }
+
     let y_size = width as usize * height as usize;
     let mut yuv_data = Vec::with_capacity(y_size + chroma_w * chroma_h * 2);
 

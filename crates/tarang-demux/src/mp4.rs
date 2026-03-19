@@ -113,7 +113,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read box header: {e}")))?;
 
-        let mut size = u32::from_be_bytes(buf[0..4].try_into().unwrap()) as u64;
+        let mut size = u32::from_be_bytes(
+            buf[..4]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid box header".into()))?,
+        ) as u64;
         let mut box_type = [0u8; 4];
         box_type.copy_from_slice(&buf[4..8]);
 
@@ -276,7 +280,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         track: &mut Mp4Track,
         is_audio: &mut bool,
     ) -> Result<()> {
-        while self.reader.stream_position().unwrap_or(end) < end {
+        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -334,7 +338,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         track: &mut Mp4Track,
         is_audio: &mut bool,
     ) -> Result<()> {
-        while self.reader.stream_position().unwrap_or(end) < end {
+        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -421,7 +425,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     }
 
     fn parse_minf_children(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {
-        while self.reader.stream_position().unwrap_or(end) < end {
+        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -440,7 +444,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     }
 
     fn parse_stbl_children(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {
-        while self.reader.stream_position().unwrap_or(end) < end {
+        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -475,7 +479,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsd header: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         if entry_count == 0 {
             return Ok(());
@@ -508,10 +512,10 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         })?;
 
         // reserved(8) at offset 0..8
-        track.channels = u16::from_be_bytes(audio_entry[8..10].try_into().unwrap());
+        track.channels = u16::from_be_bytes(audio_entry[8..10].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
         // sample_size at 10..12, pre_defined at 12..14, reserved at 14..16
         // sample_rate is 16.16 fixed point at 16..20
-        let sr_fixed = u32::from_be_bytes(audio_entry[16..20].try_into().unwrap());
+        let sr_fixed = u32::from_be_bytes(audio_entry[16..20].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
         track.sample_rate = sr_fixed >> 16;
 
         Ok(())
@@ -527,7 +531,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stts: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         track.time_to_sample.clear();
         for _ in 0..entry_count {
@@ -535,8 +539,8 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             self.reader
                 .read_exact(&mut entry)
                 .map_err(|e| TarangError::DemuxError(format!("failed to read stts entry: {e}")))?;
-            let count = u32::from_be_bytes(entry[0..4].try_into().unwrap());
-            let delta = u32::from_be_bytes(entry[4..8].try_into().unwrap());
+            let count = u32::from_be_bytes(entry[0..4].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+            let delta = u32::from_be_bytes(entry[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
             track.time_to_sample.push((count, delta));
         }
 
@@ -553,7 +557,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsc: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         track.sample_to_chunk.clear();
         for _ in 0..entry_count {
@@ -561,9 +565,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             self.reader
                 .read_exact(&mut entry)
                 .map_err(|e| TarangError::DemuxError(format!("failed to read stsc entry: {e}")))?;
-            let first_chunk = u32::from_be_bytes(entry[0..4].try_into().unwrap());
-            let samples_per_chunk = u32::from_be_bytes(entry[4..8].try_into().unwrap());
-            let desc_index = u32::from_be_bytes(entry[8..12].try_into().unwrap());
+            let first_chunk = u32::from_be_bytes(entry[0..4].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+            let samples_per_chunk = u32::from_be_bytes(entry[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+            let desc_index = u32::from_be_bytes(entry[8..12].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
             track
                 .sample_to_chunk
                 .push((first_chunk, samples_per_chunk, desc_index));
@@ -583,8 +587,8 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsz: {e}")))?;
-        track.default_sample_size = u32::from_be_bytes(buf[4..8].try_into().unwrap());
-        let sample_count = u32::from_be_bytes(buf[8..12].try_into().unwrap());
+        track.default_sample_size = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let sample_count = u32::from_be_bytes(buf[8..12].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         track.sample_sizes.clear();
         if track.default_sample_size == 0 {
@@ -616,7 +620,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stco: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
@@ -640,7 +644,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read co64: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
 
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
@@ -748,7 +752,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         let mut found_ftyp = false;
         let mut found_moov = false;
 
-        while self.reader.stream_position().unwrap_or(file_size) < file_size {
+        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < file_size {
             let header = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -764,7 +768,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                     found_moov = true;
                     let moov_end = header.data_offset + header.data_size;
                     // Parse moov children
-                    while self.reader.stream_position().unwrap_or(moov_end) < moov_end {
+                    while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < moov_end {
                         let child = match self.read_box_header() {
                             Ok(h) => h,
                             Err(_) => break,
@@ -1133,7 +1137,7 @@ mod tests {
         assert!(info.has_audio());
         assert!(!info.has_video());
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].codec, AudioCodec::Aac);
         assert_eq!(audio[0].sample_rate, 44100);
@@ -1147,7 +1151,7 @@ mod tests {
         let mut demuxer = Mp4Demuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].channels, 1);
         assert_eq!(audio[0].sample_rate, 48000);
     }
@@ -1243,5 +1247,57 @@ mod tests {
         let cursor = Cursor::new(vec![0u8; 100]);
         let mut demuxer = Mp4Demuxer::new(cursor);
         assert!(demuxer.probe().is_err());
+    }
+
+    #[test]
+    fn mp4_truncated_file_mid_box() {
+        // Build a valid MP4 and truncate it in the middle of the moov box
+        let mp4 = make_mp4_aac(44100, 2, 10, 128);
+        // Find where moov starts and cut partway through it
+        let mut moov_start = 0;
+        let mut pos = 0;
+        while pos + 8 <= mp4.len() {
+            let size =
+                u32::from_be_bytes(mp4[pos..pos + 4].try_into().unwrap()) as usize;
+            let btype = &mp4[pos + 4..pos + 8];
+            if btype == b"moov" {
+                moov_start = pos;
+                break;
+            }
+            if size == 0 {
+                break;
+            }
+            pos += size;
+        }
+        assert!(moov_start > 0, "should find moov box");
+        // Truncate 20 bytes into the moov box (partway through mvhd)
+        let truncated = &mp4[..moov_start + 20];
+        let cursor = Cursor::new(truncated.to_vec());
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        // Should fail because moov is incomplete
+        assert!(demuxer.probe().is_err());
+    }
+
+    #[test]
+    fn mp4_no_moov_box() {
+        // Build a file with only an ftyp box and an mdat box, no moov
+        let mut buf = Vec::new();
+
+        // ftyp box
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        // mdat box (just some data, no moov)
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        buf.extend_from_slice(&[0xAAu8; 256]);
+        patch_box_size(&mut buf, mdat_start);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should fail with no moov box");
     }
 }

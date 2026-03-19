@@ -57,7 +57,8 @@ impl AudioEncoder for AacEncoder {
         self.buf_i16.clear();
         self.buf_i16.reserve(total);
         for &s in &float_samples[..total.min(float_samples.len())] {
-            self.buf_i16.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+            self.buf_i16
+                .push((s.clamp(-1.0, 1.0) * crate::sample::I16_SCALE) as i16);
         }
 
         let mut packets = Vec::new();
@@ -91,14 +92,120 @@ impl AudioEncoder for AacEncoder {
         // Flush remaining encoder delay
         let mut out = vec![0u8; 2048];
         let empty: &[i16] = &[];
-        match self.encoder.encode(empty, &mut out) {
-            Ok(result) if result.output_size > 0 => {
-                out.truncate(result.output_size);
-                Ok(vec![out])
-            }
-            _ => Ok(vec![]),
+        let result = self
+            .encoder
+            .encode(empty, &mut out)
+            .map_err(|e| TarangError::Pipeline(format!("AAC flush error: {e:?}")))?;
+
+        if result.output_size > 0 {
+            out.truncate(result.output_size);
+            Ok(vec![out])
+        } else {
+            Ok(vec![])
         }
     }
 }
 
 use crate::sample::bytes_to_f32;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_buffer(samples: &[f32], channels: u16, sample_rate: u32) -> tarang_core::AudioBuffer {
+        crate::sample::make_test_buffer(samples, channels, sample_rate)
+    }
+
+    fn make_sine(num_samples: usize, channels: u16, sample_rate: u32) -> Vec<f32> {
+        crate::sample::make_test_sine(440.0, sample_rate, num_samples, channels)
+    }
+
+    fn aac_config(sample_rate: u32, channels: u16) -> EncoderConfig {
+        EncoderConfig {
+            codec: AudioCodec::Aac,
+            sample_rate,
+            channels,
+            bits_per_sample: 16,
+        }
+    }
+
+    #[test]
+    fn aac_encoder_creates_stereo() {
+        let config = aac_config(44100, 2);
+        if let Err(e) = AacEncoder::new(&config) {
+            panic!("failed to create stereo AAC encoder: {e}");
+        }
+    }
+
+    #[test]
+    fn aac_encoder_creates_mono() {
+        let config = aac_config(44100, 1);
+        if let Err(e) = AacEncoder::new(&config) {
+            panic!("failed to create mono AAC encoder: {e}");
+        }
+    }
+
+    #[test]
+    fn aac_encode_produces_output() {
+        let config = aac_config(44100, 2);
+        let mut enc = AacEncoder::new(&config).unwrap();
+
+        // Generate enough samples to fill at least one AAC frame (typically 1024 samples)
+        let samples = make_sine(4096, 2, 44100);
+        let buf = make_buffer(&samples, 2, 44100);
+        let packets = enc.encode(&buf).unwrap();
+        assert!(
+            !packets.is_empty(),
+            "encoding 4096 stereo samples should produce at least one packet"
+        );
+        for pkt in &packets {
+            assert!(!pkt.is_empty(), "encoded packet should not be empty");
+        }
+    }
+
+    #[test]
+    fn aac_unsupported_channel_count() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 6,
+            bits_per_sample: 16,
+        };
+        let result = AacEncoder::new(&config);
+        assert!(result.is_err(), "6-channel AAC should be rejected");
+    }
+
+    #[test]
+    fn aac_wrong_codec_rejected() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let result = AacEncoder::new(&config);
+        assert!(result.is_err(), "non-AAC codec should be rejected");
+    }
+
+    #[test]
+    fn aac_flush_does_not_panic() {
+        let config = aac_config(44100, 2);
+        let mut enc = AacEncoder::new(&config).unwrap();
+        // Flush without encoding anything should succeed
+        let result = enc.flush();
+        assert!(result.is_ok(), "flush should not error: {result:?}");
+    }
+
+    #[test]
+    fn aac_flush_after_encode() {
+        let config = aac_config(44100, 2);
+        let mut enc = AacEncoder::new(&config).unwrap();
+
+        let samples = make_sine(4096, 2, 44100);
+        let buf = make_buffer(&samples, 2, 44100);
+        let _ = enc.encode(&buf).unwrap();
+
+        let flush_result = enc.flush();
+        assert!(flush_result.is_ok(), "flush after encode should succeed");
+    }
+}

@@ -1,96 +1,39 @@
 # Tarang Roadmap
 
 > **Principle**: FOSS codecs first, proprietary codecs next, wide coverage always in scope.
-> Audio pipeline is the critical path to MVP — video layers on after.
-> Encoding follows decoding for each media type.
-
-## Phase 1 — Foundation (Complete)
-- [x] Core types: codecs, formats, buffers, pipeline primitives
-- [x] WAV demuxer (pure Rust)
-- [x] Magic bytes format detection (WebM vs MKV via EBML DocType)
-- [x] Audio probe via symphonia (auto-detects container format)
-- [x] Video decoder framework with unified backend dispatch
-- [x] AI content classification
-- [x] CLI + MCP server (8 tools)
-- [x] CI/CD pipelines
-
-## MVP (v0.1) — Audio-First Playback Engine
-
-### M1: Container Demuxers
-- [x] MP4/M4A demuxer (pure Rust — parse moov/mdat atoms)
-- [x] OGG demuxer (pure Rust — page/packet extraction, CRC-32 validation, bisection seek)
-
-### M2: Full Audio Decode
-- [x] Symphonia decode pipeline (full decode, not just probe)
-- [x] FOSS first: FLAC, Vorbis, Opus, WAV/PCM
-- [x] Then: MP3 (patents expired), AAC, ALAC
-
-### M3: Audio Processing
-- [x] Resampling (pure Rust — linear + windowed sinc)
-- [x] Channel mixing (stereo↔mono, 5.1 downmix, generic N→1/N→2)
-
-### M4: Audio Output
-- [x] AudioOutput trait + NullOutput (test sink)
-- [x] PipeWire output backend (lock-free SPSC ring buffer, condvar ready signal)
-
-### M5: Audio Encoding
-- [x] Muxer trait + WAV muxer (pure Rust — inverse of demuxer, roundtrip-verified)
-- [x] OGG muxer (pure Rust — page assembly, CRC-32, Opus + Vorbis headers, roundtrip-verified)
-- [x] MP4/M4A muxer (pure Rust — moov/mdat assembly, roundtrip-verified with Mp4Demuxer)
-- [x] PCM encoder (F32 → 16/24/32-bit interleaved PCM)
-- [x] FLAC encoder (pure Rust — verbatim subframes, BitWriter, STREAMINFO generation)
-- [x] Opus encoder (libopus FFI, behind `opus-enc` feature flag)
-- [x] AAC encoder (fdk-aac FFI, behind `aac-enc` feature flag)
-
-## v0.2 — Container Coverage + Video Bootstrap
-
-### V1: MKV/WebM Demuxer
-- [x] Matroska/WebM demuxer (pure Rust — EBML parser, audio + video tracks, SimpleBlock packets)
-
-### V2: FOSS Video Codecs (Decode)
-- [x] dav1d bindings (AV1 decoding, behind `dav1d` feature flag)
-- [x] libvpx bindings (VP8/VP9 decoding, behind `vpx` feature flag)
-- [x] Safe wrapper types with lifetime management
-
-### V3: Video Encoding
-- [x] rav1e bindings (AV1 encoding — pure Rust, behind `rav1e` feature flag)
-- [x] libvpx-enc bindings (VP8/VP9 encoding, behind `vpx-enc` feature flag)
-- [x] MKV/WebM muxer (pure Rust — EBML writer, roundtrip-verified with MkvDemuxer)
-
-## v1.0 — Full Media Engine
-
-### F1: Remaining Video Codecs (Decode)
-- [x] openh264 bindings (H.264 decoding, behind `openh264` feature flag)
-- [x] VA-API hardware acceleration detection (behind `vaapi` feature flag, probes DRM render nodes)
-- ~~VDPAU~~ — dropped (Mesa removed VDPAU from all open-source drivers)
-
-### F2: Remaining Video Encoding
-- [x] openh264 bindings (H.264 encoding, behind `openh264-enc` feature flag)
-- [x] VA-API hardware-accelerated encode scaffolding (H.264/HEVC, surface lifecycle, entrypoint selection)
-
-### F3: AI Features
-- [x] Transcription routing to hoosh (Whisper models — HooshClient, WAV encoding, audio preprocessing)
-- [x] Audio fingerprinting (Chromaprint-style — FFT, chroma features, hash comparison, 64K hash limit)
-- [x] Scene detection in video (histogram diff, chi-squared distance, gradual transitions)
-- [x] Thumbnail generation at keyframes (YUV→RGB, JPEG/PNG encoding, Arc-based candidate storage)
-
-## Post-v1 — Ecosystem Integration (Complete)
-- [x] AGNOS media player backend (Jalwa — built on tarang)
-- [x] Tazama video editor backend (tarang decode/encode pipeline)
-- [x] Shruti DAW backend (audio I/O unified under tarang-audio)
-- [x] AGNOS marketplace recipe (`recipes/marketplace/tarang.toml`)
-- [x] MCP tools registered in daimon (8 tools: probe, analyze, codecs, transcribe, formats, fingerprint_index, search_similar, describe)
-- [x] agnoshi intents (8 intents: probe, analyze, codecs, transcribe, formats, fingerprint, similar, describe)
-- [x] Daimon integration module — vector store fingerprint indexing, RAG metadata ingestion, multimodal agent registration, LLM content description via hoosh
-- [x] Hoosh endpoint fix (port 8088, correct path)
 
 ## Waiting on Upstream
 - [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` releasing a version compatible with `cros-libva` 0.0.13 (current cros-codecs 0.0.6 depends on cros-libva 0.0.12). *(added 2026-03-16)*
 - [ ] **rav1e `paste` dependency** — rav1e 0.8.1 depends on `paste` 1.0.15 which is unmaintained (RUSTSEC-2024-0436). No security vulnerability, but watch for rav1e release that drops or replaces it. *(added 2026-03-16)*
 
-## Downstream Consumers (All Integrated)
-- **AGNOS Media Player (Jalwa)** — primary GUI player built on tarang
-- **Tazama** — video editor, using tarang for decode/encode pipeline
-- **Shruti** — DAW, audio I/O unified under tarang-audio
+## Engineering Backlog *(added 2026-03-18)*
 
-> **Note**: As tarang gains new capabilities (e.g. new codecs, hardware acceleration, streaming), review downstream consumers for integration updates.
+### Test Coverage
+- [x] **tarang-audio**: Opus encoder tests (11 tests — error paths, sample rates, partial frames) *(done 2026-03-19)*
+- [x] **tarang-audio**: AAC encoder tests (7 tests — buffer edges, flush, channel counts) *(done 2026-03-19)*
+- [x] **tarang-audio**: PipeWire output tests (7 tests — ring buffer wraparound, full/empty, data integrity) *(done 2026-03-19)*
+- [x] **tarang-video**: dav1d decoder tests (7 tests — creation, flush, timestamps) *(done 2026-03-19)*
+- [x] **tarang-video**: rav1e encoder tests (9 tests — encode/flush, validation, dimension checks) *(done 2026-03-19)*
+- [x] **tarang-ai**: daimon.rs unit tests (12 new tests — embeddings, RAG formatting, prompt building, parse edge cases) *(done 2026-03-19)*
+- [x] **tarang-demux**: Integration tests (4 tests — WAV probe/read/seek, OGG Opus+Vorbis roundtrip, format detection) *(done 2026-03-19)*
+- [x] **tarang-demux**: Error case tests (5 tests — truncated MP4/OGG/WAV, missing moov, zero channels) *(done 2026-03-19)*
+- [x] **tarang (CLI)**: MCP protocol validation tests (4 tests — error/success response, open_and_probe) *(done 2026-03-19)*
+
+### Performance
+- [x] **tarang-audio/resample**: Pre-compute sinc lookup table for windowed sinc resampler *(done 2026-03-19)*
+- [ ] **tarang-audio/resample**: SIMD vectorization for linear interpolation
+- [x] **tarang-ai/scene**: Integer math for RGB→luminance — `(77*r+150*g+29*b)>>8` *(done 2026-03-19)*
+- [x] **tarang-ai/thumbnail**: Integer YUV→RGB with pre-computed chroma contributions *(done 2026-03-19)*
+- [ ] **tarang-demux/mux**: Mp4Muxer streaming write (currently accumulates all samples in memory — OOMs on large files)
+- [ ] **tarang-audio/encode_flac**: LPC compression (currently verbatim-only — valid FLAC but uncompressed)
+
+### Code Quality
+- [x] **tarang-demux**: Extract shared EBML helpers (ebml.rs — 26 tests) *(done 2026-03-19)*
+- [x] **tarang-ai**: Extract shared luminance computation (video_utils.rs — 7 tests) *(done 2026-03-19)*
+- [x] **tarang-ai**: Extract shared sample format conversion (audio_utils.rs — 5 tests) *(done 2026-03-19)*
+- [x] **tarang-audio/encode_aac**: Use `sample::I16_SCALE` constant *(done 2026-03-19)*
+- [x] **tarang-audio/encode_aac**: Return errors from `flush()` *(done 2026-03-19)*
+- [x] **tarang-demux**: Propagate stream position errors in mp4.rs *(done 2026-03-19)*
+- [x] **tarang-video**: Remove dead `update_dims()` method in lib.rs *(done 2026-03-19)*
+- [x] **tarang-video**: Standardize timestamp units — documented nanos convention *(done 2026-03-19)*
+

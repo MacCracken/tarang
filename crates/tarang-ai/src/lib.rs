@@ -3,11 +3,13 @@
 //! Media analysis, content classification, and transcription routing via hoosh.
 //! Connects to the AGNOS LLM gateway for AI-powered media understanding.
 
+pub mod audio_utils;
 pub mod daimon;
 pub mod fingerprint;
 pub mod scene;
 pub mod thumbnail;
 pub mod transcribe;
+pub mod video_utils;
 
 pub use daimon::{
     ContentDescription, DaimonClient, DaimonConfig, HooshLlmClient, HooshLlmConfig, RagResult,
@@ -131,7 +133,7 @@ pub fn analyze_media(info: &MediaInfo) -> MediaAnalysis {
     let quality_score = compute_quality_score(info);
     let codec_recommendation = suggest_codec(info);
 
-    let video_streams = info.video_streams();
+    let video_streams = info.video_streams().collect::<Vec<_>>();
     let estimated_complexity = if let Some(v) = video_streams.first() {
         let pixels = v.width as f64 * v.height as f64;
         let fps = v.frame_rate;
@@ -211,7 +213,7 @@ pub fn prepare_transcription(
     info: &MediaInfo,
     language_hint: Option<String>,
 ) -> Option<TranscriptionRequest> {
-    let audio = info.audio_streams().into_iter().next()?;
+    let audio = info.audio_streams().next()?;
     let duration = info.duration.unwrap_or(Duration::ZERO);
 
     Some(TranscriptionRequest {

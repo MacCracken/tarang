@@ -42,7 +42,7 @@ impl Rav1eEncoder {
         let mut enc_config = rav1e::EncoderConfig::default();
         enc_config.width = config.width as usize;
         enc_config.height = config.height as usize;
-        enc_config.speed_settings = rav1e::SpeedSettings::from_preset(config.speed as usize);
+        enc_config.speed_settings = rav1e::config::SpeedSettings::from_preset(config.speed.min(255) as u8);
         enc_config.bitrate = (config.bitrate_bps).min(i32::MAX as u32) as i32;
         enc_config.time_base = rav1e::data::Rational {
             num: config.frame_rate_den as u64,
@@ -95,33 +95,67 @@ impl Rav1eEncoder {
             )));
         }
 
-        // Y
-        for row in 0..self.height as usize {
-            let src_start = row * self.width as usize;
-            let src_end = src_start + self.width as usize;
-            let dst =
-                &mut enc_frame.planes[0].data_origin_mut()[row * enc_frame.planes[0].cfg.stride..];
-            dst[..self.width as usize].copy_from_slice(&frame.data[src_start..src_end]);
+        // Y plane
+        {
+            let stride = enc_frame.planes[0].cfg.stride;
+            let plane = enc_frame.planes[0].data_origin_mut();
+            let needed =
+                (self.height as usize - 1) * stride + self.width as usize;
+            if plane.len() < needed {
+                return Err(TarangError::Pipeline(format!(
+                    "rav1e Y plane buffer too small: {} < {needed}",
+                    plane.len()
+                )));
+            }
+            for row in 0..self.height as usize {
+                let src_start = row * self.width as usize;
+                let src_end = src_start + self.width as usize;
+                let dst_start = row * stride;
+                plane[dst_start..dst_start + self.width as usize]
+                    .copy_from_slice(&frame.data[src_start..src_end]);
+            }
         }
 
-        // U
-        let u_offset = y_size;
-        for row in 0..chroma_h {
-            let src_start = u_offset + row * chroma_w;
-            let src_end = src_start + chroma_w;
-            let dst =
-                &mut enc_frame.planes[1].data_origin_mut()[row * enc_frame.planes[1].cfg.stride..];
-            dst[..chroma_w].copy_from_slice(&frame.data[src_start..src_end]);
+        // U plane
+        {
+            let u_offset = y_size;
+            let stride = enc_frame.planes[1].cfg.stride;
+            let plane = enc_frame.planes[1].data_origin_mut();
+            let needed = (chroma_h - 1) * stride + chroma_w;
+            if plane.len() < needed {
+                return Err(TarangError::Pipeline(format!(
+                    "rav1e U plane buffer too small: {} < {needed}",
+                    plane.len()
+                )));
+            }
+            for row in 0..chroma_h {
+                let src_start = u_offset + row * chroma_w;
+                let src_end = src_start + chroma_w;
+                let dst_start = row * stride;
+                plane[dst_start..dst_start + chroma_w]
+                    .copy_from_slice(&frame.data[src_start..src_end]);
+            }
         }
 
-        // V
-        let v_offset = u_offset + chroma_w * chroma_h;
-        for row in 0..chroma_h {
-            let src_start = v_offset + row * chroma_w;
-            let src_end = src_start + chroma_w;
-            let dst =
-                &mut enc_frame.planes[2].data_origin_mut()[row * enc_frame.planes[2].cfg.stride..];
-            dst[..chroma_w].copy_from_slice(&frame.data[src_start..src_end]);
+        // V plane
+        {
+            let v_offset = y_size + chroma_w * chroma_h;
+            let stride = enc_frame.planes[2].cfg.stride;
+            let plane = enc_frame.planes[2].data_origin_mut();
+            let needed = (chroma_h - 1) * stride + chroma_w;
+            if plane.len() < needed {
+                return Err(TarangError::Pipeline(format!(
+                    "rav1e V plane buffer too small: {} < {needed}",
+                    plane.len()
+                )));
+            }
+            for row in 0..chroma_h {
+                let src_start = v_offset + row * chroma_w;
+                let src_end = src_start + chroma_w;
+                let dst_start = row * stride;
+                plane[dst_start..dst_start + chroma_w]
+                    .copy_from_slice(&frame.data[src_start..src_end]);
+            }
         }
 
         self.context
@@ -158,6 +192,7 @@ impl Rav1eEncoder {
                 Err(rav1e::EncoderStatus::LimitReached) => break,
                 Err(rav1e::EncoderStatus::NeedMoreData) => break,
                 Err(rav1e::EncoderStatus::EnoughData) => continue,
+                Err(rav1e::EncoderStatus::Encoded) => continue,
                 Err(e) => {
                     return Err(TarangError::Pipeline(format!("rav1e flush: {e}")));
                 }
@@ -168,5 +203,172 @@ impl Rav1eEncoder {
 
     pub fn frames_encoded(&self) -> u64 {
         self.frames_encoded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::time::Duration;
+    use tarang_core::PixelFormat;
+
+    fn make_yuv420p_frame(width: u32, height: u32) -> VideoFrame {
+        let y_size = (width * height) as usize;
+        let chroma_w = (width / 2) as usize;
+        let chroma_h = (height / 2) as usize;
+        let total = y_size + 2 * chroma_w * chroma_h;
+        let mut data = vec![0u8; total];
+        // Gradient Y plane
+        for i in 0..y_size {
+            data[i] = (i % 256) as u8;
+        }
+        // Flat chroma
+        for i in y_size..total {
+            data[i] = 128;
+        }
+        VideoFrame {
+            data: Bytes::from(data),
+            pixel_format: PixelFormat::Yuv420p,
+            width,
+            height,
+            timestamp: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn encoder_creation() {
+        let config = Rav1eConfig {
+            width: 320,
+            height: 240,
+            speed: 10,
+            ..Default::default()
+        };
+        let encoder = Rav1eEncoder::new(&config).unwrap();
+        assert_eq!(encoder.frames_encoded(), 0);
+    }
+
+    #[test]
+    fn encoder_rejects_odd_dimensions() {
+        let config = Rav1eConfig {
+            width: 321,
+            height: 240,
+            ..Default::default()
+        };
+        assert!(Rav1eEncoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn encoder_rejects_odd_height() {
+        let config = Rav1eConfig {
+            width: 320,
+            height: 241,
+            ..Default::default()
+        };
+        assert!(Rav1eEncoder::new(&config).is_err());
+    }
+
+    #[test]
+    fn send_frame_dimension_mismatch() {
+        let config = Rav1eConfig {
+            width: 320,
+            height: 240,
+            speed: 10,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+        let frame = make_yuv420p_frame(640, 480);
+        assert!(encoder.send_frame(&frame).is_err());
+    }
+
+    #[test]
+    fn send_frame_data_too_small() {
+        let config = Rav1eConfig {
+            width: 320,
+            height: 240,
+            speed: 10,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+        let frame = VideoFrame {
+            data: Bytes::from(vec![0u8; 100]),
+            pixel_format: PixelFormat::Yuv420p,
+            width: 320,
+            height: 240,
+            timestamp: Duration::ZERO,
+        };
+        assert!(encoder.send_frame(&frame).is_err());
+    }
+
+    #[test]
+    fn encode_single_frame() {
+        let config = Rav1eConfig {
+            width: 64,
+            height: 64,
+            speed: 10,
+            bitrate_bps: 100_000,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+        let frame = make_yuv420p_frame(64, 64);
+        encoder.send_frame(&frame).unwrap();
+        // May or may not produce a packet (encoder may buffer)
+        let _ = encoder.receive_packet().unwrap();
+    }
+
+    #[test]
+    fn encode_and_flush() {
+        let config = Rav1eConfig {
+            width: 64,
+            height: 64,
+            speed: 10,
+            bitrate_bps: 100_000,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+
+        let mut total_packets = 0;
+        for i in 0..3 {
+            let mut frame = make_yuv420p_frame(64, 64);
+            frame.timestamp = Duration::from_millis(i * 33);
+            encoder.send_frame(&frame).unwrap();
+            // Drain all available packets before sending more
+            while let Ok(Some(_)) = encoder.receive_packet() {
+                total_packets += 1;
+            }
+        }
+
+        let flushed = encoder.flush().unwrap();
+        total_packets += flushed.len();
+        assert!(
+            total_packets > 0,
+            "should produce at least one packet after flush"
+        );
+    }
+
+    #[test]
+    fn flush_empty_encoder() {
+        let config = Rav1eConfig {
+            width: 64,
+            height: 64,
+            speed: 10,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+        let flushed = encoder.flush().unwrap();
+        assert!(flushed.is_empty());
+    }
+
+    #[test]
+    fn receive_without_send_returns_none() {
+        let config = Rav1eConfig {
+            width: 64,
+            height: 64,
+            speed: 10,
+            ..Default::default()
+        };
+        let mut encoder = Rav1eEncoder::new(&config).unwrap();
+        let result = encoder.receive_packet().unwrap();
+        assert!(result.is_none());
     }
 }

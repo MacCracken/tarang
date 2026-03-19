@@ -171,7 +171,7 @@ mod tests {
         assert!(!info.has_video());
         assert_eq!(info.streams.len(), 1);
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].codec, AudioCodec::Pcm);
         assert_eq!(audio[0].sample_rate, 44100);
@@ -185,7 +185,7 @@ mod tests {
         let info = probe_audio(file).unwrap();
 
         assert_eq!(info.format, ContainerFormat::Wav);
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].sample_rate, 16000);
         assert_eq!(audio[0].channels, 1);
     }
@@ -207,7 +207,7 @@ mod tests {
         let file = wav_to_tempfile(&wav);
         let info = probe_audio(file).unwrap();
 
-        assert_eq!(info.audio_streams()[0].sample_rate, 96000);
+        assert_eq!(info.audio_streams().collect::<Vec<_>>()[0].sample_rate, 96000);
     }
 
     #[test]

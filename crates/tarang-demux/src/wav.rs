@@ -239,7 +239,7 @@ mod tests {
         assert!(info.has_audio());
         assert!(!info.has_video());
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].codec, AudioCodec::Pcm);
         assert_eq!(audio[0].sample_rate, 44100);
@@ -253,7 +253,7 @@ mod tests {
         let mut demuxer = WavDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].channels, 1);
         assert_eq!(audio[0].sample_rate, 48000);
     }
@@ -316,5 +316,41 @@ mod tests {
         let cursor = Cursor::new(vec![0u8; 100]);
         let mut demuxer = WavDemuxer::new(cursor);
         assert!(demuxer.probe().is_err());
+    }
+
+    #[test]
+    fn wav_truncated_fmt_chunk() {
+        // Build a WAV header that declares a fmt chunk but truncates before
+        // the full 16 bytes of fmt data are present.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&100u32.to_le_bytes()); // file size (lies)
+        buf.extend_from_slice(b"WAVE");
+        // fmt chunk header
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes()); // claims 16 bytes of fmt data
+        // But only write 4 bytes of fmt data (truncated)
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+        buf.extend_from_slice(&2u16.to_le_bytes()); // channels
+        // File ends here — missing sample_rate, byte_rate, block_align, bits_per_sample
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = WavDemuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should fail when fmt chunk is truncated");
+    }
+
+    #[test]
+    fn wav_zero_channels() {
+        // Create a WAV with 0 channels — should probe but produce
+        // zero-duration or degenerate metadata.
+        let wav = make_wav(100, 44100, 0, 16);
+        let cursor = Cursor::new(wav);
+        let mut demuxer = WavDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio[0].channels, 0);
+        // With 0 channels, data_size is 0, so duration should be 0 or handled gracefully
     }
 }

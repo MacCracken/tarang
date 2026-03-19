@@ -224,24 +224,18 @@ pub struct MediaInfo {
 }
 
 impl MediaInfo {
-    pub fn audio_streams(&self) -> Vec<&AudioStreamInfo> {
-        self.streams
-            .iter()
-            .filter_map(|s| match s {
-                StreamInfo::Audio(a) => Some(a),
-                _ => None,
-            })
-            .collect()
+    pub fn audio_streams(&self) -> impl Iterator<Item = &AudioStreamInfo> {
+        self.streams.iter().filter_map(|s| match s {
+            StreamInfo::Audio(a) => Some(a),
+            _ => None,
+        })
     }
 
-    pub fn video_streams(&self) -> Vec<&VideoStreamInfo> {
-        self.streams
-            .iter()
-            .filter_map(|s| match s {
-                StreamInfo::Video(v) => Some(v),
-                _ => None,
-            })
-            .collect()
+    pub fn video_streams(&self) -> impl Iterator<Item = &VideoStreamInfo> {
+        self.streams.iter().filter_map(|s| match s {
+            StreamInfo::Video(v) => Some(v),
+            _ => None,
+        })
     }
 
     pub fn has_video(&self) -> bool {
@@ -508,10 +502,10 @@ mod tests {
 
         assert!(info.has_video());
         assert!(info.has_audio());
-        assert_eq!(info.video_streams().len(), 1);
-        assert_eq!(info.audio_streams().len(), 1);
-        assert_eq!(info.video_streams()[0].width, 1920);
-        assert_eq!(info.audio_streams()[0].sample_rate, 48000);
+        assert_eq!(info.video_streams().collect::<Vec<_>>().len(), 1);
+        assert_eq!(info.audio_streams().collect::<Vec<_>>().len(), 1);
+        assert_eq!(info.video_streams().collect::<Vec<_>>()[0].width, 1920);
+        assert_eq!(info.audio_streams().collect::<Vec<_>>()[0].sample_rate, 48000);
     }
 
     #[test]
@@ -536,8 +530,8 @@ mod tests {
 
         assert!(!info.has_video());
         assert!(info.has_audio());
-        assert_eq!(info.video_streams().len(), 0);
-        assert_eq!(info.audio_streams().len(), 1);
+        assert_eq!(info.video_streams().count(), 0);
+        assert_eq!(info.audio_streams().count(), 1);
     }
 
     #[test]
@@ -657,8 +651,8 @@ mod tests {
         };
         assert!(!info.has_video());
         assert!(!info.has_audio());
-        assert!(info.video_streams().is_empty());
-        assert!(info.audio_streams().is_empty());
+        assert_eq!(info.video_streams().count(), 0);
+        assert_eq!(info.audio_streams().count(), 0);
     }
 
     #[test]
@@ -800,9 +794,9 @@ mod tests {
             artist: None,
             album: None,
         };
-        assert_eq!(info.audio_streams().len(), 2);
-        assert_eq!(info.video_streams().len(), 1);
-        assert_eq!(info.audio_streams()[1].channels, 6);
+        assert_eq!(info.audio_streams().count(), 2);
+        assert_eq!(info.video_streams().count(), 1);
+        assert_eq!(info.audio_streams().collect::<Vec<_>>()[1].channels, 6);
     }
 
     #[test]

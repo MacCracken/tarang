@@ -4,6 +4,7 @@
 //! metadata and produce raw codec packets from Clusters.
 
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::time::Duration;
 use tarang_core::{
@@ -70,6 +71,8 @@ pub struct MkvDemuxer<R: Read + Seek> {
     current_cluster_timecode: u64,
     segment_offset: u64,
     segment_size: u64,
+    /// Track number -> stream index lookup for O(1) access
+    track_map: HashMap<u64, usize>,
 }
 
 impl<R: Read + Seek> MkvDemuxer<R> {
@@ -85,6 +88,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             current_cluster_timecode: 0,
             segment_offset: 0,
             segment_size: 0,
+            track_map: HashMap::new(),
         }
     }
 
@@ -463,6 +467,12 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             ));
         }
 
+        // Build track number -> stream index map for O(1) lookup
+        self.track_map.clear();
+        for (idx, track) in self.tracks.iter().enumerate() {
+            self.track_map.insert(track.number, idx);
+        }
+
         let duration = self.duration_secs();
 
         // Build StreamInfo from tracks
@@ -652,12 +662,8 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         let abs_tc = (self.current_cluster_timecode as i64).saturating_add(relative_tc as i64);
         let timestamp = self.timecode_to_duration(abs_tc.max(0) as u64);
 
-        // Map track number to stream index
-        let stream_index = self
-            .tracks
-            .iter()
-            .position(|t| t.number == track_num)
-            .unwrap_or(0);
+        // Map track number to stream index via HashMap
+        let stream_index = self.track_map.get(&track_num).copied().unwrap_or(0);
 
         Ok(Packet {
             stream_index,
@@ -676,79 +682,31 @@ fn io_err(e: std::io::Error) -> TarangError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ebml;
     use std::io::Cursor;
 
-    /// Write a VINT (variable-length integer) to a buffer.
     fn write_vint(buf: &mut Vec<u8>, value: u64) {
-        if value < 0x7F {
-            buf.push(0x80 | value as u8);
-        } else if value < 0x3FFF {
-            buf.push(0x40 | (value >> 8) as u8);
-            buf.push(value as u8);
-        } else if value < 0x1F_FFFF {
-            buf.push(0x20 | (value >> 16) as u8);
-            buf.push((value >> 8) as u8);
-            buf.push(value as u8);
-        } else {
-            buf.push(0x10 | (value >> 24) as u8);
-            buf.push((value >> 16) as u8);
-            buf.push((value >> 8) as u8);
-            buf.push(value as u8);
-        }
+        ebml::write_vint(buf, value);
     }
 
-    /// Write an EBML element ID (IDs include their class bits).
     fn write_id(buf: &mut Vec<u8>, id: u32) {
-        // EBML IDs: 1-byte 0x80..0xFF, 2-byte 0x4000..0x7FFF,
-        // 3-byte 0x200000..0x3FFFFF, 4-byte 0x10000000..0x1FFFFFFF
-        if id >= 0x80 && id <= 0xFF {
-            buf.push(id as u8);
-        } else if id >= 0x4000 && id <= 0x7FFF {
-            buf.push((id >> 8) as u8);
-            buf.push(id as u8);
-        } else if id >= 0x20_0000 && id <= 0x3F_FFFF {
-            buf.push((id >> 16) as u8);
-            buf.push((id >> 8) as u8);
-            buf.push(id as u8);
-        } else {
-            buf.push((id >> 24) as u8);
-            buf.push((id >> 16) as u8);
-            buf.push((id >> 8) as u8);
-            buf.push(id as u8);
-        }
+        ebml::write_id(buf, id);
     }
 
     fn write_uint_element(buf: &mut Vec<u8>, id: u32, value: u64) {
-        write_id(buf, id);
-        if value <= 0xFF {
-            write_vint(buf, 1);
-            buf.push(value as u8);
-        } else if value <= 0xFFFF {
-            write_vint(buf, 2);
-            buf.push((value >> 8) as u8);
-            buf.push(value as u8);
-        } else {
-            write_vint(buf, 4);
-            buf.extend_from_slice(&(value as u32).to_be_bytes());
-        }
+        ebml::write_uint(buf, id, value);
     }
 
     fn write_float_element(buf: &mut Vec<u8>, id: u32, value: f64) {
-        write_id(buf, id);
-        write_vint(buf, 8);
-        buf.extend_from_slice(&value.to_be_bytes());
+        ebml::write_float(buf, id, value);
     }
 
     fn write_string_element(buf: &mut Vec<u8>, id: u32, value: &str) {
-        write_id(buf, id);
-        write_vint(buf, value.len() as u64);
-        buf.extend_from_slice(value.as_bytes());
+        ebml::write_string(buf, id, value);
     }
 
     fn write_master_element(buf: &mut Vec<u8>, id: u32, children: &[u8]) {
-        write_id(buf, id);
-        write_vint(buf, children.len() as u64);
-        buf.extend_from_slice(children);
+        ebml::write_master(buf, id, children);
     }
 
     /// Build a minimal MKV file with one audio track.
@@ -861,7 +819,7 @@ mod tests {
 
         assert_eq!(info.format, ContainerFormat::Mkv);
         assert!(info.has_audio());
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].codec, AudioCodec::Opus);
         assert_eq!(audio[0].sample_rate, 48000);
         assert_eq!(audio[0].channels, 2);
@@ -874,7 +832,7 @@ mod tests {
         let mut demuxer = MkvDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].codec, AudioCodec::Vorbis);
         assert_eq!(audio[0].sample_rate, 44100);
     }
@@ -886,7 +844,7 @@ mod tests {
         let mut demuxer = MkvDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].codec, AudioCodec::Flac);
         assert_eq!(audio[0].sample_rate, 96000);
     }
@@ -899,7 +857,7 @@ mod tests {
         let info = demuxer.probe().unwrap();
 
         assert!(info.has_video());
-        let video = info.video_streams();
+        let video = info.video_streams().collect::<Vec<_>>();
         assert_eq!(video[0].codec, VideoCodec::Av1);
         assert_eq!(video[0].width, 1920);
         assert_eq!(video[0].height, 1080);
@@ -912,7 +870,7 @@ mod tests {
         let mut demuxer = MkvDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let video = info.video_streams();
+        let video = info.video_streams().collect::<Vec<_>>();
         assert_eq!(video[0].codec, VideoCodec::Vp9);
         assert_eq!(video[0].width, 3840);
         assert_eq!(video[0].height, 2160);

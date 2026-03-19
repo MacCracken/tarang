@@ -105,32 +105,57 @@ pub fn resample_sinc(
     }
 
     let half_win = window_size as i64;
+    let tap_count = (2 * half_win) as usize; // taps per output frame
     let mut dst = vec![0.0f32; dst_frames * ch];
+
+    // Pre-compute sinc * window weights for every (output_frame, tap) pair.
+    // This moves all sin()/cos() calls out of the inner channel loop.
+    let mut lut_weights: Vec<f64> = Vec::with_capacity(dst_frames * tap_count);
+    let mut lut_src_indices: Vec<i64> = Vec::with_capacity(dst_frames * tap_count);
+    let mut lut_weight_sums: Vec<f64> = Vec::with_capacity(dst_frames);
 
     for frame in 0..dst_frames {
         let src_pos = frame as f64 / ratio;
         let src_center = src_pos as i64;
+        let mut weight_sum = 0.0f64;
+
+        for tap in 0..tap_count {
+            let i = src_center - half_win + 1 + tap as i64;
+            lut_src_indices.push(i);
+            if i < 0 || i >= src_frames as i64 {
+                lut_weights.push(0.0);
+            } else {
+                let delta = src_pos - i as f64;
+                let w = sinc(delta) * hann_window(delta, half_win as f64);
+                lut_weights.push(w);
+                weight_sum += w;
+            }
+        }
+        lut_weight_sums.push(weight_sum);
+    }
+
+    for frame in 0..dst_frames {
+        let base = frame * tap_count;
+        let weight_sum = lut_weight_sums[frame];
+        let norm = if weight_sum.abs() > 1e-10 {
+            1.0 / weight_sum
+        } else {
+            0.0
+        };
 
         for c in 0..ch {
             let mut sum = 0.0f64;
-            let mut weight_sum = 0.0f64;
 
-            for i in (src_center - half_win + 1)..=(src_center + half_win) {
-                if i < 0 || i >= src_frames as i64 {
+            for tap in 0..tap_count {
+                let w = lut_weights[base + tap];
+                if w == 0.0 {
                     continue;
                 }
-
-                let delta = src_pos - i as f64;
-                let w = sinc(delta) * hann_window(delta, half_win as f64);
+                let i = lut_src_indices[base + tap];
                 sum += src[i as usize * ch + c] as f64 * w;
-                weight_sum += w;
             }
 
-            dst[frame * ch + c] = if weight_sum.abs() > 1e-10 {
-                (sum / weight_sum) as f32
-            } else {
-                0.0
-            };
+            dst[frame * ch + c] = (sum * norm) as f32;
         }
     }
 

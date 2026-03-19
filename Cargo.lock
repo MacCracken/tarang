@@ -2723,7 +2723,7 @@ dependencies = [
 
 [[package]]
 name = "tarang"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -2741,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "tarang-ai"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "bytes",
  "chrono",
@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "tarang-audio"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "bytes",
  "fdk-aac",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "tarang-core"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "bytes",
  "chrono",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "tarang-demux"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "bytes",
  "tarang-core",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "tarang-video"
-version = "2026.3.16-1"
+version = "2026.3.18"
 dependencies = [
  "bytes",
  "cros-libva",

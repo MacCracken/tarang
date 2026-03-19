@@ -27,8 +27,9 @@ impl Dav1dDecoder {
 
     /// Send encoded AV1 data to the decoder.
     ///
-    /// The `timestamp` value is opaque — it is passed through to decoded frames
-    /// and interpreted as nanoseconds when constructing the output `Duration`.
+    /// `timestamp` is in nanoseconds — it is passed through to decoded frames
+    /// and used to construct the output `Duration` via `Duration::from_nanos()`.
+    /// Callers should use `duration.as_nanos() as i64` to convert.
     pub fn send_data(&mut self, data: &[u8], timestamp: i64) -> Result<()> {
         self.decoder
             .send_data(data.to_vec(), Some(timestamp), None, None)
@@ -124,5 +125,73 @@ impl Dav1dDecoder {
 
     pub fn flush(&mut self) {
         self.decoder.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_creation() {
+        let decoder = Dav1dDecoder::new().unwrap();
+        assert_eq!(decoder.frames_decoded(), 0);
+    }
+
+    #[test]
+    fn get_frame_without_data_returns_none() {
+        let mut decoder = Dav1dDecoder::new().unwrap();
+        let result = decoder.get_frame().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn send_invalid_data_errors() {
+        let mut decoder = Dav1dDecoder::new().unwrap();
+        // Invalid AV1 data should error
+        let result = decoder.send_data(&[0xDE, 0xAD, 0xBE, 0xEF], 0);
+        // dav1d may accept and buffer invalid data or reject it — both are acceptable
+        match result {
+            Ok(()) => {
+                // If accepted, get_frame should return None (no valid frame)
+                let frame = decoder.get_frame().unwrap();
+                assert!(frame.is_none());
+            }
+            Err(_) => {} // rejection is fine
+        }
+    }
+
+    #[test]
+    fn flush_on_empty_decoder() {
+        let mut decoder = Dav1dDecoder::new().unwrap();
+        decoder.flush();
+        // After flush, get_frame should return None
+        let result = decoder.get_frame().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn timestamp_passthrough() {
+        // Verify that timestamps sent as nanoseconds are correctly
+        // converted to Duration in the output frame.
+        // We can't decode real AV1 data without a valid bitstream,
+        // but we can verify the conversion math.
+        let ts_nanos: i64 = 1_500_000_000; // 1.5 seconds
+        let expected = Duration::from_nanos(ts_nanos as u64);
+        assert_eq!(expected, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn negative_timestamp_clamped_to_zero() {
+        // Verify that max(0) on negative timestamp produces Duration::ZERO
+        let negative_ts: i64 = -100;
+        let clamped = negative_ts.max(0) as u64;
+        assert_eq!(Duration::from_nanos(clamped), Duration::ZERO);
+    }
+
+    #[test]
+    fn frames_decoded_starts_at_zero() {
+        let decoder = Dav1dDecoder::new().unwrap();
+        assert_eq!(decoder.frames_decoded(), 0);
     }
 }

@@ -3,8 +3,17 @@
 //! Tarang (Sanskrit: wave) provides media decoding with a Rust-owned pipeline,
 //! pure Rust audio decoding via symphonia, and thin FFI wrappers for video codecs.
 
+mod mcp;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+
+// Re-export MCP tool functions so tests can use `super::*`
+#[cfg(test)]
+use mcp::{
+    error_response, handle_async_tool_call, handle_tool_call, open_and_probe, require_path,
+    success_response,
+};
 
 #[derive(Parser)]
 #[command(
@@ -47,7 +56,7 @@ async fn main() -> Result<()> {
         Commands::Probe { path } => cmd_probe(&path)?,
         Commands::Analyze { path } => cmd_analyze(&path)?,
         Commands::Codecs => cmd_codecs(),
-        Commands::Mcp => cmd_mcp().await?,
+        Commands::Mcp => mcp::cmd_mcp().await?,
     }
 
     Ok(())
@@ -115,418 +124,6 @@ fn cmd_codecs() {
     println!("Video codecs (C FFI backends):");
     for (codec, backend) in tarang_video::supported_codecs() {
         println!("  {codec} — {backend}");
-    }
-}
-
-async fn cmd_mcp() -> Result<()> {
-    use serde_json::{Value, json};
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
-
-    // MCP server loop
-    while let Ok(Some(line)) = lines.next_line().await {
-        let request: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let method = request["method"].as_str().unwrap_or("");
-        let id = &request["id"];
-
-        let result = match method {
-            "initialize" => json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "tarang", "version": env!("CARGO_PKG_VERSION") }
-            }),
-            "tools/list" => json!({
-                "tools": [
-                    {
-                        "name": "tarang_probe",
-                        "description": "Probe a media file and return format, codec, duration, and stream info",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": { "path": { "type": "string", "description": "Path to media file" } },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_analyze",
-                        "description": "AI-powered media content analysis — classify type, quality, suggest codecs",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": { "path": { "type": "string", "description": "Path to media file" } },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_codecs",
-                        "description": "List all supported audio and video codecs with their backends",
-                        "inputSchema": { "type": "object", "properties": {} }
-                    },
-                    {
-                        "name": "tarang_transcribe",
-                        "description": "Prepare a transcription request for audio content (routes to hoosh)",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "path": { "type": "string", "description": "Path to media file" },
-                                "language": { "type": "string", "description": "Language hint (e.g. 'en', 'ja')" }
-                            },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_formats",
-                        "description": "Detect media container format from file header magic bytes",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": { "path": { "type": "string", "description": "Path to media file" } },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_fingerprint_index",
-                        "description": "Compute audio fingerprint and index in the AGNOS vector store for similarity search",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": { "path": { "type": "string", "description": "Path to audio file" } },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_search_similar",
-                        "description": "Find media files similar to a given file using audio fingerprint matching",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "path": { "type": "string", "description": "Path to reference audio file" },
-                                "top_k": { "type": "integer", "description": "Number of results (default: 5)" }
-                            },
-                            "required": ["path"]
-                        }
-                    },
-                    {
-                        "name": "tarang_describe",
-                        "description": "Generate a rich AI content description using LLM analysis via hoosh",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": { "path": { "type": "string", "description": "Path to media file" } },
-                            "required": ["path"]
-                        }
-                    }
-                ]
-            }),
-            "tools/call" => {
-                let tool_name = request["params"]["name"].as_str().unwrap_or("");
-                let args = &request["params"]["arguments"];
-                match tool_name {
-                    "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe" => {
-                        handle_async_tool_call(tool_name, args).await
-                    }
-                    _ => handle_tool_call(tool_name, args),
-                }
-            }
-            _ => json!({ "error": format!("unknown method: {method}") }),
-        };
-
-        let response = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result
-        });
-        println!("{}", serde_json::to_string(&response)?);
-    }
-
-    Ok(())
-}
-
-fn require_path(args: &serde_json::Value) -> std::result::Result<&str, serde_json::Value> {
-    use serde_json::json;
-    match args.get("path").and_then(|p| p.as_str()) {
-        Some(p) if !p.is_empty() => Ok(p),
-        _ => Err(
-            json!({ "content": [{ "type": "text", "text": "missing required parameter: path" }], "isError": true }),
-        ),
-    }
-}
-
-fn handle_tool_call(name: &str, args: &serde_json::Value) -> serde_json::Value {
-    use serde_json::json;
-
-    match name {
-        "tarang_probe" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            match std::fs::File::open(path) {
-                Ok(file) => match tarang_audio::probe_audio(file) {
-                    Ok(info) => json!({
-                        "content": [{ "type": "text", "text": serde_json::to_string_pretty(&info).unwrap_or_default() }]
-                    }),
-                    Err(e) => {
-                        json!({ "content": [{ "type": "text", "text": format!("probe error: {e}") }], "isError": true })
-                    }
-                },
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true })
-                }
-            }
-        }
-        "tarang_analyze" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            match std::fs::File::open(path) {
-                Ok(file) => match tarang_audio::probe_audio(file) {
-                    Ok(info) => {
-                        let analysis = tarang_ai::analyze_media(&info);
-                        json!({
-                            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&analysis).unwrap_or_default() }]
-                        })
-                    }
-                    Err(e) => {
-                        json!({ "content": [{ "type": "text", "text": format!("error: {e}") }], "isError": true })
-                    }
-                },
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true })
-                }
-            }
-        }
-        "tarang_codecs" => {
-            let audio: Vec<String> = tarang_audio::supported_codecs()
-                .iter()
-                .map(|c| c.to_string())
-                .collect();
-            let video: Vec<String> = tarang_video::supported_codecs()
-                .iter()
-                .map(|(c, b)| format!("{c} ({b})"))
-                .collect();
-            json!({
-                "content": [{ "type": "text", "text": format!("Audio (pure Rust): {}\nVideo (C FFI): {}", audio.join(", "), video.join(", ")) }]
-            })
-        }
-        "tarang_transcribe" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            let lang = args["language"].as_str().map(String::from);
-            match std::fs::File::open(path) {
-                Ok(file) => match tarang_audio::probe_audio(file) {
-                    Ok(info) => match tarang_ai::prepare_transcription(&info, lang) {
-                        Some(req) => json!({
-                            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&req).unwrap_or_default() }]
-                        }),
-                        None => {
-                            json!({ "content": [{ "type": "text", "text": "no audio stream found" }], "isError": true })
-                        }
-                    },
-                    Err(e) => {
-                        json!({ "content": [{ "type": "text", "text": format!("error: {e}") }], "isError": true })
-                    }
-                },
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true })
-                }
-            }
-        }
-        "tarang_formats" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            match std::fs::read(path) {
-                Ok(data) => {
-                    let header = &data[..data.len().min(32)];
-                    match tarang_core::ContainerFormat::from_magic(header) {
-                        Some(fmt) => json!({
-                            "content": [{ "type": "text", "text": format!("Detected: {fmt} (extensions: {})", fmt.extensions().join(", ")) }]
-                        }),
-                        None => {
-                            json!({ "content": [{ "type": "text", "text": "unknown format" }], "isError": true })
-                        }
-                    }
-                }
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true })
-                }
-            }
-        }
-        // Async tools — need to be handled via a helper
-        "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe" => {
-            json!({ "content": [{ "type": "text", "text": "async tool — use handle_async_tool_call" }], "isError": true })
-        }
-        _ => {
-            json!({ "content": [{ "type": "text", "text": format!("unknown tool: {name}") }], "isError": true })
-        }
-    }
-}
-
-async fn handle_async_tool_call(name: &str, args: &serde_json::Value) -> serde_json::Value {
-    use serde_json::json;
-
-    match name {
-        "tarang_fingerprint_index" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            let file = match std::fs::File::open(path) {
-                Ok(f) => f,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true });
-                }
-            };
-            let info = match tarang_audio::probe_audio(file) {
-                Ok(i) => i,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("probe error: {e}") }], "isError": true });
-                }
-            };
-
-            // Decode audio and compute fingerprint
-            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path))
-                .and_then(|mut d| d.decode_all())
-            {
-                Ok(b) => b,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("decode error: {e}") }], "isError": true });
-                }
-            };
-
-            let config = tarang_ai::FingerprintConfig::default();
-            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
-                Ok(fp) => fp,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("fingerprint error: {e}") }], "isError": true });
-                }
-            };
-
-            let analysis = tarang_ai::analyze_media(&info);
-            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
-                Ok(c) => c,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("daimon client error: {e}") }], "isError": true });
-                }
-            };
-
-            // Ensure collection exists, then index
-            if let Err(e) = daimon.ensure_collection().await {
-                tracing::warn!("Failed to ensure vector collection: {e}");
-            }
-
-            let metadata = json!({
-                "content_type": analysis.content_type.to_string(),
-                "quality_score": analysis.quality_score,
-                "tags": analysis.tags,
-                "duration_secs": fingerprint.duration_secs,
-            });
-
-            match daimon
-                .index_fingerprint(path, &fingerprint, &metadata)
-                .await
-            {
-                Ok(_) => {
-                    // Also ingest into RAG
-                    if let Err(e) = daimon.ingest_metadata(path, &info, &analysis).await {
-                        tracing::warn!("RAG ingest failed for {path}: {e}");
-                    }
-                    json!({
-                        "content": [{ "type": "text", "text": format!(
-                            "Indexed: {path}\nFingerprint: {} hashes ({:.1}s)\nContent: {}\nAlso ingested into RAG pipeline",
-                            fingerprint.hashes.len(), fingerprint.duration_secs, analysis.content_type
-                        )}]
-                    })
-                }
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("index error: {e}") }], "isError": true })
-                }
-            }
-        }
-        "tarang_search_similar" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            let top_k = args["top_k"].as_u64().unwrap_or(5) as usize;
-
-            let buffer = match tarang_audio::FileDecoder::open_path(std::path::Path::new(path))
-                .and_then(|mut d| d.decode_all())
-            {
-                Ok(b) => b,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("decode error: {e}") }], "isError": true });
-                }
-            };
-
-            let config = tarang_ai::FingerprintConfig::default();
-            let fingerprint = match tarang_ai::compute_fingerprint(&buffer, &config) {
-                Ok(fp) => fp,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("fingerprint error: {e}") }], "isError": true });
-                }
-            };
-
-            let daimon = match tarang_ai::DaimonClient::new(tarang_ai::DaimonConfig::default()) {
-                Ok(c) => c,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("daimon client error: {e}") }], "isError": true });
-                }
-            };
-
-            match daimon.search_similar(&fingerprint, top_k).await {
-                Ok(results) => json!({
-                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&results).unwrap_or_default() }]
-                }),
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("search error: {e}") }], "isError": true })
-                }
-            }
-        }
-        "tarang_describe" => {
-            let path = match require_path(args) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            let file = match std::fs::File::open(path) {
-                Ok(f) => f,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("file error: {e}") }], "isError": true });
-                }
-            };
-            let info = match tarang_audio::probe_audio(file) {
-                Ok(i) => i,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("probe error: {e}") }], "isError": true });
-                }
-            };
-
-            let analysis = tarang_ai::analyze_media(&info);
-            let hoosh = match tarang_ai::HooshLlmClient::new(tarang_ai::HooshLlmConfig::default()) {
-                Ok(c) => c,
-                Err(e) => {
-                    return json!({ "content": [{ "type": "text", "text": format!("hoosh client error: {e}") }], "isError": true });
-                }
-            };
-
-            match hoosh.describe_content(&info, &analysis).await {
-                Ok(desc) => json!({
-                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&desc).unwrap_or_default() }]
-                }),
-                Err(e) => {
-                    json!({ "content": [{ "type": "text", "text": format!("describe error: {e}") }], "isError": true })
-                }
-            }
-        }
-        _ => {
-            json!({ "content": [{ "type": "text", "text": format!("unknown async tool: {name}") }], "isError": true })
-        }
     }
 }
 
@@ -774,5 +371,54 @@ mod tests {
         let result =
             handle_async_tool_call("tarang_describe", &json!({"path": "/nonexistent.wav"})).await;
         assert!(result["isError"].as_bool().unwrap());
+    }
+
+    // ---- error_response / success_response ----
+
+    #[test]
+    fn error_response_structure() {
+        let resp = error_response("something went wrong");
+        assert!(resp["isError"].as_bool().unwrap());
+        let content = &resp["content"];
+        assert!(content.is_array());
+        assert_eq!(content[0]["type"].as_str().unwrap(), "text");
+        assert_eq!(
+            content[0]["text"].as_str().unwrap(),
+            "something went wrong"
+        );
+    }
+
+    #[test]
+    fn success_response_structure() {
+        let resp = success_response("all good");
+        // success responses must NOT have isError
+        assert!(resp.get("isError").is_none());
+        let content = &resp["content"];
+        assert!(content.is_array());
+        assert_eq!(content[0]["type"].as_str().unwrap(), "text");
+        assert_eq!(content[0]["text"].as_str().unwrap(), "all good");
+    }
+
+    // ---- open_and_probe ----
+
+    #[test]
+    fn open_and_probe_nonexistent() {
+        let result = open_and_probe("/absolutely/nonexistent/file.wav");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err["isError"].as_bool().unwrap());
+        let text = err["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("file error"));
+    }
+
+    #[test]
+    fn open_and_probe_valid_wav() {
+        let tmp = make_test_wav_file();
+        let path = tmp.path().to_str().unwrap();
+        let result = open_and_probe(path);
+        assert!(result.is_ok());
+        let (_file, info) = result.unwrap();
+        assert_eq!(info.format.to_string(), "WAV");
+        assert!(!info.streams.is_empty());
     }
 }

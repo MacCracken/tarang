@@ -245,6 +245,112 @@ impl Drop for PipeWireOutput {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::RingBuffer;
+
+    #[test]
+    fn initial_state() {
+        let rb = RingBuffer::new(64);
+        assert_eq!(rb.available(), 0);
+        // Usable capacity is capacity - 1 (one slot reserved to distinguish full from empty)
+        assert_eq!(rb.free_space(), 63);
+    }
+
+    #[test]
+    fn write_updates_available() {
+        let rb = RingBuffer::new(64);
+        let samples = [1.0f32, 2.0, 3.0, 4.0];
+        let written = rb.write(&samples);
+        assert_eq!(written, 4);
+        assert_eq!(rb.available(), 4);
+        assert_eq!(rb.free_space(), 59);
+    }
+
+    #[test]
+    fn write_then_read_data_integrity() {
+        let rb = RingBuffer::new(64);
+        let input: Vec<f32> = (0..10).map(|i| i as f32 * 0.5).collect();
+        let written = rb.write(&input);
+        assert_eq!(written, 10);
+
+        let mut output = vec![0.0f32; 10];
+        let read = rb.read(&mut output);
+        assert_eq!(read, 10);
+        assert_eq!(output, input);
+        assert_eq!(rb.available(), 0);
+    }
+
+    #[test]
+    fn read_fills_remainder_with_silence() {
+        let rb = RingBuffer::new(64);
+        let input = [1.0f32, 2.0, 3.0];
+        rb.write(&input);
+
+        let mut output = vec![-1.0f32; 6];
+        let read = rb.read(&mut output);
+        assert_eq!(read, 3);
+        assert_eq!(output[0], 1.0);
+        assert_eq!(output[1], 2.0);
+        assert_eq!(output[2], 3.0);
+        // Remainder filled with silence
+        assert_eq!(output[3], 0.0);
+        assert_eq!(output[4], 0.0);
+        assert_eq!(output[5], 0.0);
+    }
+
+    #[test]
+    fn wraparound() {
+        // Small buffer to force wraparound easily
+        let rb = RingBuffer::new(8); // 7 usable slots
+
+        // Fill with 5 samples
+        let data1: Vec<f32> = (1..=5).map(|i| i as f32).collect();
+        assert_eq!(rb.write(&data1), 5);
+
+        // Read 4 — frees slots at the front
+        let mut out = vec![0.0f32; 4];
+        assert_eq!(rb.read(&mut out), 4);
+        assert_eq!(out, &[1.0, 2.0, 3.0, 4.0]);
+
+        // Now write 6 more — must wrap around the end
+        let data2: Vec<f32> = (10..=15).map(|i| i as f32).collect();
+        let written = rb.write(&data2);
+        assert_eq!(written, 6); // 4 freed + 2 originally free = 6 available
+
+        // Read everything: the 1 remaining from first write + 6 from second
+        let mut out2 = vec![0.0f32; 7];
+        let read = rb.read(&mut out2);
+        assert_eq!(read, 7);
+        assert_eq!(out2, &[5.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
+    }
+
+    #[test]
+    fn full_buffer_rejects_further_writes() {
+        let rb = RingBuffer::new(8); // 7 usable slots
+        let data: Vec<f32> = (0..7).map(|i| i as f32).collect();
+        assert_eq!(rb.write(&data), 7);
+        assert_eq!(rb.free_space(), 0);
+        assert_eq!(rb.available(), 7);
+
+        // Further writes should return 0
+        let extra = [99.0f32];
+        assert_eq!(rb.write(&extra), 0);
+        // Available unchanged
+        assert_eq!(rb.available(), 7);
+    }
+
+    #[test]
+    fn empty_buffer_read_returns_zero() {
+        let rb = RingBuffer::new(16);
+        let mut out = vec![0.0f32; 4];
+        let read = rb.read(&mut out);
+        assert_eq!(read, 0);
+        // Buffer should have filled output with silence
+        assert_eq!(out, &[0.0, 0.0, 0.0, 0.0]);
+    }
+}
+
 /// PipeWire main loop thread function.
 ///
 /// All PipeWire objects are created and destroyed within this thread,

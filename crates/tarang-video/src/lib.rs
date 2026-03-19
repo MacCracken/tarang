@@ -345,13 +345,6 @@ impl VideoDecoder {
         Ok(())
     }
 
-    #[allow(dead_code)] // Used by feature-gated backends (dav1d, openh264, vpx)
-    fn update_dims(&mut self, frame: &VideoFrame) {
-        if self.width == 0 {
-            self.width = frame.width;
-            self.height = frame.height;
-        }
-    }
 }
 
 /// List video codecs and their backends (only includes compiled-in backends)

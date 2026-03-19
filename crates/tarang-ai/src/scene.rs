@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::time::Duration;
-use tarang_core::{PixelFormat, VideoFrame};
+use tarang_core::VideoFrame;
 
 /// Type of scene boundary detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,45 +153,11 @@ pub fn detect_scenes(
 pub fn compute_luminance_histogram(frame: &VideoFrame, bins: usize) -> Vec<f64> {
     let mut histogram = vec![0.0f64; bins];
 
-    let luminance: &[u8] = match frame.pixel_format {
-        PixelFormat::Yuv420p | PixelFormat::Yuv422p | PixelFormat::Yuv444p | PixelFormat::Nv12 => {
-            // Y plane is the first width*height bytes
-            let y_size = (frame.width * frame.height) as usize;
-            &frame.data[..y_size.min(frame.data.len())]
-        }
-        PixelFormat::Rgb24 => {
-            // Compute luminance inline — handled below
-            &[]
-        }
-        PixelFormat::Rgba32 => &[],
-    };
+    let luminance = crate::video_utils::extract_luminance(frame);
 
-    if !luminance.is_empty() {
-        // YUV path: Y plane is luminance
-        for &y in luminance {
-            let bin = (y as usize * bins) / 256;
-            histogram[bin.min(bins - 1)] += 1.0;
-        }
-    } else {
-        // RGB path: compute luminance per pixel
-        let pixel_size = match frame.pixel_format {
-            PixelFormat::Rgb24 => 3,
-            PixelFormat::Rgba32 => 4,
-            _ => return histogram,
-        };
-        let pixel_count = frame.data.len() / pixel_size;
-        for i in 0..pixel_count {
-            let offset = i * pixel_size;
-            if offset + 2 >= frame.data.len() {
-                break;
-            }
-            let r = frame.data[offset] as f64;
-            let g = frame.data[offset + 1] as f64;
-            let b = frame.data[offset + 2] as f64;
-            let y = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
-            let bin = (y as usize * bins) / 256;
-            histogram[bin.min(bins - 1)] += 1.0;
-        }
+    for &y in &luminance {
+        let bin = (y as usize * bins) / 256;
+        histogram[bin.min(bins - 1)] += 1.0;
     }
 
     // Normalize
@@ -235,6 +201,7 @@ fn rolling_std_dev(scores: &VecDeque<f64>) -> f64 {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use tarang_core::PixelFormat;
 
     fn make_yuv_frame(width: u32, height: u32, y_value: u8, timestamp_ms: u64) -> VideoFrame {
         let y_size = (width * height) as usize;

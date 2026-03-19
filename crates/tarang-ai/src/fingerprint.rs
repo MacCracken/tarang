@@ -6,7 +6,7 @@
 
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
-use tarang_core::{AudioBuffer, Result, SampleFormat, TarangError};
+use tarang_core::{AudioBuffer, Result};
 
 /// A compact audio fingerprint for content identification.
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ pub fn compute_fingerprint(
     buf: &AudioBuffer,
     config: &FingerprintConfig,
 ) -> Result<AudioFingerprint> {
-    let samples = extract_mono_f32(buf)?;
+    let samples = crate::audio_utils::extract_mono_f32(buf)?;
 
     if samples.len() < config.frame_size {
         return Ok(AudioFingerprint {
@@ -113,47 +113,6 @@ pub fn fingerprint_match(a: &AudioFingerprint, b: &AudioFingerprint) -> f64 {
     best_score
 }
 
-fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
-    let channels = buf.channels as usize;
-    match buf.sample_format {
-        SampleFormat::F32 => {
-            let total_values = buf.data.len() / 4;
-            let num_samples = total_values / channels;
-            let mut mono = Vec::with_capacity(num_samples);
-            for i in 0..num_samples {
-                let offset = i * channels * 4;
-                if offset + 4 <= buf.data.len() {
-                    let sample = f32::from_le_bytes([
-                        buf.data[offset],
-                        buf.data[offset + 1],
-                        buf.data[offset + 2],
-                        buf.data[offset + 3],
-                    ]);
-                    mono.push(sample);
-                }
-            }
-            Ok(mono)
-        }
-        SampleFormat::I16 => {
-            let total_values = buf.data.len() / 2;
-            let num_samples = total_values / channels;
-            let mut mono = Vec::with_capacity(num_samples);
-            for i in 0..num_samples {
-                let offset = i * channels * 2;
-                if offset + 2 <= buf.data.len() {
-                    let sample = i16::from_le_bytes([buf.data[offset], buf.data[offset + 1]]);
-                    mono.push(sample as f32 / 32768.0);
-                }
-            }
-            Ok(mono)
-        }
-        _ => Err(TarangError::AiError(format!(
-            "unsupported sample format for fingerprinting: {:?}",
-            buf.sample_format
-        ))),
-    }
-}
-
 fn compute_chroma_frames(samples: &[f32], config: &FingerprintConfig) -> Vec<Vec<f64>> {
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(config.frame_size);
@@ -164,35 +123,59 @@ fn compute_chroma_frames(samples: &[f32], config: &FingerprintConfig) -> Vec<Vec
         })
         .collect();
 
+    let half = config.frame_size / 2;
+    let freq_per_bin = config.sample_rate as f64 / config.frame_size as f64;
+
+    // Pre-compute frequency-to-band lookup table
+    let band_lut: Vec<Option<usize>> = (0..half)
+        .map(|i| {
+            let freq = i as f64 * freq_per_bin;
+            if i == 0 || !(60.0..=5000.0).contains(&freq) {
+                None
+            } else {
+                let note = 12.0 * (freq / 440.0).log2();
+                Some((note.rem_euclid(config.num_bands as f64)) as usize % config.num_bands)
+            }
+        })
+        .collect();
+
     let mut frames = Vec::new();
+    let mut fft_buf = vec![Complex::new(0.0f32, 0.0); config.frame_size];
     let mut pos = 0;
 
     while pos + config.frame_size <= samples.len() {
-        // Apply window and convert to complex
-        let mut fft_buf: Vec<Complex<f32>> = samples[pos..pos + config.frame_size]
-            .iter()
-            .zip(hann_window.iter())
-            .map(|(&s, &w)| Complex::new(s * w, 0.0))
-            .collect();
+        // Apply window in-place
+        for (i, slot) in fft_buf.iter_mut().enumerate() {
+            *slot = Complex::new(samples[pos + i] * hann_window[i], 0.0);
+        }
 
         fft.process(&mut fft_buf);
 
-        // Compute magnitude spectrum (first half only — real signal)
-        let magnitudes: Vec<f64> = fft_buf[..config.frame_size / 2]
-            .iter()
-            .map(|c| (c.re * c.re + c.im * c.im).sqrt() as f64)
-            .collect();
+        // Map magnitudes to chroma using LUT
+        let mut chroma = vec![0.0f64; config.num_bands];
+        for (i, slot) in fft_buf[..half].iter().enumerate() {
+            if let Some(band) = band_lut[i] {
+                let mag = (slot.re * slot.re + slot.im * slot.im).sqrt() as f64;
+                chroma[band] += mag;
+            }
+        }
 
-        // Map to chroma bands
-        let chroma = magnitudes_to_chroma(&magnitudes, config);
+        // Normalize
+        let max = chroma.iter().cloned().fold(0.0f64, f64::max);
+        if max > 0.0 {
+            for c in &mut chroma {
+                *c /= max;
+            }
+        }
+
         frames.push(chroma);
-
         pos += config.hop_size;
     }
 
     frames
 }
 
+#[allow(dead_code)]
 fn magnitudes_to_chroma(magnitudes: &[f64], config: &FingerprintConfig) -> Vec<f64> {
     let mut chroma = vec![0.0f64; config.num_bands];
     let freq_per_bin = config.sample_rate as f64 / config.frame_size as f64;
@@ -247,6 +230,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use std::time::Duration;
+    use tarang_core::SampleFormat;
 
     fn make_sine_buffer(freq: f32, duration_secs: f32, sample_rate: u32) -> AudioBuffer {
         let num_samples = (sample_rate as f32 * duration_secs) as usize;

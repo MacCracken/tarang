@@ -6,6 +6,7 @@
 tarang-core (types, codecs, buffers, errors, YUV420p helpers, dimension validation)
   ^
   +-- tarang-demux (container demux + mux: MP4, MKV/WebM, OGG, WAV — all pure Rust)
+  |     +-- ebml.rs (shared EBML encoding helpers for MKV read/write)
   +-- tarang-audio (decode, encode, resample, mix, PipeWire output, probe)
   |     +-- sample.rs (shared bytes_to_f32, f32_to_bytes, PCM scaling constants, test helpers)
   |     +-- decode.rs (symphonia-based FileDecoder)
@@ -28,8 +29,12 @@ tarang-core (types, codecs, buffers, errors, YUV420p helpers, dimension validati
         +-- thumbnail.rs (keyframe selection, YUV->RGB, JPEG/PNG encoding)
         +-- transcribe.rs (audio preprocessing, WAV encoding, hoosh routing)
         +-- daimon.rs (vector store, RAG ingestion, agent registration, LLM description)
+        +-- video_utils.rs (shared luminance extraction for scene/thumbnail)
+        +-- audio_utils.rs (shared sample format conversion for fingerprint/transcribe)
         ^
         +-- main binary (CLI: probe, analyze, codecs, mcp)
+              +-- src/mcp/mod.rs (MCP server loop, tool schema)
+              +-- src/mcp/tools.rs (tool handlers, response helpers)
 ```
 
 ## Design Principles
@@ -60,7 +65,7 @@ FFmpeg is a monolithic 500K+ line C codebase that bundles container parsing, cod
 - **Memory safety** — Pipeline code is Rust; only codec math is C
 - **Modularity** — Each codec is a separate dependency, not a monolith
 - **AGNOS alignment** — Fits the Rust-first, security-conscious OS philosophy
-- **Audited** — 2 security audit rounds, 310 tests, zero clippy warnings
+- **Audited** — 2 security audit rounds, 411+ tests, zero clippy warnings
 
 ## Key Internal Patterns
 
@@ -69,3 +74,6 @@ FFmpeg is a monolithic 500K+ line C codebase that bundles container parsing, cod
 - **`validate_video_dimensions()`** — Shared non-zero + even dimension check for all video encoders.
 - **Lock-free PipeWire** — SPSC ring buffer with `AtomicUsize` positions, condvar-based readiness signaling, deadline-based flush.
 - **OGG CRC-32** — Const lookup table shared between demuxer (validation) and muxer (generation).
+- **`ebml.rs`** — Shared EBML element encoding (VINTs, IDs, typed elements, master wrappers) used by both MKV demuxer tests and MKV muxer.
+- **`video_utils.rs`** — Shared luminance extraction supporting YUV/RGB/RGBA, used by scene detection and thumbnail generation.
+- **`audio_utils.rs`** — Shared mono F32 extraction from AudioBuffer (F32/I16), used by fingerprinting and transcription.

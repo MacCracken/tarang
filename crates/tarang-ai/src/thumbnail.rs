@@ -187,21 +187,47 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
 
     let mut rgb = vec![0u8; w * h * 3];
 
-    for row in 0..h {
-        for col in 0..w {
-            let y = y_plane[row * w + col] as f64;
-            let u = u_plane[(row / 2) * chroma_w + col / 2] as f64 - 128.0;
-            let v = v_plane[(row / 2) * chroma_w + col / 2] as f64 - 128.0;
+    // Process two luma rows at a time to share chroma computations.
+    // Pre-compute U/V contributions per chroma row using integer BT.601 math:
+    //   R = Y + (359*V >> 8)
+    //   G = Y - (88*U + 183*V >> 8)
+    //   B = Y + (454*U >> 8)
+    for chroma_row in 0..chroma_h {
+        // Pre-compute chroma contributions for this row of chroma samples
+        let chroma_row_offset = chroma_row * chroma_w;
+        let mut cr_r = vec![0i32; chroma_w];
+        let mut cr_g = vec![0i32; chroma_w];
+        let mut cr_b = vec![0i32; chroma_w];
 
-            // BT.601 conversion
-            let r = (y + 1.402 * v).clamp(0.0, 255.0) as u8;
-            let g = (y - 0.344136 * u - 0.714136 * v).clamp(0.0, 255.0) as u8;
-            let b = (y + 1.772 * u).clamp(0.0, 255.0) as u8;
+        for cx in 0..chroma_w {
+            let u = u_plane[chroma_row_offset + cx] as i32 - 128;
+            let v = v_plane[chroma_row_offset + cx] as i32 - 128;
+            cr_r[cx] = (359 * v) >> 8;
+            cr_g[cx] = (88 * u + 183 * v) >> 8;
+            cr_b[cx] = (454 * u) >> 8;
+        }
 
-            let offset = (row * w + col) * 3;
-            rgb[offset] = r;
-            rgb[offset + 1] = g;
-            rgb[offset + 2] = b;
+        // Apply to the (up to) 2 luma rows that share this chroma row
+        let luma_row_start = chroma_row * 2;
+        let luma_row_end = (luma_row_start + 2).min(h);
+
+        for row in luma_row_start..luma_row_end {
+            let y_row_offset = row * w;
+            let rgb_row_offset = y_row_offset * 3;
+
+            for col in 0..w {
+                let y_val = y_plane[y_row_offset + col] as i32;
+                let cx = col / 2;
+
+                let r = (y_val + cr_r[cx]).clamp(0, 255) as u8;
+                let g = (y_val - cr_g[cx]).clamp(0, 255) as u8;
+                let b = (y_val + cr_b[cx]).clamp(0, 255) as u8;
+
+                let offset = rgb_row_offset + col * 3;
+                rgb[offset] = r;
+                rgb[offset + 1] = g;
+                rgb[offset + 2] = b;
+            }
         }
     }
 
@@ -210,24 +236,7 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
 
 /// Compute luminance variance for a video frame.
 pub fn luminance_variance(frame: &VideoFrame) -> f64 {
-    let luminance: Vec<u8> = match frame.pixel_format {
-        PixelFormat::Yuv420p | PixelFormat::Yuv422p | PixelFormat::Yuv444p | PixelFormat::Nv12 => {
-            let y_size = (frame.width * frame.height) as usize;
-            frame.data[..y_size.min(frame.data.len())].to_vec()
-        }
-        PixelFormat::Rgb24 => {
-            let pixels = frame.data.len() / 3;
-            (0..pixels)
-                .map(|i| {
-                    let r = frame.data[i * 3] as f64;
-                    let g = frame.data[i * 3 + 1] as f64;
-                    let b = frame.data[i * 3 + 2] as f64;
-                    (0.299 * r + 0.587 * g + 0.114 * b) as u8
-                })
-                .collect()
-        }
-        _ => return 0.0,
-    };
+    let luminance = crate::video_utils::extract_luminance(frame);
 
     if luminance.is_empty() {
         return 0.0;

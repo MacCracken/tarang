@@ -382,8 +382,16 @@ impl<R: Read + Seek> OggDemuxer<R> {
             return Ok(None);
         }
 
-        let granule = i64::from_le_bytes(header[6..14].try_into().unwrap());
-        let serial = u32::from_le_bytes(header[14..18].try_into().unwrap());
+        let granule = i64::from_le_bytes(
+            header[6..14]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid OGG page header bytes".into()))?,
+        );
+        let serial = u32::from_le_bytes(
+            header[14..18]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid OGG page header bytes".into()))?,
+        );
 
         if granule <= 0 {
             return Ok(None);
@@ -850,7 +858,7 @@ mod tests {
         assert!(info.has_audio());
         assert!(!info.has_video());
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].codec, AudioCodec::Vorbis);
         assert_eq!(audio[0].sample_rate, 44100);
@@ -865,7 +873,7 @@ mod tests {
         let mut demuxer = OggDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio[0].channels, 1);
         assert_eq!(audio[0].sample_rate, 48000);
     }
@@ -877,7 +885,7 @@ mod tests {
         let mut demuxer = OggDemuxer::new(cursor);
         let info = demuxer.probe().unwrap();
 
-        let audio = info.audio_streams();
+        let audio = info.audio_streams().collect::<Vec<_>>();
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].codec, AudioCodec::Opus);
         assert_eq!(audio[0].sample_rate, 48000);
@@ -933,5 +941,32 @@ mod tests {
         let cursor = Cursor::new(vec![0u8; 100]);
         let mut demuxer = OggDemuxer::new(cursor);
         assert!(demuxer.probe().is_err());
+    }
+
+    #[test]
+    fn ogg_truncated_page_body_missing() {
+        // Build just the OGG page header with a segment table that promises
+        // body data, but cut the file short so the body is missing.
+        let mut buf = Vec::new();
+
+        // Page header (27 bytes)
+        buf.extend_from_slice(b"OggS"); // capture pattern
+        buf.push(0); // version
+        buf.push(HEADER_TYPE_BOS); // header type
+        buf.extend_from_slice(&0i64.to_le_bytes()); // granule position
+        buf.extend_from_slice(&1u32.to_le_bytes()); // serial number
+        buf.extend_from_slice(&0u32.to_le_bytes()); // page sequence
+        buf.extend_from_slice(&0u32.to_le_bytes()); // CRC (invalid, but we won't get that far)
+        buf.push(1); // num_segments = 1
+
+        // Segment table says 200 bytes of body data
+        buf.push(200u8);
+
+        // But we provide NO body data — file ends here
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should fail when page body is truncated");
     }
 }
