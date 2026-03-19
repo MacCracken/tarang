@@ -87,6 +87,8 @@ pub struct Mp4Demuxer<R: Read + Seek> {
     movie_timescale: u32,
     movie_duration: u64,
     playback: Option<PlaybackState>,
+    /// Reusable buffer for reading packet data, avoiding per-packet allocation
+    packet_buf: Vec<u8>,
 }
 
 impl<R: Read + Seek> Mp4Demuxer<R> {
@@ -98,6 +100,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             movie_timescale: 0,
             movie_duration: 0,
             playback: None,
+            packet_buf: Vec::new(),
         }
     }
 
@@ -1033,10 +1036,12 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                 "sample size {sample_size} exceeds maximum ({MAX_SAMPLE_SIZE})"
             )));
         }
-        let mut buf = vec![0u8; sample_size as usize];
+        self.packet_buf.clear();
+        self.packet_buf.resize(sample_size as usize, 0);
         self.reader
-            .read_exact(&mut buf)
+            .read_exact(&mut self.packet_buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read sample: {e}")))?;
+        let data = Bytes::copy_from_slice(&self.packet_buf);
 
         // Advance
         let playback = self
@@ -1047,7 +1052,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
 
         Ok(Packet {
             stream_index: track_idx,
-            data: Bytes::from(buf),
+            data,
             timestamp,
             duration: None,
             is_keyframe: true,

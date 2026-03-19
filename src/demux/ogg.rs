@@ -91,6 +91,10 @@ pub struct OggDemuxer<R: Read + Seek> {
     info: Option<MediaInfo>,
     /// Duration determined by scanning to the last page
     duration: Option<Duration>,
+    /// Reusable buffer for reading segment tables, avoiding per-page allocation
+    segment_buf: Vec<u8>,
+    /// Reusable buffer for reading page bodies, avoiding per-page allocation
+    body_buf: Vec<u8>,
 }
 
 impl<R: Read + Seek> OggDemuxer<R> {
@@ -101,6 +105,8 @@ impl<R: Read + Seek> OggDemuxer<R> {
             stream_indices: Vec::new(),
             info: None,
             duration: None,
+            segment_buf: Vec::new(),
+            body_buf: Vec::new(),
         }
     }
 
@@ -174,14 +180,15 @@ impl<R: Read + Seek> OggDemuxer<R> {
         );
         let num_segments = header[26];
 
-        // Read segment table
-        let mut segment_table = vec![0u8; num_segments as usize];
+        // Read segment table (reuse pre-allocated buffer)
+        self.segment_buf.clear();
+        self.segment_buf.resize(num_segments as usize, 0);
         self.reader
-            .read_exact(&mut segment_table)
+            .read_exact(&mut self.segment_buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read segment table: {e}")))?;
 
-        // Read page body (sum of all segment sizes)
-        let body_size: usize = segment_table.iter().map(|&s| s as usize).sum();
+        // Read page body (sum of all segment sizes, reuse pre-allocated buffer)
+        let body_size: usize = self.segment_buf.iter().map(|&s| s as usize).sum();
         // Max OGG page body is 255 segments * 255 bytes = 65025, but cap at 65535 for safety
         const MAX_OGG_PAGE_BODY: usize = 65535;
         if body_size > MAX_OGG_PAGE_BODY {
@@ -189,22 +196,24 @@ impl<R: Read + Seek> OggDemuxer<R> {
                 "OGG page body size {body_size} exceeds maximum ({MAX_OGG_PAGE_BODY})"
             )));
         }
-        let mut body = vec![0u8; body_size];
+        self.body_buf.clear();
+        self.body_buf.resize(body_size, 0);
         self.reader
-            .read_exact(&mut body)
+            .read_exact(&mut self.body_buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read page body: {e}")))?;
 
         // Verify CRC-32: build the full page with checksum zeroed and compute
         {
-            let mut page = Vec::with_capacity(PAGE_HEADER_SIZE + segment_table.len() + body.len());
+            let mut page =
+                Vec::with_capacity(PAGE_HEADER_SIZE + self.segment_buf.len() + self.body_buf.len());
             let mut zeroed_header = header;
             zeroed_header[22] = 0;
             zeroed_header[23] = 0;
             zeroed_header[24] = 0;
             zeroed_header[25] = 0;
             page.extend_from_slice(&zeroed_header);
-            page.extend_from_slice(&segment_table);
-            page.extend_from_slice(&body);
+            page.extend_from_slice(&self.segment_buf);
+            page.extend_from_slice(&self.body_buf);
             let computed = ogg_crc32(&page);
             if computed != stored_crc {
                 return Err(TarangError::DemuxError(format!(
@@ -220,9 +229,9 @@ impl<R: Read + Seek> OggDemuxer<R> {
         let mut current_packet = Vec::new();
         let mut offset = 0;
 
-        for &seg_size in &segment_table {
+        for &seg_size in &self.segment_buf {
             let end = offset + seg_size as usize;
-            current_packet.extend_from_slice(&body[offset..end]);
+            current_packet.extend_from_slice(&self.body_buf[offset..end]);
             offset = end;
 
             if seg_size < 255 {
@@ -244,7 +253,7 @@ impl<R: Read + Seek> OggDemuxer<R> {
             serial_number,
             _page_sequence: page_sequence,
             _num_segments: num_segments,
-            _segment_table: segment_table,
+            _segment_table: std::mem::take(&mut self.segment_buf),
             packets,
             partial,
         })

@@ -69,7 +69,20 @@ cros-libva = { version = "0.0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bin]]
 name = "tarang"
 path = "src/main.rs"
+
+[[bench]]
+name = "audio"
+harness = false
+
+[[bench]]
+name = "demux"
+harness = false
+
+[[bench]]
+name = "ai"
+harness = false

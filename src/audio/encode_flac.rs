@@ -491,6 +491,8 @@ impl FlacEncoder {
             let mut best_plan = SubframeKind::Verbatim;
 
             // Try fixed orders 0-4
+            // Reuse a single residuals buffer; only clone into best_plan when
+            // a better order is found.
             for order in 0..=4 {
                 if num_frames <= order + 1 {
                     continue;
@@ -517,8 +519,6 @@ impl FlacEncoder {
                 for order in 1..=max_lpc_order {
                     if let Some((coeffs, _error)) = levinson_durbin(&autocorr, order) {
                         let (qlp_coeffs, qlp_precision, qlp_shift) = quantize_lpc(&coeffs, bps);
-                        // Only use non-negative shift for residual computation
-                        // (negative shift means we'd shift left, which is valid in FLAC)
                         let res = lpc_residuals(&channel_samples, &qlp_coeffs, order, qlp_shift);
                         let size = estimate_lpc_size(&res, order, bps, qlp_precision);
                         if size < best_size {
@@ -756,7 +756,7 @@ struct BitWriter {
 impl BitWriter {
     fn new() -> Self {
         Self {
-            bytes: Vec::new(),
+            bytes: Vec::with_capacity(8192),
             current: 0,
             bits_in_current: 0,
         }

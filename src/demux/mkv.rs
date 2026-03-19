@@ -73,6 +73,8 @@ pub struct MkvDemuxer<R: Read + Seek> {
     segment_size: u64,
     /// Track number -> stream index lookup for O(1) access
     track_map: HashMap<u64, usize>,
+    /// Reusable buffer for reading packet data, avoiding per-packet allocation
+    packet_buf: Vec<u8>,
 }
 
 impl<R: Read + Seek> MkvDemuxer<R> {
@@ -89,6 +91,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             segment_offset: 0,
             segment_size: 0,
             track_map: HashMap::new(),
+            packet_buf: Vec::new(),
         }
     }
 
@@ -686,10 +689,12 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         }
         let data_size = size - header_size;
 
-        let mut data = vec![0u8; data_size as usize];
+        self.packet_buf.clear();
+        self.packet_buf.resize(data_size as usize, 0);
         self.reader
-            .read_exact(&mut data)
+            .read_exact(&mut self.packet_buf)
             .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+        let data = Bytes::copy_from_slice(&self.packet_buf);
 
         // Absolute timecode (saturate to prevent overflow)
         let abs_tc = (self.current_cluster_timecode as i64).saturating_add(relative_tc as i64);
@@ -700,7 +705,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
 
         Ok(Packet {
             stream_index,
-            data: Bytes::from(data),
+            data,
             timestamp,
             duration: None,
             is_keyframe,

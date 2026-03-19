@@ -4,6 +4,22 @@
 
 Single-crate restructure, crates.io publishing, comprehensive security hardening, supply-chain audit.
 
+### Performance optimizations
+- FLAC BitWriter: pre-allocate 8KB per frame (eliminated incremental Vec growth)
+- MP4/OGG/MKV demuxers: reuse packet/page buffers across reads (eliminated per-packet allocation)
+- Sinc resampler: tiled LUT computation caps memory at ~2MB regardless of input size (was 197MB+ for long audio)
+- PCM encoder: replaced `unreachable!()` with proper error return
+
+### Code deduplication
+- Extracted shared `copy_yuv420p_from_planes()` helper in video module (~150 lines removed from dav1d, vpx, openh264 decoders)
+- Made `ebml` module private (internal to demux only)
+
+### Benchmarks (criterion)
+- `benches/audio.rs`: resample (linear, sinc, downsample), mix, FLAC encode, PCM encode
+- `benches/demux.rs`: WAV probe + read, MP4 probe + read (1000 packets)
+- `benches/ai.rs`: fingerprint (1s, 10s), scene detection (SD, 1080p), luminance variance, media analysis
+- `make bench` target added to Makefile
+
 ### Chunked transcription
 - Configurable `max_wav_bytes` on `HooshConfig` (default 100MB, capped at 1GB)
 - Audio exceeding the limit is automatically chunked into `chunk_duration_secs` segments (default 5 min)

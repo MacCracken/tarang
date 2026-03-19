@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test audit deny build doc clean
+.PHONY: check fmt clippy test bench audit deny build doc clean
 
 # System dependencies (Arch/AGNOS):
 #   sudo pacman -S nasm libvpx dav1d opus libfdk-aac pipewire libva clang
@@ -17,10 +17,14 @@ fmt:
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
-# Run test suite (workspace + feature-gated)
+# Run test suite
 test:
-	cargo test --workspace
-	cargo test -p tarang-video --features full
+	cargo test
+	cargo test --features openh264,openh264-enc,vpx,vpx-enc,dav1d,vaapi
+
+# Run benchmarks (criterion)
+bench:
+	cargo bench
 
 # Security audit
 audit:
@@ -36,7 +40,7 @@ build:
 
 # Generate documentation
 doc:
-	cargo doc --no-deps --workspace
+	cargo doc --no-deps
 
 # Clean build artifacts
 clean:
