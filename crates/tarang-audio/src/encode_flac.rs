@@ -1,19 +1,8 @@
 //! Pure Rust FLAC encoder
 //!
-//! Implements a minimal FLAC encoder using 0th-order fixed prediction (verbatim
-//! subframes). Produces valid FLAC frames suitable for writing into FLAC or OGG
-//! containers.
-//!
-//! ## Limitations
-//!
-//! - **No compression** — verbatim subframes store raw samples (~1:1 ratio).
-//!   Adding LPC prediction (Levinson-Durbin autocorrelation, quantized
-//!   coefficients, Rice-coded residuals) would achieve ~2:1 for 16-bit audio.
-//!   The architecture supports this: add `encode_frame_lpc` alongside
-//!   `encode_frame_verbatim` and select based on an encoder quality setting.
-//! - **CRC stubs** — CRC-8 (frame header) and CRC-16 (frame footer) are
-//!   written as 0. Most decoders tolerate this but full spec compliance
-//!   requires computing them.
+//! Implements a FLAC encoder using fixed-order LPC prediction (orders 0-4)
+//! with Rice-coded residuals. Produces valid FLAC frames with proper CRC-8
+//! and CRC-16 checksums suitable for writing into FLAC or OGG containers.
 
 use tarang_core::{AudioBuffer, AudioCodec, Result, TarangError};
 
@@ -21,10 +10,9 @@ use crate::encode::{AudioEncoder, EncoderConfig};
 
 /// Pure Rust FLAC encoder
 ///
-/// Uses fixed 0th-order prediction (verbatim) for simplicity, with Rice coding
-/// of residuals. This produces valid FLAC but with lower compression than
-/// libFLAC. Good enough for correctness; compression can be improved later
-/// with higher-order LPC.
+/// Uses fixed-order LPC prediction (orders 0-4) with Rice coding of residuals.
+/// Automatically selects the best prediction order per channel for optimal
+/// compression. Falls back to verbatim subframes when prediction doesn't help.
 pub struct FlacEncoder {
     sample_rate: u32,
     channels: u16,
@@ -33,6 +21,160 @@ pub struct FlacEncoder {
     max_block_size: u16,
     total_samples: u64,
     streaminfo_written: bool,
+}
+
+// ---------------------------------------------------------------------------
+// CRC helpers
+// ---------------------------------------------------------------------------
+
+/// CRC-8 with polynomial 0x07 (FLAC frame header).
+fn crc8(data: &[u8]) -> u8 {
+    let mut crc: u8 = 0;
+    for &b in data {
+        crc ^= b;
+        for _ in 0..8 {
+            if crc & 0x80 != 0 {
+                crc = (crc << 1) ^ 0x07;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+/// CRC-16 with polynomial 0x8005 (FLAC frame footer).
+fn crc16(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    for &b in data {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x8005;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+// ---------------------------------------------------------------------------
+// Rice coding helpers
+// ---------------------------------------------------------------------------
+
+/// Map a signed residual to an unsigned value for Rice coding.
+/// positive n -> 2*n, negative n -> 2*|n| - 1
+fn rice_encode_value(v: i32) -> u32 {
+    if v >= 0 {
+        (v as u32) << 1
+    } else {
+        (((-v) as u32) << 1) - 1
+    }
+}
+
+/// Decode a Rice-mapped unsigned value back to the signed residual.
+#[cfg(test)]
+fn rice_decode_value(v: u32) -> i32 {
+    if v & 1 == 0 {
+        (v >> 1) as i32
+    } else {
+        -(((v + 1) >> 1) as i32)
+    }
+}
+
+/// Estimate the number of bits required to Rice-code the given mapped values
+/// with parameter `k`.
+fn rice_bits(mapped: &[u32], k: u32) -> u64 {
+    let mut total: u64 = 0;
+    for &m in mapped {
+        let q = m >> k;
+        // unary: q zeros + 1 one = q+1 bits, plus k low bits
+        total += (q as u64) + 1 + (k as u64);
+    }
+    total
+}
+
+/// Pick the optimal Rice parameter k (0..=14) for the given mapped values.
+fn optimal_rice_param(mapped: &[u32]) -> u32 {
+    if mapped.is_empty() {
+        return 0;
+    }
+    // Estimate from average magnitude
+    let sum: u64 = mapped.iter().map(|&m| {
+        if m == 0 { 0u64 } else { (32 - m.leading_zeros()) as u64 }
+    }).sum();
+    let avg = sum / mapped.len().max(1) as u64;
+    let k_est = avg.min(14) as u32;
+    // Search k_est-1 ..= k_est+1 for the best
+    let lo = k_est.saturating_sub(1);
+    let hi = (k_est + 1).min(14);
+    let mut best_k = k_est;
+    let mut best_bits = rice_bits(mapped, k_est);
+    for k in lo..=hi {
+        let b = rice_bits(mapped, k);
+        if b < best_bits {
+            best_bits = b;
+            best_k = k;
+        }
+    }
+    best_k
+}
+
+// ---------------------------------------------------------------------------
+// Fixed prediction helpers
+// ---------------------------------------------------------------------------
+
+/// Compute residuals for a given fixed prediction order.
+fn fixed_residuals(samples: &[i32], order: usize) -> Vec<i32> {
+    let n = samples.len();
+    if n <= order {
+        return vec![];
+    }
+    let mut residuals = Vec::with_capacity(n - order);
+    for i in order..n {
+        let predicted = match order {
+            0 => 0i64,
+            1 => samples[i - 1] as i64,
+            2 => 2 * samples[i - 1] as i64 - samples[i - 2] as i64,
+            3 => {
+                3 * samples[i - 1] as i64 - 3 * samples[i - 2] as i64
+                    + samples[i - 3] as i64
+            }
+            4 => {
+                4 * samples[i - 1] as i64 - 6 * samples[i - 2] as i64
+                    + 4 * samples[i - 3] as i64
+                    - samples[i - 4] as i64
+            }
+            _ => 0,
+        };
+        residuals.push((samples[i] as i64 - predicted) as i32);
+    }
+    residuals
+}
+
+/// Estimate the encoded size (in bits) of a fixed-order subframe including
+/// warm-up samples, residual coding overhead, and Rice-coded residuals.
+fn estimate_fixed_size(
+    residuals: &[i32],
+    order: usize,
+    bps: u32,
+) -> u64 {
+    // Subframe header (8 bits) + warm-up samples
+    let mut bits: u64 = 8 + (order as u64) * (bps as u64);
+    // Residual coding method (2 bits) + partition order (4 bits) + rice param (4 or 5 bits)
+    bits += 2 + 4 + 4;
+    // Rice-coded residuals
+    let mapped: Vec<u32> = residuals.iter().map(|&r| rice_encode_value(r)).collect();
+    let k = optimal_rice_param(&mapped);
+    bits += rice_bits(&mapped, k);
+    bits
+}
+
+/// Estimate the size of a verbatim subframe.
+fn estimate_verbatim_size(num_samples: usize, bps: u32) -> u64 {
+    // Subframe header (8 bits) + raw samples
+    8 + (num_samples as u64) * (bps as u64)
 }
 
 impl FlacEncoder {
@@ -96,17 +238,15 @@ impl FlacEncoder {
         buf
     }
 
-    /// Encode a single FLAC frame using verbatim (uncompressed) subframes.
-    /// This always produces valid FLAC, just without compression.
-    fn encode_frame_verbatim(&self, samples: &[i32], num_frames: usize) -> Vec<u8> {
-        let mut bits = BitWriter::new();
-
+    /// Write the frame header into a BitWriter, returning the header bytes
+    /// (for CRC-8 computation). The CRC-8 placeholder is included.
+    fn write_frame_header(&self, bits: &mut BitWriter, num_frames: usize) {
         // Frame header
         bits.write_bits(0b11111111_11111000, 16); // sync code + reserved + blocking strategy (fixed)
 
-        // Block size: encode as 4096 if it matches, else use 16-bit from end of header
+        // Block size code
         let bs_code = if num_frames == 4096 {
-            0x0C // 4096
+            0x0C
         } else if num_frames == 1024 {
             0x09
         } else if num_frames == 512 {
@@ -116,7 +256,7 @@ impl FlacEncoder {
         };
         bits.write_bits(bs_code, 4);
 
-        // Sample rate: from STREAMINFO
+        // Sample rate
         let sr_code = match self.sample_rate {
             44100 => 0x09,
             48000 => 0x0A,
@@ -150,8 +290,17 @@ impl FlacEncoder {
         if bs_code == 0x06 {
             bits.write_bits((num_frames - 1) as u32, 8);
         }
+    }
 
-        // CRC-8 of header (we write 0 — decoders may skip validation)
+    /// Encode a single FLAC frame using verbatim (uncompressed) subframes.
+    /// This always produces valid FLAC, just without compression.
+    fn encode_frame_verbatim(&self, samples: &[i32], num_frames: usize) -> Vec<u8> {
+        let mut bits = BitWriter::new();
+
+        self.write_frame_header(&mut bits, num_frames);
+
+        // CRC-8 placeholder — we'll fill it in after
+        let crc8_byte_pos = bits.byte_position();
         bits.write_bits(0, 8);
 
         // Subframes (one per channel)
@@ -170,10 +319,171 @@ impl FlacEncoder {
         // Byte-align
         bits.align();
 
-        // CRC-16 of entire frame (write 0)
+        // Now compute CRC-8 over header bytes (everything before the CRC-8 byte)
+        let frame_bytes = bits.as_bytes();
+        let crc8_val = crc8(&frame_bytes[..crc8_byte_pos]);
+        bits.set_byte(crc8_byte_pos, crc8_val);
+
+        // CRC-16 placeholder
         bits.write_bits(0, 16);
 
-        bits.into_bytes()
+        let mut frame_data = bits.into_bytes();
+
+        // Compute CRC-16 over everything except the last 2 bytes (the CRC-16 itself)
+        let crc16_val = crc16(&frame_data[..frame_data.len() - 2]);
+        let len = frame_data.len();
+        frame_data[len - 2] = (crc16_val >> 8) as u8;
+        frame_data[len - 1] = (crc16_val & 0xFF) as u8;
+
+        frame_data
+    }
+
+    /// Encode a single FLAC frame using fixed-order LPC prediction with
+    /// Rice-coded residuals. Falls back to verbatim if no order compresses.
+    fn encode_frame_fixed(&self, samples: &[i32], num_frames: usize) -> Vec<u8> {
+        let ch = self.channels as usize;
+        let bps = self.bits_per_sample as u32;
+
+        // For each channel, find the best fixed order
+        struct ChannelPlan {
+            order: usize,
+            residuals: Vec<i32>,
+            rice_param: u32,
+            use_verbatim: bool,
+        }
+
+        let verbatim_size = estimate_verbatim_size(num_frames, bps);
+
+        let mut plans: Vec<ChannelPlan> = Vec::with_capacity(ch);
+
+        for c in 0..ch {
+            // Extract this channel's samples
+            let channel_samples: Vec<i32> = (0..num_frames)
+                .map(|f| samples[f * ch + c])
+                .collect();
+
+            let mut best_order = 0;
+            let mut best_residuals = vec![];
+            let mut best_size = u64::MAX;
+
+            for order in 0..=4 {
+                if num_frames <= order {
+                    continue;
+                }
+                let res = fixed_residuals(&channel_samples, order);
+                let size = estimate_fixed_size(&res, order, bps);
+                if size < best_size {
+                    best_size = size;
+                    best_order = order;
+                    best_residuals = res;
+                }
+            }
+
+            if best_size >= verbatim_size {
+                plans.push(ChannelPlan {
+                    order: 0,
+                    residuals: vec![],
+                    rice_param: 0,
+                    use_verbatim: true,
+                });
+            } else {
+                let mapped: Vec<u32> = best_residuals.iter().map(|&r| rice_encode_value(r)).collect();
+                let k = optimal_rice_param(&mapped);
+                plans.push(ChannelPlan {
+                    order: best_order,
+                    residuals: best_residuals,
+                    rice_param: k,
+                    use_verbatim: false,
+                });
+            }
+        }
+
+        // If ALL channels chose verbatim, just use verbatim encoding
+        if plans.iter().all(|p| p.use_verbatim) {
+            return self.encode_frame_verbatim(samples, num_frames);
+        }
+
+        // Build the frame
+        let mut bits = BitWriter::new();
+
+        self.write_frame_header(&mut bits, num_frames);
+
+        // CRC-8 placeholder
+        let crc8_byte_pos = bits.byte_position();
+        bits.write_bits(0, 8);
+
+        // Subframes
+        for c in 0..ch {
+            let plan = &plans[c];
+            let channel_samples: Vec<i32> = (0..num_frames)
+                .map(|f| samples[f * ch + c])
+                .collect();
+
+            if plan.use_verbatim {
+                // Verbatim subframe
+                bits.write_bits(0b00000010, 8); // subframe header: type=verbatim
+                for &s in &channel_samples {
+                    bits.write_bits_signed(s, bps);
+                }
+            } else {
+                // Fixed subframe header: padding(1)=0 + type(6) + wasted(1)=0
+                // Type for fixed: 001xxx where xxx = order
+                let subframe_type = 0b001000 | (plan.order as u32);
+                bits.write_bits(0, 1); // padding
+                bits.write_bits(subframe_type, 6);
+                bits.write_bits(0, 1); // no wasted bits
+
+                // Warm-up samples (order samples, verbatim)
+                for i in 0..plan.order {
+                    bits.write_bits_signed(channel_samples[i], bps);
+                }
+
+                // Residual coding
+                // Coding method: 00 = RICE_PARTITION (4-bit param)
+                bits.write_bits(0b00, 2);
+                // Partition order: 0 (single partition)
+                bits.write_bits(0, 4);
+                // Rice parameter (4 bits)
+                bits.write_bits(plan.rice_param, 4);
+
+                // Rice-coded residuals
+                let k = plan.rice_param;
+                for &r in &plan.residuals {
+                    let mapped = rice_encode_value(r);
+                    let q = mapped >> k;
+                    // Unary: q zeros then a 1
+                    for _ in 0..q {
+                        bits.write_bits(0, 1);
+                    }
+                    bits.write_bits(1, 1);
+                    // Lower k bits
+                    if k > 0 {
+                        bits.write_bits(mapped & ((1 << k) - 1), k);
+                    }
+                }
+            }
+        }
+
+        // Byte-align
+        bits.align();
+
+        // CRC-8
+        let frame_bytes = bits.as_bytes();
+        let crc8_val = crc8(&frame_bytes[..crc8_byte_pos]);
+        bits.set_byte(crc8_byte_pos, crc8_val);
+
+        // CRC-16 placeholder
+        bits.write_bits(0, 16);
+
+        let mut frame_data = bits.into_bytes();
+
+        // Compute CRC-16
+        let crc16_val = crc16(&frame_data[..frame_data.len() - 2]);
+        let len = frame_data.len();
+        frame_data[len - 2] = (crc16_val >> 8) as u8;
+        frame_data[len - 1] = (crc16_val & 0xFF) as u8;
+
+        frame_data
     }
 }
 
@@ -225,7 +535,7 @@ impl AudioEncoder for FlacEncoder {
             let this_block = (num_frames - offset).min(block_size);
             let start = offset * ch;
             let end = start + this_block * ch;
-            let frame_data = self.encode_frame_verbatim(&int_samples[start..end], this_block);
+            let frame_data = self.encode_frame_fixed(&int_samples[start..end], this_block);
             packets.push(frame_data);
             offset += this_block;
         }
@@ -285,6 +595,21 @@ impl BitWriter {
             self.current = 0;
             self.bits_in_current = 0;
         }
+    }
+
+    /// Current byte position (number of complete bytes written so far).
+    fn byte_position(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Get a reference to the bytes written so far (excludes partial byte).
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Overwrite a byte at a given position.
+    fn set_byte(&mut self, pos: usize, val: u8) {
+        self.bytes[pos] = val;
     }
 
     fn into_bytes(mut self) -> Vec<u8> {
@@ -506,5 +831,125 @@ mod tests {
         bw.write_bits(0b11111111, 8);
         let bytes = bw.into_bytes();
         assert_eq!(bytes, vec![0b11100000, 0xFF]);
+    }
+
+    // --- New tests ---
+
+    #[test]
+    fn flac_fixed_prediction_compresses() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+
+        // Encode with fixed prediction
+        let mut enc_fixed = FlacEncoder::new(&config).unwrap();
+        let samples = make_sine(4096, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let packets_fixed = enc_fixed.encode(&buf).unwrap();
+        let fixed_size: usize = packets_fixed[1..].iter().map(|p| p.len()).sum();
+
+        // Encode with verbatim for comparison
+        let enc_verb = FlacEncoder::new(&config).unwrap();
+        let float_samples = bytes_to_f32(&buf.data);
+        let scale = crate::sample::I16_SCALE;
+        let int_samples: Vec<i32> = float_samples
+            .iter()
+            .take(4096)
+            .map(|s| (s.clamp(-1.0, 1.0) * scale) as i32)
+            .collect();
+        let verbatim_size = enc_verb.encode_frame_verbatim(&int_samples, 4096).len();
+
+        assert!(
+            fixed_size < verbatim_size,
+            "Fixed frame ({fixed_size}) should be smaller than verbatim ({verbatim_size})"
+        );
+    }
+
+    #[test]
+    fn flac_crc8_nonzero() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+
+        let samples = make_sine(4096, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let packets = enc.encode(&buf).unwrap();
+
+        // The frame header for a 4096-block, 44100Hz, mono, 16-bit frame is:
+        // 2 bytes sync + 1 byte (bs_code+sr_code) + 1 byte (ch+ss+reserved)
+        // + 1 byte frame number = 5 bytes, then CRC-8 at byte 5
+        let frame = &packets[1];
+        // CRC-8 is the byte right after the frame header (before subframes).
+        // For our encoding: sync(2) + bs_sr(1) + ch_ss_res(1) + frame_num(1) = 5 bytes
+        // CRC-8 is at index 5
+        let crc8_byte = frame[5];
+        assert_ne!(crc8_byte, 0, "CRC-8 should be non-zero for non-trivial data");
+    }
+
+    #[test]
+    fn flac_crc16_nonzero() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+
+        let samples = make_sine(4096, 1);
+        let buf = make_buffer(&samples, 1, 44100);
+        let packets = enc.encode(&buf).unwrap();
+
+        let frame = &packets[1];
+        let len = frame.len();
+        let crc16_val = ((frame[len - 2] as u16) << 8) | frame[len - 1] as u16;
+        assert_ne!(crc16_val, 0, "CRC-16 should be non-zero for non-trivial data");
+    }
+
+    #[test]
+    fn flac_rice_coding_roundtrip() {
+        // Test that Rice encode/decode mapping is correct for various values
+        let test_values: Vec<i32> = vec![0, 1, -1, 2, -2, 127, -128, 1000, -1000];
+        for &v in &test_values {
+            let encoded = rice_encode_value(v);
+            let decoded = rice_decode_value(encoded);
+            assert_eq!(
+                decoded, v,
+                "Rice roundtrip failed for {v}: encoded={encoded}, decoded={decoded}"
+            );
+        }
+    }
+
+    #[test]
+    fn flac_silence_compresses_well() {
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+
+        // All-zero (silence) input
+        let silence = vec![0.0f32; 4096];
+        let buf = make_buffer(&silence, 1, 44100);
+
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let packets = enc.encode(&buf).unwrap();
+        let frame_size: usize = packets[1..].iter().map(|p| p.len()).sum();
+
+        // Verbatim would be ~4096*2 = 8192 bytes + overhead
+        // Silence with fixed order 0 should compress to mostly 1-bit-per-sample residuals
+        let verbatim_approx = 4096 * 2;
+        assert!(
+            frame_size < verbatim_approx / 4,
+            "Silence frame ({frame_size} bytes) should be much smaller than verbatim (~{verbatim_approx} bytes)"
+        );
     }
 }

@@ -8,6 +8,13 @@
 
 ## Engineering Backlog
 
+### Testing
+- [ ] Code review and audit pass — review all changes from 2026-03-19 refactor session (main.rs modularization, safety fixes, shared utilities, performance optimizations, FLAC LPC, Mp4Muxer streaming, SIMD resampler) for correctness, edge cases, and regressions
+- [ ] FLAC encoder validation — decode FLAC output with symphonia or an external decoder to verify bitstream correctness for fixed prediction orders 1-4, Rice coding, and CRC checksums
+- [ ] Expand FLAC test coverage — test 24-bit encoding, multi-block files, edge cases (single-sample blocks, max-amplitude signals, DC offset), verify compression ratio on real audio
+- [ ] Mp4Muxer streaming write regression tests — verify large file handling (>4GB mdat), seek-back patching correctness, and roundtrip with Mp4Demuxer after the streaming refactor
+- [ ] Resampler accuracy tests — compare SIMD-optimized linear resampler output against reference (pre-optimization) output to verify bit-exact equivalence
+
 ### Features
-- [ ] **tarang-audio/encode_flac**: LPC compression — the pure Rust FLAC encoder currently uses 0th-order fixed prediction (verbatim subframes), producing valid FLAC that decodes correctly but with no compression (~1:1 ratio). Implementing higher-order LPC prediction would bring compression ratios closer to libFLAC (~2:1 for 16-bit audio). Key steps: autocorrelation via Levinson-Durbin, quantized LPC coefficients, Rice-coded residuals. The encoder architecture (`encode_frame_verbatim` in `encode_flac.rs`) is already structured so an `encode_frame_lpc` variant can be added alongside without breaking the existing path. CRC-8 and CRC-16 computation (currently written as 0) should also be implemented for full spec compliance.
+- [ ] **tarang-audio/encode_flac**: Linear LPC prediction (Levinson-Durbin) — the encoder currently uses fixed polynomial prediction (orders 0-4). Adding full LPC with autocorrelation, Levinson-Durbin coefficient computation, and quantized coefficients would improve compression for complex audio content (speech, music with harmonics). Fixed prediction is already good for simple signals.
 
