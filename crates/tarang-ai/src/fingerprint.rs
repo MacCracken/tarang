@@ -67,10 +67,18 @@ pub fn compute_fingerprint(
     };
     let hashes = hash_chroma_frames(frames_to_hash);
 
-    Ok(AudioFingerprint {
+    let fingerprint = AudioFingerprint {
         hashes,
         duration_secs,
-    })
+    };
+
+    tracing::debug!(
+        hashes = fingerprint.hashes.len(),
+        duration_secs = fingerprint.duration_secs,
+        "fingerprint computed"
+    );
+
+    Ok(fingerprint)
 }
 
 /// Compare two fingerprints and return a similarity score (0.0..1.0).

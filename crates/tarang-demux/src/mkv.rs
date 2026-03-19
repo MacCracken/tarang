@@ -530,6 +530,12 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             album: None,
         };
 
+        tracing::debug!(
+            format = %info.format,
+            streams = info.streams.len(),
+            "MKV probe complete"
+        );
+
         let ret = info.clone();
         self.info = Some(info);
         Ok(ret)

@@ -82,3 +82,48 @@ tarang probe <file>      # Show format, codec, duration, streams
 tarang analyze <file>    # AI content classification
 tarang codecs            # List supported codecs
 ```
+
+## Debugging & Performance
+
+Tarang uses [tracing](https://docs.rs/tracing) for structured logging. Control verbosity with `RUST_LOG`:
+
+```sh
+# Show all tarang debug logs
+RUST_LOG=debug tarang probe file.wav
+
+# Show only audio crate logs
+RUST_LOG=tarang_audio=debug tarang probe file.wav
+
+# Show trace-level video decoder details
+RUST_LOG=tarang_video=trace tarang probe file.mkv
+
+# Show everything (including dependency logs)
+RUST_LOG=trace tarang probe file.wav
+
+# Combine filters
+RUST_LOG=tarang_audio=debug,tarang_demux=debug tarang probe file.mp4
+```
+
+### Performance diagnostics
+
+Key debug-level messages for performance analysis:
+
+| Module | Message | Fields |
+|---|---|---|
+| `tarang_audio::resample` | `resample complete` | `src_rate`, `dst_rate`, `src_frames`, `dst_frames`, `channels` |
+| `tarang_audio::encode_flac` | `FLAC encode complete` | `frames`, `channels`, `bps`, `output_bytes` |
+| `tarang_audio::decode` | `decode_all complete` | `total_samples`, `total_bytes` |
+| `tarang_audio::mix` | `mix complete` | `src_channels`, `dst_channels`, `frames` |
+| `tarang_demux::mp4` | `MP4 probe complete` | `format`, `streams` |
+| `tarang_demux::mkv` | `MKV probe complete` | `format`, `streams` |
+| `tarang_video` | `video packet sent` | `codec`, `data_len`, `pending` |
+| `tarang_ai::fingerprint` | `fingerprint computed` | `hashes`, `duration_secs` |
+
+### Timing with tracing
+
+For timing analysis, use `tracing-timing` or wrap operations:
+
+```sh
+# Time a probe operation
+time RUST_LOG=tarang_demux=debug tarang probe large_file.mkv
+```

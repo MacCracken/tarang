@@ -97,6 +97,15 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         }
     }
 
+    tracing::debug!(
+        src_rate = buf.sample_rate,
+        dst_rate = target_rate,
+        src_frames = src_frames,
+        dst_frames = dst_frames,
+        channels = ch,
+        "resample complete"
+    );
+
     Ok(AudioBuffer {
         data: Bytes::copy_from_slice(f32_to_bytes(&dst)),
         sample_format: SampleFormat::F32,
@@ -196,6 +205,15 @@ pub fn resample_sinc(
             dst[frame * ch + c] = (sum * norm) as f32;
         }
     }
+
+    tracing::debug!(
+        src_rate = buf.sample_rate,
+        dst_rate = target_rate,
+        src_frames = src_frames,
+        dst_frames = dst_frames,
+        channels = ch,
+        "resample complete"
+    );
 
     Ok(AudioBuffer {
         data: Bytes::copy_from_slice(f32_to_bytes(&dst)),

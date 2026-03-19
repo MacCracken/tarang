@@ -226,6 +226,13 @@ impl VideoDecoder {
             return Err(TarangError::DecodeError("empty packet".to_string()));
         }
 
+        tracing::trace!(
+            codec = %self.config.codec,
+            data_len = data.len(),
+            pending = self.pending_frames.len(),
+            "video packet sent"
+        );
+
         // Collect decoded frames into a local vec to avoid borrow conflicts
         // with self.backend and self.pending_frames/width/height
         let mut decoded = Vec::new();

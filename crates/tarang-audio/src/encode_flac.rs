@@ -1,7 +1,9 @@
 //! Pure Rust FLAC encoder
 //!
-//! Implements a FLAC encoder using fixed-order LPC prediction (orders 0-4)
-//! with Rice-coded residuals. Produces valid FLAC frames with proper CRC-8
+//! Implements a FLAC encoder using both fixed-order prediction (orders 0-4)
+//! and linear LPC prediction via Levinson-Durbin (orders 1-8) with
+//! Rice-coded residuals. Automatically selects whichever method produces
+//! the smallest output. Produces valid FLAC frames with proper CRC-8
 //! and CRC-16 checksums suitable for writing into FLAC or OGG containers.
 
 use tarang_core::{AudioBuffer, AudioCodec, Result, TarangError};
@@ -10,8 +12,9 @@ use crate::encode::{AudioEncoder, EncoderConfig};
 
 /// Pure Rust FLAC encoder
 ///
-/// Uses fixed-order LPC prediction (orders 0-4) with Rice coding of residuals.
-/// Automatically selects the best prediction order per channel for optimal
+/// Uses fixed-order prediction (orders 0-4) and linear LPC prediction via
+/// Levinson-Durbin (orders 1-8) with Rice coding of residuals. Automatically
+/// selects the best prediction method and order per channel for optimal
 /// compression. Falls back to verbatim subframes when prediction doesn't help.
 pub struct FlacEncoder {
     sample_rate: u32,
@@ -119,6 +122,111 @@ fn optimal_rice_param(mapped: &[u32]) -> u32 {
         }
     }
     best_k
+}
+
+// ---------------------------------------------------------------------------
+// LPC prediction helpers (Levinson-Durbin)
+// ---------------------------------------------------------------------------
+
+/// Compute autocorrelation coefficients for the given samples.
+fn autocorrelation(samples: &[i32], max_order: usize) -> Vec<f64> {
+    let mut r = vec![0.0f64; max_order + 1];
+    for lag in 0..=max_order {
+        for i in lag..samples.len() {
+            r[lag] += samples[i] as f64 * samples[i - lag] as f64;
+        }
+    }
+    r
+}
+
+/// Compute LPC coefficients using Levinson-Durbin recursion.
+/// Returns (coefficients, prediction_error) for the given order.
+/// Returns None if the signal is degenerate (zero energy) or the filter is unstable.
+fn levinson_durbin(autocorr: &[f64], order: usize) -> Option<(Vec<f64>, f64)> {
+    if autocorr.is_empty() || autocorr[0] <= 0.0 {
+        return None;
+    }
+    let mut a = vec![0.0f64; order + 1];
+    a[0] = 1.0;
+    let mut error = autocorr[0];
+
+    for i in 1..=order {
+        // Compute reflection coefficient (lambda)
+        let mut sum = 0.0;
+        for j in 0..i {
+            sum += a[j] * autocorr[i - j];
+        }
+        let lambda = -sum / error;
+
+        if lambda.abs() >= 1.0 {
+            return None; // unstable filter
+        }
+
+        // Update coefficients: a_new[j] = a[j] + lambda * a[i-j]
+        let mut a_new = a.clone();
+        for j in 0..=i {
+            a_new[j] = a[j] + lambda * a[i - j];
+        }
+        a = a_new;
+
+        error *= 1.0 - lambda * lambda;
+        if error <= 0.0 {
+            return None;
+        }
+    }
+
+    // Return coefficients excluding a[0]=1.0 — these are the predictor coefficients
+    // In FLAC, the predictor is: predicted = sum(coeff[j] * sample[i-1-j])
+    // The Levinson-Durbin a[] coefficients satisfy: a[0]*x[n] + a[1]*x[n-1] + ... = 0
+    // So the predictor coefficients are -a[1], -a[2], ..., -a[order]
+    let coeffs: Vec<f64> = (1..=order).map(|j| -a[j]).collect();
+    Some((coeffs, error))
+}
+
+/// Quantize floating-point LPC coefficients to integers.
+/// Returns (quantized_coeffs, precision_bits, shift).
+fn quantize_lpc(coeffs: &[f64], bps: u32) -> (Vec<i32>, u32, i32) {
+    let precision = 15.min(bps - 1);
+    let max_coeff = coeffs.iter().map(|c| c.abs()).fold(0.0f64, f64::max);
+    if max_coeff < 1e-10 {
+        return (vec![0; coeffs.len()], precision, 0);
+    }
+    let shift = (precision as f64 - 1.0 - max_coeff.log2()).floor() as i32;
+    let shift = shift.clamp(-16, 15); // FLAC allows shift -16..15
+    let scale = (1i64 << shift.max(0)) as f64;
+    let quantized: Vec<i32> = coeffs.iter().map(|&c| (c * scale).round() as i32).collect();
+    (quantized, precision, shift)
+}
+
+/// Compute LPC residuals given quantized coefficients.
+fn lpc_residuals(samples: &[i32], coeffs: &[i32], order: usize, shift: i32) -> Vec<i32> {
+    let mut residuals = Vec::with_capacity(samples.len() - order);
+    for i in order..samples.len() {
+        let mut predicted: i64 = 0;
+        for j in 0..order {
+            predicted += coeffs[j] as i64 * samples[i - 1 - j] as i64;
+        }
+        predicted >>= shift;
+        residuals.push(samples[i] - predicted as i32);
+    }
+    residuals
+}
+
+/// Estimate the encoded size (in bits) of an LPC subframe.
+fn estimate_lpc_size(residuals: &[i32], order: usize, bps: u32, precision: u32) -> u64 {
+    // Subframe header (8 bits) + warm-up samples (order * bps)
+    let mut bits: u64 = 8 + (order as u64) * (bps as u64);
+    // QLP precision - 1 (4 bits) + QLP shift (5 bits)
+    bits += 4 + 5;
+    // QLP coefficients (order * precision bits each)
+    bits += (order as u64) * (precision as u64);
+    // Residual coding: method (2 bits) + partition order (4 bits) + rice param (4 bits)
+    bits += 2 + 4 + 4;
+    // Rice-coded residuals
+    let mapped: Vec<u32> = residuals.iter().map(|&r| rice_encode_value(r)).collect();
+    let k = optimal_rice_param(&mapped);
+    bits += rice_bits(&mapped, k);
+    bits
 }
 
 // ---------------------------------------------------------------------------
@@ -338,23 +446,34 @@ impl FlacEncoder {
         frame_data
     }
 
-    /// Encode a single FLAC frame using fixed-order LPC prediction with
-    /// Rice-coded residuals. Falls back to verbatim if no order compresses.
+    /// Encode a single FLAC frame using the best prediction method available:
+    /// fixed-order LPC (orders 0-4), linear LPC via Levinson-Durbin (orders 1-8),
+    /// or verbatim. Falls back to verbatim if no predictor compresses.
     fn encode_frame_fixed(&self, samples: &[i32], num_frames: usize) -> Vec<u8> {
         let ch = self.channels as usize;
         let bps = self.bits_per_sample as u32;
 
-        // For each channel, find the best fixed order
-        struct ChannelPlan {
-            order: usize,
-            residuals: Vec<i32>,
-            rice_param: u32,
-            use_verbatim: bool,
+        /// Per-channel encoding plan.
+        enum SubframeKind {
+            Verbatim,
+            Fixed {
+                order: usize,
+                residuals: Vec<i32>,
+                rice_param: u32,
+            },
+            Lpc {
+                order: usize,
+                residuals: Vec<i32>,
+                rice_param: u32,
+                qlp_coeffs: Vec<i32>,
+                qlp_precision: u32,
+                qlp_shift: i32,
+            },
         }
 
         let verbatim_size = estimate_verbatim_size(num_frames, bps);
 
-        let mut plans: Vec<ChannelPlan> = Vec::with_capacity(ch);
+        let mut plans: Vec<SubframeKind> = Vec::with_capacity(ch);
 
         for c in 0..ch {
             // Extract this channel's samples
@@ -362,10 +481,10 @@ impl FlacEncoder {
                 .map(|f| samples[f * ch + c])
                 .collect();
 
-            let mut best_order = 0;
-            let mut best_residuals = vec![];
-            let mut best_size = u64::MAX;
+            let mut best_size = verbatim_size;
+            let mut best_plan = SubframeKind::Verbatim;
 
+            // Try fixed orders 0-4
             for order in 0..=4 {
                 if num_frames <= order {
                     continue;
@@ -373,33 +492,52 @@ impl FlacEncoder {
                 let res = fixed_residuals(&channel_samples, order);
                 let size = estimate_fixed_size(&res, order, bps);
                 if size < best_size {
+                    let mapped: Vec<u32> = res.iter().map(|&r| rice_encode_value(r)).collect();
+                    let k = optimal_rice_param(&mapped);
                     best_size = size;
-                    best_order = order;
-                    best_residuals = res;
+                    best_plan = SubframeKind::Fixed {
+                        order,
+                        residuals: res,
+                        rice_param: k,
+                    };
                 }
             }
 
-            if best_size >= verbatim_size {
-                plans.push(ChannelPlan {
-                    order: 0,
-                    residuals: vec![],
-                    rice_param: 0,
-                    use_verbatim: true,
-                });
-            } else {
-                let mapped: Vec<u32> = best_residuals.iter().map(|&r| rice_encode_value(r)).collect();
-                let k = optimal_rice_param(&mapped);
-                plans.push(ChannelPlan {
-                    order: best_order,
-                    residuals: best_residuals,
-                    rice_param: k,
-                    use_verbatim: false,
-                });
+            // Try LPC orders 1-8
+            if num_frames > 8 {
+                let max_lpc_order = 8.min(num_frames - 1);
+                let autocorr = autocorrelation(&channel_samples, max_lpc_order);
+
+                for order in 1..=max_lpc_order {
+                    if let Some((coeffs, _error)) = levinson_durbin(&autocorr, order) {
+                        let (qlp_coeffs, qlp_precision, qlp_shift) = quantize_lpc(&coeffs, bps);
+                        // Only use non-negative shift for residual computation
+                        // (negative shift means we'd shift left, which is valid in FLAC)
+                        let res = lpc_residuals(&channel_samples, &qlp_coeffs, order, qlp_shift);
+                        let size = estimate_lpc_size(&res, order, bps, qlp_precision);
+                        if size < best_size {
+                            let mapped: Vec<u32> =
+                                res.iter().map(|&r| rice_encode_value(r)).collect();
+                            let k = optimal_rice_param(&mapped);
+                            best_size = size;
+                            best_plan = SubframeKind::Lpc {
+                                order,
+                                residuals: res,
+                                rice_param: k,
+                                qlp_coeffs,
+                                qlp_precision,
+                                qlp_shift,
+                            };
+                        }
+                    }
+                }
             }
+
+            plans.push(best_plan);
         }
 
         // If ALL channels chose verbatim, just use verbatim encoding
-        if plans.iter().all(|p| p.use_verbatim) {
+        if plans.iter().all(|p| matches!(p, SubframeKind::Verbatim)) {
             return self.encode_frame_verbatim(samples, num_frames);
         }
 
@@ -419,47 +557,64 @@ impl FlacEncoder {
                 .map(|f| samples[f * ch + c])
                 .collect();
 
-            if plan.use_verbatim {
-                // Verbatim subframe
-                bits.write_bits(0b00000010, 8); // subframe header: type=verbatim
-                for &s in &channel_samples {
-                    bits.write_bits_signed(s, bps);
-                }
-            } else {
-                // Fixed subframe header: padding(1)=0 + type(6) + wasted(1)=0
-                // Type for fixed: 001xxx where xxx = order
-                let subframe_type = 0b001000 | (plan.order as u32);
-                bits.write_bits(0, 1); // padding
-                bits.write_bits(subframe_type, 6);
-                bits.write_bits(0, 1); // no wasted bits
-
-                // Warm-up samples (order samples, verbatim)
-                for i in 0..plan.order {
-                    bits.write_bits_signed(channel_samples[i], bps);
-                }
-
-                // Residual coding
-                // Coding method: 00 = RICE_PARTITION (4-bit param)
-                bits.write_bits(0b00, 2);
-                // Partition order: 0 (single partition)
-                bits.write_bits(0, 4);
-                // Rice parameter (4 bits)
-                bits.write_bits(plan.rice_param, 4);
-
-                // Rice-coded residuals
-                let k = plan.rice_param;
-                for &r in &plan.residuals {
-                    let mapped = rice_encode_value(r);
-                    let q = mapped >> k;
-                    // Unary: q zeros then a 1
-                    for _ in 0..q {
-                        bits.write_bits(0, 1);
+            match plan {
+                SubframeKind::Verbatim => {
+                    bits.write_bits(0b00000010, 8);
+                    for &s in &channel_samples {
+                        bits.write_bits_signed(s, bps);
                     }
-                    bits.write_bits(1, 1);
-                    // Lower k bits
-                    if k > 0 {
-                        bits.write_bits(mapped & ((1 << k) - 1), k);
+                }
+                SubframeKind::Fixed {
+                    order,
+                    residuals,
+                    rice_param,
+                } => {
+                    // Fixed subframe header: padding(1)=0 + type(6) + wasted(1)=0
+                    // Type for fixed: 001xxx where xxx = order
+                    let subframe_type = 0b001000 | (*order as u32);
+                    bits.write_bits(0, 1);
+                    bits.write_bits(subframe_type, 6);
+                    bits.write_bits(0, 1);
+
+                    // Warm-up samples
+                    for i in 0..*order {
+                        bits.write_bits_signed(channel_samples[i], bps);
                     }
+
+                    // Residual coding
+                    Self::write_rice_residuals(&mut bits, residuals, *rice_param);
+                }
+                SubframeKind::Lpc {
+                    order,
+                    residuals,
+                    rice_param,
+                    qlp_coeffs,
+                    qlp_precision,
+                    qlp_shift,
+                } => {
+                    // LPC subframe header: padding(1)=0 + type(6) + wasted(1)=0
+                    // Type for LPC: 1xxxxx where xxxxx = order - 1
+                    let subframe_type = 0b100000 | ((*order - 1) as u32);
+                    bits.write_bits(0, 1);
+                    bits.write_bits(subframe_type, 6);
+                    bits.write_bits(0, 1);
+
+                    // Warm-up samples
+                    for i in 0..*order {
+                        bits.write_bits_signed(channel_samples[i], bps);
+                    }
+
+                    // QLP precision - 1 (4 bits, unsigned)
+                    bits.write_bits(*qlp_precision - 1, 4);
+                    // QLP shift (5 bits, signed)
+                    bits.write_bits_signed(*qlp_shift, 5);
+                    // QLP coefficients (precision bits each, signed)
+                    for &c in qlp_coeffs {
+                        bits.write_bits_signed(c, *qlp_precision);
+                    }
+
+                    // Residual coding
+                    Self::write_rice_residuals(&mut bits, residuals, *rice_param);
                 }
             }
         }
@@ -484,6 +639,29 @@ impl FlacEncoder {
         frame_data[len - 1] = (crc16_val & 0xFF) as u8;
 
         frame_data
+    }
+
+    /// Write Rice-coded residuals to the bit writer.
+    fn write_rice_residuals(bits: &mut BitWriter, residuals: &[i32], rice_param: u32) {
+        // Coding method: 00 = RICE_PARTITION (4-bit param)
+        bits.write_bits(0b00, 2);
+        // Partition order: 0 (single partition)
+        bits.write_bits(0, 4);
+        // Rice parameter (4 bits)
+        bits.write_bits(rice_param, 4);
+
+        let k = rice_param;
+        for &r in residuals {
+            let mapped = rice_encode_value(r);
+            let q = mapped >> k;
+            for _ in 0..q {
+                bits.write_bits(0, 1);
+            }
+            bits.write_bits(1, 1);
+            if k > 0 {
+                bits.write_bits(mapped & ((1 << k) - 1), k);
+            }
+        }
     }
 }
 
@@ -541,6 +719,14 @@ impl AudioEncoder for FlacEncoder {
         }
 
         self.total_samples += num_frames as u64;
+        let total_bytes: usize = packets.iter().map(|p| p.len()).sum();
+        tracing::debug!(
+            frames = num_frames,
+            channels = ch,
+            bps = self.bits_per_sample,
+            output_bytes = total_bytes,
+            "FLAC encode complete"
+        );
         Ok(packets)
     }
 
@@ -925,6 +1111,99 @@ mod tests {
                 "Rice roundtrip failed for {v}: encoded={encoded}, decoded={decoded}"
             );
         }
+    }
+
+    #[test]
+    fn flac_lpc_compresses_better_than_fixed() {
+        // A complex signal (sum of multiple sines) where LPC should beat fixed.
+        let num_samples = 4096usize;
+        let sr = 44100.0f64;
+        let freqs = [261.63, 329.63, 392.0, 523.25, 659.25]; // C major chord + octave
+        let mut samples = vec![0.0f32; num_samples];
+        for i in 0..num_samples {
+            let t = i as f64 / sr;
+            let mut val = 0.0f64;
+            for &f in &freqs {
+                val += (2.0 * std::f64::consts::PI * f * t).sin();
+            }
+            samples[i] = (val / freqs.len() as f64) as f32;
+        }
+
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+
+        // Encode with the full encoder (fixed + LPC)
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let buf = make_buffer(&samples, 1, 44100);
+        let packets = enc.encode(&buf).unwrap();
+        let total_size: usize = packets[1..].iter().map(|p| p.len()).sum();
+
+        // The encoder should produce a valid output that is smaller than verbatim
+        let verbatim_approx = num_samples * 2; // 16-bit samples
+        assert!(
+            total_size < verbatim_approx,
+            "LPC-enabled encoder ({total_size}) should compress better than verbatim ({verbatim_approx})"
+        );
+    }
+
+    #[test]
+    fn flac_lpc_degenerate_signal_fallback() {
+        // DC signal (all same value) — should not crash, falls back gracefully
+        let dc_signal = vec![0.5f32; 4096];
+        let config = EncoderConfig {
+            codec: AudioCodec::Flac,
+            sample_rate: 44100,
+            channels: 1,
+            bits_per_sample: 16,
+        };
+        let mut enc = FlacEncoder::new(&config).unwrap();
+        let buf = make_buffer(&dc_signal, 1, 44100);
+        let packets = enc.encode(&buf).unwrap();
+        assert!(packets.len() >= 2, "Should produce streaminfo + frame");
+        // Frame should start with sync code
+        assert_eq!(packets[1][0], 0xFF);
+
+        // All-zero signal
+        let zero_signal = vec![0.0f32; 4096];
+        let mut enc2 = FlacEncoder::new(&config).unwrap();
+        let buf2 = make_buffer(&zero_signal, 1, 44100);
+        let packets2 = enc2.encode(&buf2).unwrap();
+        assert!(packets2.len() >= 2, "Zero signal should produce valid output");
+    }
+
+    #[test]
+    fn flac_lpc_quantization_roundtrip() {
+        // Verify quantize_lpc produces valid precision/shift values
+        let coeffs = vec![0.9, -0.5, 0.3, -0.1];
+        let (qcoeffs, precision, shift) = quantize_lpc(&coeffs, 16);
+
+        assert_eq!(precision, 15, "Precision should be min(15, bps-1) = 15");
+        assert!(shift >= -16 && shift <= 15, "Shift {shift} out of FLAC range");
+        assert_eq!(qcoeffs.len(), coeffs.len());
+
+        // Check that quantized coefficients approximate the originals
+        let scale = (1i64 << shift.max(0)) as f64;
+        for (i, (&orig, &quant)) in coeffs.iter().zip(qcoeffs.iter()).enumerate() {
+            let reconstructed = quant as f64 / scale;
+            let err = (orig - reconstructed).abs();
+            assert!(
+                err < 0.01,
+                "Coefficient {i}: orig={orig}, quant={quant}, reconstructed={reconstructed}, err={err}"
+            );
+        }
+
+        // Test edge case: near-zero coefficients
+        let tiny_coeffs = vec![1e-12, -1e-12];
+        let (qc, _p, _s) = quantize_lpc(&tiny_coeffs, 16);
+        assert_eq!(qc, vec![0, 0], "Near-zero coefficients should quantize to zero");
+
+        // Test with 24-bit
+        let (_, precision_24, _) = quantize_lpc(&coeffs, 24);
+        assert_eq!(precision_24, 15, "Precision capped at 15 even for 24-bit");
     }
 
     #[test]

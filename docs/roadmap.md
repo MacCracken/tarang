@@ -16,5 +16,5 @@
 - [ ] Resampler accuracy tests — compare SIMD-optimized linear resampler output against reference (pre-optimization) output to verify bit-exact equivalence
 
 ### Features
-- [ ] **tarang-audio/encode_flac**: Linear LPC prediction (Levinson-Durbin) — the encoder currently uses fixed polynomial prediction (orders 0-4). Adding full LPC with autocorrelation, Levinson-Durbin coefficient computation, and quantized coefficients would improve compression for complex audio content (speech, music with harmonics). Fixed prediction is already good for simple signals.
+- [x] **tarang-audio/encode_flac**: Linear LPC prediction (Levinson-Durbin) — autocorrelation, Levinson-Durbin coefficient computation, quantization, LPC orders 1-8 tried alongside fixed 0-4, best method selected per channel *(done 2026-03-19)*
 

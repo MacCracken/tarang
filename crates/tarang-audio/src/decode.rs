@@ -238,6 +238,12 @@ impl FileDecoder {
             return Err(TarangError::DecodeError("no audio decoded".to_string()));
         }
 
+        tracing::debug!(
+            total_samples = total_samples,
+            total_bytes = all_data.len() * std::mem::size_of::<f32>(),
+            "decode_all complete"
+        );
+
         Ok(AudioBuffer {
             data: Bytes::copy_from_slice(bytemuck_f32_to_bytes(&all_data)),
             sample_format: SampleFormat::F32,

@@ -839,6 +839,12 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             album: None,
         };
 
+        tracing::debug!(
+            format = %info.format,
+            streams = info.streams.len(),
+            "MP4 probe complete"
+        );
+
         let ret = info.clone();
         self.info = Some(info);
         self.playback = Some(PlaybackState {

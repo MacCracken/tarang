@@ -123,6 +123,13 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
         }
     }
 
+    tracing::debug!(
+        src_channels = src_ch,
+        dst_channels = target_ch,
+        frames = frames,
+        "mix complete"
+    );
+
     Ok(AudioBuffer {
         data: Bytes::copy_from_slice(f32_to_bytes(&dst)),
         sample_format: SampleFormat::F32,
