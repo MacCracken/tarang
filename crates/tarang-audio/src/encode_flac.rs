@@ -104,9 +104,16 @@ fn optimal_rice_param(mapped: &[u32]) -> u32 {
         return 0;
     }
     // Estimate from average magnitude
-    let sum: u64 = mapped.iter().map(|&m| {
-        if m == 0 { 0u64 } else { (32 - m.leading_zeros()) as u64 }
-    }).sum();
+    let sum: u64 = mapped
+        .iter()
+        .map(|&m| {
+            if m == 0 {
+                0u64
+            } else {
+                (32 - m.leading_zeros()) as u64
+            }
+        })
+        .sum();
     let avg = sum / mapped.len().max(1) as u64;
     let k_est = avg.min(14) as u32;
     // Search k_est-1 ..= k_est+1 for the best
@@ -245,13 +252,9 @@ fn fixed_residuals(samples: &[i32], order: usize) -> Vec<i32> {
             0 => 0i64,
             1 => samples[i - 1] as i64,
             2 => 2 * samples[i - 1] as i64 - samples[i - 2] as i64,
-            3 => {
-                3 * samples[i - 1] as i64 - 3 * samples[i - 2] as i64
-                    + samples[i - 3] as i64
-            }
+            3 => 3 * samples[i - 1] as i64 - 3 * samples[i - 2] as i64 + samples[i - 3] as i64,
             4 => {
-                4 * samples[i - 1] as i64 - 6 * samples[i - 2] as i64
-                    + 4 * samples[i - 3] as i64
+                4 * samples[i - 1] as i64 - 6 * samples[i - 2] as i64 + 4 * samples[i - 3] as i64
                     - samples[i - 4] as i64
             }
             _ => 0,
@@ -263,11 +266,7 @@ fn fixed_residuals(samples: &[i32], order: usize) -> Vec<i32> {
 
 /// Estimate the encoded size (in bits) of a fixed-order subframe including
 /// warm-up samples, residual coding overhead, and Rice-coded residuals.
-fn estimate_fixed_size(
-    residuals: &[i32],
-    order: usize,
-    bps: u32,
-) -> u64 {
+fn estimate_fixed_size(residuals: &[i32], order: usize, bps: u32) -> u64 {
     // Subframe header (8 bits) + warm-up samples
     let mut bits: u64 = 8 + (order as u64) * (bps as u64);
     // Residual coding method (2 bits) + partition order (4 bits) + rice param (4 or 5 bits)
@@ -477,9 +476,7 @@ impl FlacEncoder {
 
         for c in 0..ch {
             // Extract this channel's samples
-            let channel_samples: Vec<i32> = (0..num_frames)
-                .map(|f| samples[f * ch + c])
-                .collect();
+            let channel_samples: Vec<i32> = (0..num_frames).map(|f| samples[f * ch + c]).collect();
 
             let mut best_size = verbatim_size;
             let mut best_plan = SubframeKind::Verbatim;
@@ -553,9 +550,7 @@ impl FlacEncoder {
         // Subframes
         for c in 0..ch {
             let plan = &plans[c];
-            let channel_samples: Vec<i32> = (0..num_frames)
-                .map(|f| samples[f * ch + c])
-                .collect();
+            let channel_samples: Vec<i32> = (0..num_frames).map(|f| samples[f * ch + c]).collect();
 
             match plan {
                 SubframeKind::Verbatim => {
@@ -577,8 +572,8 @@ impl FlacEncoder {
                     bits.write_bits(0, 1);
 
                     // Warm-up samples
-                    for i in 0..*order {
-                        bits.write_bits_signed(channel_samples[i], bps);
+                    for &s in &channel_samples[..*order] {
+                        bits.write_bits_signed(s, bps);
                     }
 
                     // Residual coding
@@ -600,8 +595,8 @@ impl FlacEncoder {
                     bits.write_bits(0, 1);
 
                     // Warm-up samples
-                    for i in 0..*order {
-                        bits.write_bits_signed(channel_samples[i], bps);
+                    for &s in &channel_samples[..*order] {
+                        bits.write_bits_signed(s, bps);
                     }
 
                     // QLP precision - 1 (4 bits, unsigned)
@@ -1076,7 +1071,10 @@ mod tests {
         // For our encoding: sync(2) + bs_sr(1) + ch_ss_res(1) + frame_num(1) = 5 bytes
         // CRC-8 is at index 5
         let crc8_byte = frame[5];
-        assert_ne!(crc8_byte, 0, "CRC-8 should be non-zero for non-trivial data");
+        assert_ne!(
+            crc8_byte, 0,
+            "CRC-8 should be non-zero for non-trivial data"
+        );
     }
 
     #[test]
@@ -1096,7 +1094,10 @@ mod tests {
         let frame = &packets[1];
         let len = frame.len();
         let crc16_val = ((frame[len - 2] as u16) << 8) | frame[len - 1] as u16;
-        assert_ne!(crc16_val, 0, "CRC-16 should be non-zero for non-trivial data");
+        assert_ne!(
+            crc16_val, 0,
+            "CRC-16 should be non-zero for non-trivial data"
+        );
     }
 
     #[test]
@@ -1172,7 +1173,10 @@ mod tests {
         let mut enc2 = FlacEncoder::new(&config).unwrap();
         let buf2 = make_buffer(&zero_signal, 1, 44100);
         let packets2 = enc2.encode(&buf2).unwrap();
-        assert!(packets2.len() >= 2, "Zero signal should produce valid output");
+        assert!(
+            packets2.len() >= 2,
+            "Zero signal should produce valid output"
+        );
     }
 
     #[test]
@@ -1182,7 +1186,10 @@ mod tests {
         let (qcoeffs, precision, shift) = quantize_lpc(&coeffs, 16);
 
         assert_eq!(precision, 15, "Precision should be min(15, bps-1) = 15");
-        assert!(shift >= -16 && shift <= 15, "Shift {shift} out of FLAC range");
+        assert!(
+            shift >= -16 && shift <= 15,
+            "Shift {shift} out of FLAC range"
+        );
         assert_eq!(qcoeffs.len(), coeffs.len());
 
         // Check that quantized coefficients approximate the originals
@@ -1199,7 +1206,11 @@ mod tests {
         // Test edge case: near-zero coefficients
         let tiny_coeffs = vec![1e-12, -1e-12];
         let (qc, _p, _s) = quantize_lpc(&tiny_coeffs, 16);
-        assert_eq!(qc, vec![0, 0], "Near-zero coefficients should quantize to zero");
+        assert_eq!(
+            qc,
+            vec![0, 0],
+            "Near-zero coefficients should quantize to zero"
+        );
 
         // Test with 24-bit
         let (_, precision_24, _) = quantize_lpc(&coeffs, 24);

@@ -207,7 +207,10 @@ mod tests {
         let file = wav_to_tempfile(&wav);
         let info = probe_audio(file).unwrap();
 
-        assert_eq!(info.audio_streams().collect::<Vec<_>>()[0].sample_rate, 96000);
+        assert_eq!(
+            info.audio_streams().collect::<Vec<_>>()[0].sample_rate,
+            96000
+        );
     }
 
     #[test]

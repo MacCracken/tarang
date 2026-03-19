@@ -42,7 +42,8 @@ impl Rav1eEncoder {
         let mut enc_config = rav1e::EncoderConfig::default();
         enc_config.width = config.width as usize;
         enc_config.height = config.height as usize;
-        enc_config.speed_settings = rav1e::config::SpeedSettings::from_preset(config.speed.min(255) as u8);
+        enc_config.speed_settings =
+            rav1e::config::SpeedSettings::from_preset(config.speed.min(255) as u8);
         enc_config.bitrate = (config.bitrate_bps).min(i32::MAX as u32) as i32;
         enc_config.time_base = rav1e::data::Rational {
             num: config.frame_rate_den as u64,
@@ -99,8 +100,7 @@ impl Rav1eEncoder {
         {
             let stride = enc_frame.planes[0].cfg.stride;
             let plane = enc_frame.planes[0].data_origin_mut();
-            let needed =
-                (self.height as usize - 1) * stride + self.width as usize;
+            let needed = (self.height as usize - 1) * stride + self.width as usize;
             if plane.len() < needed {
                 return Err(TarangError::Pipeline(format!(
                     "rav1e Y plane buffer too small: {} < {needed}",

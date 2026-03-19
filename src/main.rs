@@ -382,10 +382,7 @@ mod tests {
         let content = &resp["content"];
         assert!(content.is_array());
         assert_eq!(content[0]["type"].as_str().unwrap(), "text");
-        assert_eq!(
-            content[0]["text"].as_str().unwrap(),
-            "something went wrong"
-        );
+        assert_eq!(content[0]["text"].as_str().unwrap(), "something went wrong");
     }
 
     #[test]

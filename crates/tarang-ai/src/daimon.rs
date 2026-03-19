@@ -931,9 +931,7 @@ mod tests {
                 StreamInfo::Subtitle {
                     language: Some("en".to_string()),
                 },
-                StreamInfo::Subtitle {
-                    language: None,
-                },
+                StreamInfo::Subtitle { language: None },
             ],
             duration: Some(Duration::from_secs(60)),
             file_size: None,

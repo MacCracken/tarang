@@ -599,9 +599,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
 
         // Remember where mdat starts and write placeholder header
         self.mdat_offset = self.writer.stream_position().map_err(io_err)?;
-        self.writer
-            .write_all(&0u32.to_be_bytes())
-            .map_err(io_err)?; // placeholder size
+        self.writer.write_all(&0u32.to_be_bytes()).map_err(io_err)?; // placeholder size
         self.writer.write_all(b"mdat").map_err(io_err)?;
 
         self.header_written = true;
@@ -695,8 +693,7 @@ impl<W: Write> Muxer for MkvMuxer<W> {
         ebml::write_uint(&mut ebml_header, 0x4287, 4); // DocTypeVersion
         ebml::write_uint(&mut ebml_header, 0x4285, 2); // DocTypeReadVersion
 
-        ebml::write_master_to_writer(&mut self.writer, 0x1A45DFA3, &ebml_header)
-            .map_err(io_err)?;
+        ebml::write_master_to_writer(&mut self.writer, 0x1A45DFA3, &ebml_header).map_err(io_err)?;
 
         // Segment (unknown size — 0xFF... means "until EOF")
         ebml::write_id_to_writer(&mut self.writer, 0x18538067).map_err(io_err)?;

@@ -280,7 +280,12 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         track: &mut Mp4Track,
         is_audio: &mut bool,
     ) -> Result<()> {
-        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+            < end
+        {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -338,7 +343,12 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         track: &mut Mp4Track,
         is_audio: &mut bool,
     ) -> Result<()> {
-        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+            < end
+        {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -425,7 +435,12 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     }
 
     fn parse_minf_children(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {
-        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+            < end
+        {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -444,7 +459,12 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     }
 
     fn parse_stbl_children(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {
-        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < end {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+            < end
+        {
             let child = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -479,7 +499,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsd header: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let entry_count = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         if entry_count == 0 {
             return Ok(());
@@ -512,10 +536,18 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         })?;
 
         // reserved(8) at offset 0..8
-        track.channels = u16::from_be_bytes(audio_entry[8..10].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        track.channels = u16::from_be_bytes(
+            audio_entry[8..10]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
         // sample_size at 10..12, pre_defined at 12..14, reserved at 14..16
         // sample_rate is 16.16 fixed point at 16..20
-        let sr_fixed = u32::from_be_bytes(audio_entry[16..20].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let sr_fixed = u32::from_be_bytes(
+            audio_entry[16..20]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
         track.sample_rate = sr_fixed >> 16;
 
         Ok(())
@@ -531,7 +563,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stts: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let entry_count = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         track.time_to_sample.clear();
         for _ in 0..entry_count {
@@ -539,8 +575,16 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             self.reader
                 .read_exact(&mut entry)
                 .map_err(|e| TarangError::DemuxError(format!("failed to read stts entry: {e}")))?;
-            let count = u32::from_be_bytes(entry[0..4].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
-            let delta = u32::from_be_bytes(entry[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+            let count = u32::from_be_bytes(
+                entry[0..4]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+            );
+            let delta = u32::from_be_bytes(
+                entry[4..8]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+            );
             track.time_to_sample.push((count, delta));
         }
 
@@ -557,7 +601,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsc: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let entry_count = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         track.sample_to_chunk.clear();
         for _ in 0..entry_count {
@@ -565,9 +613,21 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             self.reader
                 .read_exact(&mut entry)
                 .map_err(|e| TarangError::DemuxError(format!("failed to read stsc entry: {e}")))?;
-            let first_chunk = u32::from_be_bytes(entry[0..4].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
-            let samples_per_chunk = u32::from_be_bytes(entry[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
-            let desc_index = u32::from_be_bytes(entry[8..12].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+            let first_chunk = u32::from_be_bytes(
+                entry[0..4]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+            );
+            let samples_per_chunk = u32::from_be_bytes(
+                entry[4..8]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+            );
+            let desc_index = u32::from_be_bytes(
+                entry[8..12]
+                    .try_into()
+                    .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+            );
             track
                 .sample_to_chunk
                 .push((first_chunk, samples_per_chunk, desc_index));
@@ -587,8 +647,16 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stsz: {e}")))?;
-        track.default_sample_size = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
-        let sample_count = u32::from_be_bytes(buf[8..12].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        track.default_sample_size = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
+        let sample_count = u32::from_be_bytes(
+            buf[8..12]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         track.sample_sizes.clear();
         if track.default_sample_size == 0 {
@@ -620,7 +688,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read stco: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let entry_count = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
@@ -644,7 +716,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read co64: {e}")))?;
-        let entry_count = u32::from_be_bytes(buf[4..8].try_into().map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?);
+        let entry_count = u32::from_be_bytes(
+            buf[4..8]
+                .try_into()
+                .map_err(|_| TarangError::DemuxError("invalid header bytes".into()))?,
+        );
 
         track.chunk_offsets.clear();
         for _ in 0..entry_count {
@@ -752,7 +828,12 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         let mut found_ftyp = false;
         let mut found_moov = false;
 
-        while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < file_size {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+            < file_size
+        {
             let header = match self.read_box_header() {
                 Ok(h) => h,
                 Err(_) => break,
@@ -768,7 +849,12 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                     found_moov = true;
                     let moov_end = header.data_offset + header.data_size;
                     // Parse moov children
-                    while self.reader.stream_position().map_err(|e| TarangError::DemuxError(format!("position error: {e}")))? < moov_end {
+                    while self
+                        .reader
+                        .stream_position()
+                        .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?
+                        < moov_end
+                    {
                         let child = match self.read_box_header() {
                             Ok(h) => h,
                             Err(_) => break,
@@ -1263,8 +1349,7 @@ mod tests {
         let mut moov_start = 0;
         let mut pos = 0;
         while pos + 8 <= mp4.len() {
-            let size =
-                u32::from_be_bytes(mp4[pos..pos + 4].try_into().unwrap()) as usize;
+            let size = u32::from_be_bytes(mp4[pos..pos + 4].try_into().unwrap()) as usize;
             let btype = &mp4[pos + 4..pos + 8];
             if btype == b"moov" {
                 moov_start = pos;

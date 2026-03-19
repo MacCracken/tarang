@@ -505,7 +505,10 @@ mod tests {
         assert_eq!(info.video_streams().collect::<Vec<_>>().len(), 1);
         assert_eq!(info.audio_streams().collect::<Vec<_>>().len(), 1);
         assert_eq!(info.video_streams().collect::<Vec<_>>()[0].width, 1920);
-        assert_eq!(info.audio_streams().collect::<Vec<_>>()[0].sample_rate, 48000);
+        assert_eq!(
+            info.audio_streams().collect::<Vec<_>>()[0].sample_rate,
+            48000
+        );
     }
 
     #[test]

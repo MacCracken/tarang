@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::File;
 use tarang_core::MediaInfo;
 
@@ -24,8 +24,8 @@ pub fn require_path(args: &Value) -> Result<&str, Value> {
 /// parsed [`MediaInfo`], or an MCP error [`Value`] on failure.
 pub fn open_and_probe(path: &str) -> Result<(File, MediaInfo), Value> {
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
-    let info = tarang_audio::probe_audio(file)
-        .map_err(|e| error_response(format!("probe error: {e}")))?;
+    let info =
+        tarang_audio::probe_audio(file).map_err(|e| error_response(format!("probe error: {e}")))?;
     // Re-open so callers can still use the file if needed (probe consumed the first handle)
     let file = File::open(path).map_err(|e| error_response(format!("file error: {e}")))?;
     Ok((file, info))
@@ -39,9 +39,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
                 Err(e) => return e,
             };
             match open_and_probe(path) {
-                Ok((_file, info)) => success_response(
-                    serde_json::to_string_pretty(&info).unwrap_or_default(),
-                ),
+                Ok((_file, info)) => {
+                    success_response(serde_json::to_string_pretty(&info).unwrap_or_default())
+                }
                 Err(e) => e,
             }
         }
@@ -53,9 +53,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             match open_and_probe(path) {
                 Ok((_file, info)) => {
                     let analysis = tarang_ai::analyze_media(&info);
-                    success_response(
-                        serde_json::to_string_pretty(&analysis).unwrap_or_default(),
-                    )
+                    success_response(serde_json::to_string_pretty(&analysis).unwrap_or_default())
                 }
                 Err(e) => e,
             }
@@ -83,9 +81,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Value {
             let lang = args["language"].as_str().map(String::from);
             match open_and_probe(path) {
                 Ok((_file, info)) => match tarang_ai::prepare_transcription(&info, lang) {
-                    Some(req) => success_response(
-                        serde_json::to_string_pretty(&req).unwrap_or_default(),
-                    ),
+                    Some(req) => {
+                        success_response(serde_json::to_string_pretty(&req).unwrap_or_default())
+                    }
                     None => error_response("no audio stream found"),
                 },
                 Err(e) => e,
@@ -173,7 +171,9 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
                     }
                     success_response(format!(
                         "Indexed: {path}\nFingerprint: {} hashes ({:.1}s)\nContent: {}\nAlso ingested into RAG pipeline",
-                        fingerprint.hashes.len(), fingerprint.duration_secs, analysis.content_type
+                        fingerprint.hashes.len(),
+                        fingerprint.duration_secs,
+                        analysis.content_type
                     ))
                 }
                 Err(e) => error_response(format!("index error: {e}")),
@@ -205,9 +205,9 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             match daimon.search_similar(&fingerprint, top_k).await {
-                Ok(results) => success_response(
-                    serde_json::to_string_pretty(&results).unwrap_or_default(),
-                ),
+                Ok(results) => {
+                    success_response(serde_json::to_string_pretty(&results).unwrap_or_default())
+                }
                 Err(e) => error_response(format!("search error: {e}")),
             }
         }
@@ -222,16 +222,15 @@ pub async fn handle_async_tool_call(name: &str, args: &Value) -> Value {
             };
 
             let analysis = tarang_ai::analyze_media(&info);
-            let hoosh = match tarang_ai::HooshLlmClient::new(tarang_ai::HooshLlmConfig::default())
-            {
+            let hoosh = match tarang_ai::HooshLlmClient::new(tarang_ai::HooshLlmConfig::default()) {
                 Ok(c) => c,
                 Err(e) => return error_response(format!("hoosh client error: {e}")),
             };
 
             match hoosh.describe_content(&info, &analysis).await {
-                Ok(desc) => success_response(
-                    serde_json::to_string_pretty(&desc).unwrap_or_default(),
-                ),
+                Ok(desc) => {
+                    success_response(serde_json::to_string_pretty(&desc).unwrap_or_default())
+                }
                 Err(e) => error_response(format!("describe error: {e}")),
             }
         }

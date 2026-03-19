@@ -6,7 +6,7 @@ pub use tools::{handle_async_tool_call, handle_tool_call};
 pub use tools::{error_response, open_and_probe, require_path, success_response};
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 pub async fn cmd_mcp() -> Result<()> {

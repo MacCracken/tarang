@@ -351,7 +351,6 @@ impl VideoDecoder {
         };
         Ok(())
     }
-
 }
 
 /// List video codecs and their backends (only includes compiled-in backends)
