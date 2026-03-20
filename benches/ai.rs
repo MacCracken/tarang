@@ -124,6 +124,7 @@ fn bench_analyze_media(c: &mut Criterion) {
         title: Some("Test".to_string()),
         artist: None,
         album: None,
+        metadata: std::collections::HashMap::new(),
     };
 
     c.bench_function("analyze_media_2min_h264_aac", |b| {

@@ -548,6 +548,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         tracing::debug!(

@@ -88,12 +88,20 @@ impl std::fmt::Display for DecoderBackend {
     }
 }
 
-/// Video decoder configuration
+/// Video decoder configuration.
+///
+/// Use [`DecoderConfig::for_codec`] for software-only or
+/// [`DecoderConfig::for_codec_auto`] (with the `hwaccel` feature) for
+/// hardware-aware backend selection.
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
+    /// Video codec to decode.
     pub codec: VideoCodec,
+    /// Decoder backend implementation.
     pub backend: DecoderBackend,
+    /// Number of threads for parallel decoding (default: CPU count).
     pub thread_count: u32,
+    /// Whether hardware acceleration is in use.
     pub hw_accel: bool,
 }
 

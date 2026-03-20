@@ -5,13 +5,71 @@
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 
-/// Configuration for an audio encoder
+/// Configuration for an audio encoder.
+///
+/// Use [`EncoderConfig::builder`] for a guided construction, or create
+/// directly for simple cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EncoderConfig {
+    /// Target audio codec.
     pub codec: AudioCodec,
+    /// Output sample rate in Hz (e.g. 44100, 48000).
     pub sample_rate: u32,
+    /// Number of output channels (1 = mono, 2 = stereo).
     pub channels: u16,
+    /// Bits per sample for PCM/FLAC (16, 24, or 32). Ignored by Opus/AAC.
     pub bits_per_sample: u16,
+}
+
+impl EncoderConfig {
+    /// Create a builder for constructing an encoder config.
+    pub fn builder(codec: AudioCodec) -> EncoderConfigBuilder {
+        EncoderConfigBuilder {
+            codec,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        }
+    }
+}
+
+/// Builder for [`EncoderConfig`].
+#[derive(Debug, Clone)]
+pub struct EncoderConfigBuilder {
+    codec: AudioCodec,
+    sample_rate: u32,
+    channels: u16,
+    bits_per_sample: u16,
+}
+
+impl EncoderConfigBuilder {
+    /// Set the sample rate in Hz (default: 44100).
+    pub fn sample_rate(mut self, rate: u32) -> Self {
+        self.sample_rate = rate;
+        self
+    }
+
+    /// Set the number of channels (default: 2).
+    pub fn channels(mut self, ch: u16) -> Self {
+        self.channels = ch;
+        self
+    }
+
+    /// Set bits per sample for PCM/FLAC (default: 16).
+    pub fn bits_per_sample(mut self, bits: u16) -> Self {
+        self.bits_per_sample = bits;
+        self
+    }
+
+    /// Build the config.
+    pub fn build(self) -> EncoderConfig {
+        EncoderConfig {
+            codec: self.codec,
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            bits_per_sample: self.bits_per_sample,
+        }
+    }
 }
 
 /// Trait for audio encoders

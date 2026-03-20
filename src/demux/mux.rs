@@ -6,24 +6,38 @@
 use crate::core::{AudioCodec, Result, TarangError};
 use std::io::{Seek, Write};
 
-/// Trait for container muxers (writers)
+/// Trait for container muxers (writers).
+///
+/// Muxers follow a strict state machine:
+/// 1. `write_header()` — initialize the container (must be called first)
+/// 2. `write_packet()` — write encoded data (call N times)
+/// 3. `finalize()` — close the container (fix headers, write indices)
+///
+/// Calling methods out of order returns a `Pipeline` error.
 pub trait Muxer {
     /// Write the container header / initialize the stream.
+    /// Must be called before any `write_packet()` calls.
     fn write_header(&mut self) -> Result<()>;
 
     /// Write a packet of encoded audio data.
+    /// Must be called after `write_header()` and before `finalize()`.
     fn write_packet(&mut self, data: &[u8]) -> Result<()>;
 
     /// Finalize the container (write trailing metadata, fix headers, etc.)
+    /// After this call, no more packets can be written.
     fn finalize(&mut self) -> Result<()>;
 }
 
-/// Configuration for a mux stream
+/// Configuration for a mux stream.
 #[derive(Debug, Clone)]
 pub struct MuxConfig {
+    /// Audio codec to write.
     pub codec: AudioCodec,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Number of channels.
     pub channels: u16,
+    /// Bits per sample (for PCM/FLAC containers).
     pub bits_per_sample: u16,
 }
 

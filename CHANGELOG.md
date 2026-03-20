@@ -29,6 +29,19 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - rav1e 0.8 compiles and works; `paste` advisory (RUSTSEC-2024-0436) suppressed in deny.toml
 - Expanded deny.toml documentation explaining the advisory scope and removal criteria
 
+### API stabilization
+- Doc comments on all public struct fields: `AudioStreamInfo`, `VideoStreamInfo`, `AudioBuffer`, `VideoFrame`, `DecoderConfig`, `EncoderConfig`, `MuxConfig`
+- Doc comments on AI types: `MediaAnalysis` (score ranges), `TranscriptionRequest/Result/Segment` (units, ranges)
+- `Muxer` trait: documented state machine contract (write_header → write_packet → finalize)
+- `EncoderConfig::builder()`: builder pattern for audio encoder configuration
+- AGNOS ecosystem integration: Jalwa, Tazama, Shruti marked done
+
+### ID3/Vorbis comment metadata
+- `MediaInfo.metadata: HashMap<String, String>` for arbitrary tags
+- Symphonia metadata extraction: title, artist, album, genre, tracknumber, date, composer, album_artist, comment
+- Populates `title`/`artist`/`album` convenience fields from extracted tags
+- 4 new tests: empty metadata, metadata fields, tag extraction, empty value skipping
+
 ### ai-hwaccel integration
 - `hwaccel` feature flag with `ai-hwaccel` 0.19 dependency (Vulkan backend)
 - `HardwareReport` / `AcceleratorInfo`: unified GPU/NPU/TPU detection via `probe_hardware()`

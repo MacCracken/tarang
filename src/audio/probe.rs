@@ -4,6 +4,7 @@ use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,
     TarangError,
 };
+use std::collections::HashMap;
 
 /// Probe an audio file and return metadata using symphonia
 pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
@@ -21,7 +22,17 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
         .format(&hint, mss, &format_opts, &meta_opts)
         .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}").into()))?;
 
-    let format = probed.format;
+    let mut format = probed.format;
+    let metadata_log = probed.metadata;
+
+    // Extract metadata tags from both the probe metadata log and the format reader
+    let mut tags = HashMap::new();
+    if let Some(rev) = metadata_log.current() {
+        extract_tags(rev, &mut tags);
+    }
+    if let Some(rev) = format.metadata().current() {
+        extract_tags(rev, &mut tags);
+    }
 
     // Detect container format from symphonia's codec registry name
     let container = {
@@ -81,16 +92,53 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
         _ => None,
     });
 
+    let title = tags.get("title").cloned();
+    let artist = tags.get("artist").cloned();
+    let album = tags.get("album").cloned();
+
     Ok(MediaInfo {
         id: uuid::Uuid::new_v4(),
         format: container,
         streams,
         duration,
         file_size: None,
-        title: None,
-        artist: None,
-        album: None,
+        title,
+        artist,
+        album,
+        metadata: tags,
     })
+}
+
+/// Extract metadata tags from a symphonia metadata revision into a HashMap.
+fn extract_tags(
+    rev: &symphonia::core::meta::MetadataRevision,
+    tags: &mut HashMap<String, String>,
+) {
+    use symphonia::core::meta::StandardTagKey;
+
+    for tag in rev.tags() {
+        let value = tag.value.to_string();
+        if value.is_empty() {
+            continue;
+        }
+
+        // Map standard tag keys to well-known names
+        if let Some(std_key) = tag.std_key {
+            let key = match std_key {
+                StandardTagKey::TrackTitle => "title",
+                StandardTagKey::Artist => "artist",
+                StandardTagKey::Album => "album",
+                StandardTagKey::TrackNumber => "tracknumber",
+                StandardTagKey::Date => "date",
+                StandardTagKey::Genre => "genre",
+                StandardTagKey::Composer => "composer",
+                StandardTagKey::AlbumArtist => "album_artist",
+                StandardTagKey::Comment => "comment",
+                _ => continue,
+            };
+            tags.insert(key.to_string(), value);
+        }
+    }
 }
 
 /// Create a minimal WAV file in memory for testing.
@@ -292,5 +340,107 @@ mod tests {
     fn map_codec_unknown_returns_none() {
         use symphonia::core::codecs::CODEC_TYPE_NULL;
         assert_eq!(map_symphonia_codec(CODEC_TYPE_NULL), None);
+    }
+
+    #[test]
+    fn probe_wav_has_empty_metadata() {
+        // WAV files typically have no ID3/Vorbis metadata
+        let wav = make_test_wav(4410, 44100, 2);
+        let file = wav_to_tempfile(&wav);
+        let info = probe_audio(file).unwrap();
+        // Plain WAV has no metadata tags
+        assert!(info.metadata.is_empty());
+    }
+
+    #[test]
+    fn probe_wav_metadata_fields_none() {
+        // A plain WAV should have title/artist/album as None
+        let wav = make_test_wav(4410, 44100, 1);
+        let file = wav_to_tempfile(&wav);
+        let info = probe_audio(file).unwrap();
+        assert!(info.title.is_none());
+        assert!(info.artist.is_none());
+        assert!(info.album.is_none());
+    }
+
+    #[test]
+    fn extract_tags_populates_hashmap() {
+        use symphonia::core::meta::{MetadataBuilder, StandardTagKey, Tag, Value};
+
+        let mut builder = MetadataBuilder::new();
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::TrackTitle),
+            "TITLE",
+            Value::from("Test Song"),
+        ));
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::Artist),
+            "ARTIST",
+            Value::from("Test Artist"),
+        ));
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::Album),
+            "ALBUM",
+            Value::from("Test Album"),
+        ));
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::Genre),
+            "GENRE",
+            Value::from("Rock"),
+        ));
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::TrackNumber),
+            "TRACKNUMBER",
+            Value::from("3"),
+        ));
+
+        let rev = builder.metadata();
+        let mut tags = HashMap::new();
+        super::extract_tags(&rev, &mut tags);
+
+        assert_eq!(tags.get("title").unwrap(), "Test Song");
+        assert_eq!(tags.get("artist").unwrap(), "Test Artist");
+        assert_eq!(tags.get("album").unwrap(), "Test Album");
+        assert_eq!(tags.get("genre").unwrap(), "Rock");
+        assert_eq!(tags.get("tracknumber").unwrap(), "3");
+    }
+
+    #[test]
+    fn extract_tags_skips_empty_values() {
+        use symphonia::core::meta::{MetadataBuilder, StandardTagKey, Tag, Value};
+
+        let mut builder = MetadataBuilder::new();
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::TrackTitle),
+            "TITLE",
+            Value::from(""),
+        ));
+        builder.add_tag(Tag::new(
+            Some(StandardTagKey::Artist),
+            "ARTIST",
+            Value::from("Valid Artist"),
+        ));
+
+        let rev = builder.metadata();
+        let mut tags = HashMap::new();
+        super::extract_tags(&rev, &mut tags);
+
+        assert!(!tags.contains_key("title"));
+        assert_eq!(tags.get("artist").unwrap(), "Valid Artist");
+    }
+
+    #[test]
+    fn extract_tags_skips_unknown_standard_keys() {
+        use symphonia::core::meta::{MetadataBuilder, Tag, Value};
+
+        let mut builder = MetadataBuilder::new();
+        // Tag with no standard key
+        builder.add_tag(Tag::new(None, "CUSTOM_TAG", Value::from("custom value")));
+
+        let rev = builder.metadata();
+        let mut tags = HashMap::new();
+        super::extract_tags(&rev, &mut tags);
+
+        assert!(tags.is_empty());
     }
 }

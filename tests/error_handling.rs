@@ -273,6 +273,7 @@ fn analyze_media_minimal_info() {
         title: None,
         artist: None,
         album: None,
+        metadata: std::collections::HashMap::new(),
     };
 
     // Should not panic even with no streams

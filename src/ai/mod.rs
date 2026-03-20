@@ -62,41 +62,59 @@ impl std::fmt::Display for ContentType {
     }
 }
 
-/// Media analysis result
+/// Media analysis result from AI classification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaAnalysis {
+    /// Detected content type (music, speech, movie, etc.).
     pub content_type: ContentType,
+    /// Overall quality score (0.0–100.0).
     pub quality_score: f32,
+    /// Suggested codec or format change, if applicable.
     pub codec_recommendation: Option<String>,
+    /// Estimated processing complexity (0.0–100.0, higher = more compute).
     pub estimated_complexity: f32,
+    /// Descriptive tags for the media content.
     pub tags: Vec<String>,
 }
 
-/// Transcription request to route through hoosh
+/// Transcription request metadata to route through hoosh.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionRequest {
+    /// Audio codec name (e.g. "PCM", "FLAC").
     pub audio_codec: String,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Number of audio channels.
     pub channels: u16,
+    /// Total audio duration in seconds.
     pub duration_secs: f64,
+    /// Optional language hint (ISO 639-1, e.g. "en", "ja").
     pub language_hint: Option<String>,
 }
 
-/// Transcription result
+/// Transcription result from hoosh/Whisper.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionResult {
+    /// Full transcribed text.
     pub text: String,
+    /// Detected language (ISO 639-1).
     pub language: String,
+    /// Overall confidence score (0.0–1.0).
     pub confidence: f32,
+    /// Timed segments with per-segment text and confidence.
     pub segments: Vec<TranscriptionSegment>,
 }
 
-/// A timed segment of transcription
+/// A timed segment of transcription with word-level timing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionSegment {
+    /// Segment start time in seconds.
     pub start: f64,
+    /// Segment end time in seconds.
     pub end: f64,
+    /// Transcribed text for this segment.
     pub text: String,
+    /// Confidence score for this segment (0.0–1.0).
     pub confidence: f32,
 }
 
@@ -265,6 +283,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -285,6 +304,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -414,6 +434,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         assert!(prepare_transcription(&info, None).is_none());
     }
@@ -508,6 +529,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = analyze_media(&info);
         assert_eq!(analysis.content_type, ContentType::Animation);
@@ -526,6 +548,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = analyze_media(&info);
         assert_eq!(analysis.content_type, ContentType::Unknown);
@@ -566,6 +589,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = analyze_media(&info);
         // base 50 + sample_rate>=48k bonus 5 + lossless bonus 5 = 60
@@ -602,6 +626,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = analyze_media(&info);
         assert!(analysis.quality_score <= 100.0);
@@ -641,6 +666,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let req = prepare_transcription(&info, None);
         assert!(req.is_some());

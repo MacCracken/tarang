@@ -700,6 +700,7 @@ mod tests {
             title: Some("Test Song".into()),
             artist: Some("Test Artist".into()),
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Music,
@@ -735,6 +736,7 @@ mod tests {
             title: Some("Opus No. 1".into()),
             artist: Some("Composer".into()),
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Music,
@@ -942,6 +944,7 @@ mod tests {
             title: Some("My Video".into()),
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Movie,
@@ -984,6 +987,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Podcast,
@@ -1032,6 +1036,7 @@ mod tests {
             title: Some("Nature Documentary".into()),
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Movie,

@@ -146,6 +146,7 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let ret = info.clone();

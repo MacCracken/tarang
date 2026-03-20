@@ -6,6 +6,7 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -185,26 +186,39 @@ pub enum PixelFormat {
     Nv12,
 }
 
-/// Audio stream metadata
+/// Audio stream metadata discovered during probing/demuxing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioStreamInfo {
+    /// Audio codec used in this stream.
     pub codec: AudioCodec,
+    /// Sample rate in Hz (e.g. 44100, 48000).
     pub sample_rate: u32,
+    /// Number of audio channels (1 = mono, 2 = stereo, 6 = 5.1).
     pub channels: u16,
+    /// Sample format of decoded audio.
     pub sample_format: SampleFormat,
+    /// Bitrate in bits per second, if known.
     pub bitrate: Option<u32>,
+    /// Stream duration, if known from container metadata.
     pub duration: Option<Duration>,
 }
 
-/// Video stream metadata
+/// Video stream metadata discovered during probing/demuxing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoStreamInfo {
+    /// Video codec used in this stream.
     pub codec: VideoCodec,
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
+    /// Pixel format of decoded frames.
     pub pixel_format: PixelFormat,
+    /// Frame rate in frames per second.
     pub frame_rate: f64,
+    /// Bitrate in bits per second, if known.
     pub bitrate: Option<u32>,
+    /// Stream duration, if known from container metadata.
     pub duration: Option<Duration>,
 }
 
@@ -228,6 +242,8 @@ pub struct MediaInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// Arbitrary metadata tags (ID3, Vorbis comments, etc.)
+    pub metadata: HashMap<String, String>,
 }
 
 impl MediaInfo {
@@ -258,14 +274,23 @@ impl MediaInfo {
     }
 }
 
-/// A decoded audio buffer
+/// A decoded audio buffer containing interleaved F32 samples.
+///
+/// Audio data is stored as interleaved samples: for stereo audio with
+/// N frames, `data` contains `[L0, R0, L1, R1, ..., LN, RN]` as F32.
 #[derive(Debug, Clone)]
 pub struct AudioBuffer {
+    /// Raw sample data as bytes (interpret as F32 via [`crate::audio::sample::bytes_to_f32`]).
     pub data: Bytes,
+    /// Sample format (typically F32 after decoding).
     pub sample_format: SampleFormat,
+    /// Number of channels.
     pub channels: u16,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Number of audio frames (each frame has `channels` samples).
     pub num_samples: usize,
+    /// Presentation timestamp of the first sample.
     pub timestamp: Duration,
 }
 
@@ -293,13 +318,21 @@ pub fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
-/// A decoded video frame
+/// A decoded video frame containing raw pixel data.
+///
+/// For YUV420p: data layout is Y plane (w*h), U plane (w/2 * h/2), V plane (w/2 * h/2).
+/// For RGB24: data layout is `[R, G, B, R, G, B, ...]` row by row.
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
+    /// Raw pixel data.
     pub data: Bytes,
+    /// Pixel format describing the data layout.
     pub pixel_format: PixelFormat,
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
+    /// Presentation timestamp.
     pub timestamp: Duration,
 }
 
@@ -507,6 +540,7 @@ mod tests {
             title: Some("Test Video".into()),
             artist: None,
             album: None,
+            metadata: HashMap::new(),
         };
 
         assert!(info.has_video());
@@ -538,6 +572,7 @@ mod tests {
             title: Some("Track 1".into()),
             artist: Some("Artist".into()),
             album: Some("Album".into()),
+            metadata: HashMap::new(),
         };
 
         assert!(!info.has_video());
@@ -660,6 +695,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: HashMap::new(),
         };
         assert!(!info.has_video());
         assert!(!info.has_audio());
@@ -680,6 +716,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: HashMap::new(),
         };
         assert!(!info.has_video());
         assert!(!info.has_audio());
@@ -805,6 +842,7 @@ mod tests {
             title: None,
             artist: None,
             album: None,
+            metadata: HashMap::new(),
         };
         assert_eq!(info.audio_streams().count(), 2);
         assert_eq!(info.video_streams().count(), 1);

@@ -989,6 +989,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             title: None,
             artist: None,
             album: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         tracing::debug!(

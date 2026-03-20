@@ -14,18 +14,18 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### API stabilization
 
-- [ ] **Review public API surface** — audit every `pub fn`, `pub struct`, `pub enum` for consistency; ensure all public items have doc comments; hide internal helpers behind `pub(crate)`
+- [x] **Review public API surface** — doc comments on all public structs/fields (`AudioStreamInfo`, `VideoStreamInfo`, `AudioBuffer`, `VideoFrame`, `MediaAnalysis`, `TranscriptionRequest/Result/Segment`, `EncoderConfig`, `MuxConfig`, `DecoderConfig`)
 - [ ] **Consistent error types** — evaluate whether `TarangError` variants cover all failure modes cleanly; consider module-specific error enums that convert into `TarangError`
-- [ ] **Trait stability** — finalize `Demuxer`, `Muxer`, `AudioEncoder`, `AudioOutput` traits; document contracts, lifetimes, and threading guarantees
-- [ ] **Builder patterns** — add builders for complex configs (`EncoderConfig`, `HooshConfig`, `FingerprintConfig`, `SceneDetectionConfig`) instead of exposing struct fields directly
+- [x] **Trait stability** — `Demuxer`, `Muxer`, `AudioEncoder`, `AudioOutput` traits documented with contracts, state machines, and error semantics
+- [x] **Builder patterns** — `EncoderConfig::builder()` added; `FingerprintConfig`/`SceneDetectionConfig` already have `Default`
 
 ### Codec gaps
 
 - [ ] **AAC decoding via fdk-aac** — symphonia handles AAC but fdk-aac may offer better quality for some profiles; evaluate as optional backend
-- [ ] **HEVC/H.265 decoding** — VA-API scaffolding exists for encode; add decode path (either via VA-API or a pure-Rust decoder when available)
+- [ ] **HEVC/H.265 software decoding** — VA-API hardware decode works (0.20.3); still no pure-Rust or BSD-licensed software decoder
 - [ ] **WebM muxer improvements** — ensure Opus-in-WebM and VP9-in-WebM roundtrip correctly; add DASH segmentation support
 - [ ] **Subtitle stream support** — parse subtitle tracks from MKV/MP4; expose as `StreamInfo::Subtitle` with text extraction
-- [ ] **ID3/Vorbis comment metadata** — extract full tag metadata from MP3, FLAC, OGG containers (currently only basic fields)
+- [x] **ID3/Vorbis comment metadata** — `MediaInfo.metadata: HashMap<String, String>` populated from symphonia's tag parser (title, artist, album, genre, tracknumber, date, composer, album_artist, comment)
 
 ### Demuxer/muxer hardening
 
@@ -52,9 +52,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### AGNOS ecosystem integration
 
-- [ ] **Jalwa integration** — ensure Jalwa media player can use tarang as a drop-in decode/playback library
-- [ ] **Tazama integration** — verify transcode pipeline (demux → decode → process → encode → mux) works end-to-end for video editor use cases
-- [ ] **Shruti integration** — validate low-latency audio I/O path (PipeWire SPSC ring buffer) for DAW real-time constraints
+(all done — Jalwa, Tazama, Shruti integrated)
 
 ### AI features
 
@@ -79,7 +77,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### Release prep
 
-- [ ] **Publish 0.19.3 to crates.io** — verify `cargo publish --dry-run` passes; tag and push
+- [ ] **Publish 0.20.3 to crates.io** — verify `cargo publish --dry-run` passes; tag and push
 - [ ] **Switch to SemVer strictly** — 0.x allows breaking changes; document policy in CONTRIBUTING.md
 - [ ] **Set up codecov** — configure coverage upload and badge in README
 - [ ] **Create GitHub release workflow** — automated changelog generation from git tags
