@@ -21,6 +21,8 @@ pub mod openh264_enc;
 #[cfg(feature = "rav1e")]
 pub mod rav1e_enc;
 #[cfg(feature = "vaapi")]
+pub mod vaapi_dec;
+#[cfg(feature = "vaapi")]
 pub mod vaapi_enc;
 #[cfg(feature = "vaapi")]
 pub mod vaapi_probe;
@@ -40,6 +42,8 @@ pub use openh264_dec::OpenH264Decoder;
 pub use openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
 #[cfg(feature = "rav1e")]
 pub use rav1e_enc::{Rav1eConfig, Rav1eEncoder};
+#[cfg(feature = "vaapi")]
+pub use vaapi_dec::VaapiDecoder;
 #[cfg(feature = "vaapi")]
 pub use vaapi_enc::{VaapiEncoder, VaapiEncoderConfig};
 #[cfg(feature = "vaapi")]
@@ -215,6 +219,8 @@ enum BackendInner {
     OpenH264(OpenH264Decoder),
     #[cfg(feature = "vpx")]
     Vpx(VpxDecoder),
+    #[cfg(feature = "vaapi")]
+    Vaapi(VaapiDecoder),
     /// Software / stub — produces black frames (used for Theora until a Rust decoder exists)
     Stub,
 }
@@ -242,6 +248,12 @@ impl VideoDecoder {
             DecoderBackend::OpenH264 => BackendInner::OpenH264(OpenH264Decoder::new()?),
             #[cfg(feature = "vpx")]
             DecoderBackend::LibVpx => BackendInner::Vpx(VpxDecoder::new(config.codec)?),
+            #[cfg(feature = "vaapi")]
+            DecoderBackend::Vaapi => {
+                // VA-API decoder needs dimensions — default to 1920x1080,
+                // updated when init() is called with stream info.
+                BackendInner::Vaapi(VaapiDecoder::new(config.codec, 1920, 1080)?)
+            }
             _ => BackendInner::Stub,
         };
 
@@ -321,6 +333,12 @@ impl VideoDecoder {
             #[cfg(feature = "vpx")]
             BackendInner::Vpx(dec) => {
                 decoded = dec.decode(data, timestamp)?;
+            }
+            #[cfg(feature = "vaapi")]
+            BackendInner::Vaapi(dec) => {
+                if let Some(frame) = dec.decode(data, timestamp)? {
+                    decoded.push(frame);
+                }
             }
             BackendInner::Stub => {
                 let w = if self.width > 0 { self.width } else { 320 };

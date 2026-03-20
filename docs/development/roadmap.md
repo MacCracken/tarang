@@ -8,9 +8,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### Video pipeline
-
-- [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available (VaapiDecoder needed)
 
 ### AI features
 

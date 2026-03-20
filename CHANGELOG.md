@@ -29,6 +29,11 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 ### Video pipeline
 - **Frame format conversion**: `video::convert` module — centralized `convert_pixel_format()`, `VideoFrame::convert_to()`, YUV420p↔RGB24↔NV12 conversions
 - **Scaling/resize**: `video::scale` module — `scale_frame()` with `ScaleFilter` (Nearest, Bilinear, Lanczos3) for RGB24 and YUV420p frames
+- **VA-API hardware decode**: `VaapiDecoder` — GPU-accelerated decode for H.264/H.265/VP9/AV1/VP8
+  - Full pipeline: display, config (VLD entrypoint), context, surfaces, SliceData submission
+  - NV12→YUV420p readback via Image API
+  - Wired into `BackendInner::Vaapi` and `VideoDecoder::send_packet()`
+  - 3 tests (profile mapping, dimension validation, hardware creation)
 
 ### Fuzz testing
 - `cargo-fuzz` targets for all 4 demuxers: `fuzz_wav`, `fuzz_mp4`, `fuzz_mkv`, `fuzz_ogg`
