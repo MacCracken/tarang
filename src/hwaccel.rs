@@ -6,8 +6,24 @@
 //!
 //! Use [`probe_hardware`] for a quick summary or [`accelerator_registry`]
 //! for full access to the underlying registry.
+//!
+//! ## Capability matching
+//!
+//! [`CodecCapabilities`] maps detected hardware to tarang codec backends,
+//! answering "which codecs can this hardware decode/encode?":
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "hwaccel")]
+//! # {
+//! let caps = tarang::hwaccel::probe_codec_capabilities();
+//! for entry in &caps.decode {
+//!     println!("{} via {}", entry.codec, entry.backend);
+//! }
+//! # }
+//! ```
 
 use ai_hwaccel::{AcceleratorFamily, AcceleratorProfile, AcceleratorRegistry, AcceleratorType};
+use crate::core::VideoCodec;
 use std::fmt;
 
 /// Summary of a single detected accelerator, tailored for tarang's needs.
@@ -95,6 +111,223 @@ impl fmt::Display for HardwareReport {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Capability matching: map accelerator profiles → tarang codec features
+// ---------------------------------------------------------------------------
+
+/// How a codec backend is accelerated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodecBackendKind {
+    /// Software decoder/encoder compiled via feature flag.
+    Software,
+    /// VA-API hardware path (Linux DRM render node).
+    Vaapi,
+}
+
+impl fmt::Display for CodecBackendKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Software => write!(f, "software"),
+            Self::Vaapi => write!(f, "vaapi"),
+        }
+    }
+}
+
+/// A single codec capability entry — one codec in one direction via one backend.
+#[derive(Debug, Clone)]
+pub struct CodecEntry {
+    pub codec: VideoCodec,
+    pub backend: CodecBackendKind,
+    /// Name of the software library or hardware driver.
+    pub driver: String,
+}
+
+impl fmt::Display for CodecEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} via {} ({})", self.codec, self.backend, self.driver)
+    }
+}
+
+/// Unified view of all available codec decode/encode paths, combining
+/// compile-time feature flags, VA-API probing, and ai-hwaccel detection.
+#[derive(Debug, Clone)]
+pub struct CodecCapabilities {
+    /// Available decode paths (sorted: hardware first, then software).
+    pub decode: Vec<CodecEntry>,
+    /// Available encode paths (sorted: hardware first, then software).
+    pub encode: Vec<CodecEntry>,
+}
+
+impl CodecCapabilities {
+    /// Check if any decode path exists for the given codec.
+    pub fn can_decode(&self, codec: VideoCodec) -> bool {
+        self.decode.iter().any(|e| e.codec == codec)
+    }
+
+    /// Check if any encode path exists for the given codec.
+    pub fn can_encode(&self, codec: VideoCodec) -> bool {
+        self.encode.iter().any(|e| e.codec == codec)
+    }
+
+    /// Best decode entry for a codec (hardware preferred over software).
+    pub fn best_decode(&self, codec: VideoCodec) -> Option<&CodecEntry> {
+        // List is sorted hw-first, so first match is best.
+        self.decode.iter().find(|e| e.codec == codec)
+    }
+
+    /// Best encode entry for a codec (hardware preferred over software).
+    pub fn best_encode(&self, codec: VideoCodec) -> Option<&CodecEntry> {
+        self.encode.iter().find(|e| e.codec == codec)
+    }
+
+    /// All decode entries for a specific codec.
+    pub fn decode_for(&self, codec: VideoCodec) -> Vec<&CodecEntry> {
+        self.decode.iter().filter(|e| e.codec == codec).collect()
+    }
+
+    /// All encode entries for a specific codec.
+    pub fn encode_for(&self, codec: VideoCodec) -> Vec<&CodecEntry> {
+        self.encode.iter().filter(|e| e.codec == codec).collect()
+    }
+}
+
+impl fmt::Display for CodecCapabilities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Decode:")?;
+        if self.decode.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for entry in &self.decode {
+                writeln!(f, "  {entry}")?;
+            }
+        }
+        writeln!(f, "Encode:")?;
+        if self.encode.is_empty() {
+            writeln!(f, "  (none)")?;
+        } else {
+            for entry in &self.encode {
+                writeln!(f, "  {entry}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Probe the system and build a unified [`CodecCapabilities`] report.
+///
+/// Combines three sources:
+/// 1. **Compile-time feature flags** — which software backends are linked.
+/// 2. **VA-API probing** (if `vaapi` feature enabled) — hardware codec support.
+/// 3. **ai-hwaccel detection** — confirms GPU/NPU presence for future Vulkan
+///    compute paths.
+///
+/// The returned lists are sorted with hardware entries before software entries.
+pub fn probe_codec_capabilities() -> CodecCapabilities {
+    let mut decode = Vec::new();
+    let mut encode = Vec::new();
+
+    // --- Hardware: VA-API ---
+    #[cfg(feature = "vaapi")]
+    if let Some(vaapi) = crate::video::probe_vaapi() {
+        use crate::video::HwCodecDirection;
+        for cap in &vaapi.capabilities {
+            let entry = CodecEntry {
+                codec: cap.codec,
+                backend: CodecBackendKind::Vaapi,
+                driver: vaapi.driver_name.clone(),
+            };
+            match cap.direction {
+                HwCodecDirection::Decode => decode.push(entry),
+                HwCodecDirection::Encode => encode.push(entry),
+            }
+        }
+        // Deduplicate VA-API entries (multiple profiles for same codec).
+        decode.dedup_by(|a, b| a.codec == b.codec && a.backend == b.backend);
+        encode.dedup_by(|a, b| a.codec == b.codec && a.backend == b.backend);
+    }
+
+    // --- Software decoders (feature-gated) ---
+    if cfg!(feature = "dav1d") {
+        decode.push(CodecEntry {
+            codec: VideoCodec::Av1,
+            backend: CodecBackendKind::Software,
+            driver: "dav1d".into(),
+        });
+    }
+    if cfg!(feature = "openh264") {
+        decode.push(CodecEntry {
+            codec: VideoCodec::H264,
+            backend: CodecBackendKind::Software,
+            driver: "openh264".into(),
+        });
+    }
+    if cfg!(feature = "vpx") {
+        decode.push(CodecEntry {
+            codec: VideoCodec::Vp8,
+            backend: CodecBackendKind::Software,
+            driver: "libvpx".into(),
+        });
+        decode.push(CodecEntry {
+            codec: VideoCodec::Vp9,
+            backend: CodecBackendKind::Software,
+            driver: "libvpx".into(),
+        });
+    }
+
+    // --- Software encoders (feature-gated) ---
+    if cfg!(feature = "rav1e") {
+        encode.push(CodecEntry {
+            codec: VideoCodec::Av1,
+            backend: CodecBackendKind::Software,
+            driver: "rav1e".into(),
+        });
+    }
+    if cfg!(feature = "openh264-enc") {
+        encode.push(CodecEntry {
+            codec: VideoCodec::H264,
+            backend: CodecBackendKind::Software,
+            driver: "openh264".into(),
+        });
+    }
+    if cfg!(feature = "vpx-enc") {
+        encode.push(CodecEntry {
+            codec: VideoCodec::Vp8,
+            backend: CodecBackendKind::Software,
+            driver: "libvpx".into(),
+        });
+        encode.push(CodecEntry {
+            codec: VideoCodec::Vp9,
+            backend: CodecBackendKind::Software,
+            driver: "libvpx".into(),
+        });
+    }
+
+    CodecCapabilities { decode, encode }
+}
+
+/// Recommend the best decode backend for a given codec based on hardware.
+///
+/// Returns `Some((backend_kind, driver_name))` or `None` if the codec is
+/// unsupported with the current feature set and hardware.
+pub fn recommend_decode_backend(
+    codec: VideoCodec,
+    caps: &CodecCapabilities,
+) -> Option<(CodecBackendKind, String)> {
+    caps.best_decode(codec)
+        .map(|e| (e.backend, e.driver.clone()))
+}
+
+/// Recommend the best encode backend for a given codec based on hardware.
+///
+/// Prefers hardware encoding (VA-API) over software when available.
+pub fn recommend_encode_backend(
+    codec: VideoCodec,
+    caps: &CodecCapabilities,
+) -> Option<(CodecBackendKind, String)> {
+    caps.best_encode(codec)
+        .map(|e| (e.backend, e.driver.clone()))
+}
+
 fn is_vulkan(accel: &AcceleratorType) -> bool {
     matches!(accel, AcceleratorType::VulkanGpu { .. })
 }
@@ -146,7 +379,6 @@ mod tests {
     #[test]
     fn probe_returns_report() {
         let report = probe_hardware();
-        // Should always have system memory > 0
         assert!(report.total_system_memory > 0);
     }
 
@@ -163,7 +395,7 @@ mod tests {
         let info = AcceleratorInfo {
             name: "Test GPU".to_string(),
             family: AcceleratorFamily::Gpu,
-            memory_bytes: 8 * 1024 * 1024 * 1024, // 8GB
+            memory_bytes: 8 * 1024 * 1024 * 1024,
             vulkan_compute: true,
         };
         let text = format!("{info}");
@@ -214,5 +446,146 @@ mod tests {
         let best = report.best_accelerator().unwrap();
         assert_eq!(best.name, "Big GPU");
         assert!(report.has_gpu());
+    }
+
+    // --- CodecCapabilities tests ---
+
+    #[test]
+    fn probe_codec_capabilities_returns_entries() {
+        let caps = probe_codec_capabilities();
+        // Software decoders depend on feature flags, but the function shouldn't panic.
+        let _ = format!("{caps}");
+    }
+
+    #[test]
+    fn codec_capabilities_queries() {
+        let caps = CodecCapabilities {
+            decode: vec![
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Vaapi,
+                    driver: "i965".into(),
+                },
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Software,
+                    driver: "openh264".into(),
+                },
+                CodecEntry {
+                    codec: VideoCodec::Av1,
+                    backend: CodecBackendKind::Software,
+                    driver: "dav1d".into(),
+                },
+            ],
+            encode: vec![CodecEntry {
+                codec: VideoCodec::H264,
+                backend: CodecBackendKind::Vaapi,
+                driver: "i965".into(),
+            }],
+        };
+
+        assert!(caps.can_decode(VideoCodec::H264));
+        assert!(caps.can_decode(VideoCodec::Av1));
+        assert!(!caps.can_decode(VideoCodec::Vp9));
+        assert!(caps.can_encode(VideoCodec::H264));
+        assert!(!caps.can_encode(VideoCodec::Av1));
+
+        // best_decode prefers hardware (first in list)
+        let best = caps.best_decode(VideoCodec::H264).unwrap();
+        assert_eq!(best.backend, CodecBackendKind::Vaapi);
+
+        // decode_for returns all entries
+        assert_eq!(caps.decode_for(VideoCodec::H264).len(), 2);
+        assert_eq!(caps.decode_for(VideoCodec::Av1).len(), 1);
+        assert_eq!(caps.decode_for(VideoCodec::Vp9).len(), 0);
+    }
+
+    #[test]
+    fn recommend_decode_prefers_vaapi() {
+        let caps = CodecCapabilities {
+            decode: vec![
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Vaapi,
+                    driver: "i965".into(),
+                },
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Software,
+                    driver: "openh264".into(),
+                },
+            ],
+            encode: vec![],
+        };
+        let (kind, driver) = recommend_decode_backend(VideoCodec::H264, &caps).unwrap();
+        assert_eq!(kind, CodecBackendKind::Vaapi);
+        assert_eq!(driver, "i965");
+    }
+
+    #[test]
+    fn recommend_decode_falls_back_to_software() {
+        let caps = CodecCapabilities {
+            decode: vec![CodecEntry {
+                codec: VideoCodec::Av1,
+                backend: CodecBackendKind::Software,
+                driver: "dav1d".into(),
+            }],
+            encode: vec![],
+        };
+        let (kind, _) = recommend_decode_backend(VideoCodec::Av1, &caps).unwrap();
+        assert_eq!(kind, CodecBackendKind::Software);
+    }
+
+    #[test]
+    fn recommend_encode_prefers_vaapi() {
+        let caps = CodecCapabilities {
+            decode: vec![],
+            encode: vec![
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Vaapi,
+                    driver: "i965".into(),
+                },
+                CodecEntry {
+                    codec: VideoCodec::H264,
+                    backend: CodecBackendKind::Software,
+                    driver: "openh264".into(),
+                },
+            ],
+        };
+        let (kind, _) = recommend_encode_backend(VideoCodec::H264, &caps).unwrap();
+        assert_eq!(kind, CodecBackendKind::Vaapi);
+    }
+
+    #[test]
+    fn recommend_returns_none_for_unsupported() {
+        let caps = CodecCapabilities {
+            decode: vec![],
+            encode: vec![],
+        };
+        assert!(recommend_decode_backend(VideoCodec::H265, &caps).is_none());
+        assert!(recommend_encode_backend(VideoCodec::H265, &caps).is_none());
+    }
+
+    #[test]
+    fn codec_capabilities_display() {
+        let caps = CodecCapabilities {
+            decode: vec![CodecEntry {
+                codec: VideoCodec::H264,
+                backend: CodecBackendKind::Vaapi,
+                driver: "i965".into(),
+            }],
+            encode: vec![],
+        };
+        let text = format!("{caps}");
+        assert!(text.contains("Decode:"));
+        assert!(text.contains("H.264 via vaapi (i965)"));
+        assert!(text.contains("Encode:"));
+    }
+
+    #[test]
+    fn codec_backend_kind_display() {
+        assert_eq!(CodecBackendKind::Software.to_string(), "software");
+        assert_eq!(CodecBackendKind::Vaapi.to_string(), "vaapi");
     }
 }

@@ -98,7 +98,7 @@ pub struct DecoderConfig {
 }
 
 impl DecoderConfig {
-    /// Create a default config for the given codec
+    /// Create a default config for the given codec (software-only).
     pub fn for_codec(codec: VideoCodec) -> Result<Self> {
         let backend = match codec {
             VideoCodec::Av1 => {
@@ -139,6 +139,44 @@ impl DecoderConfig {
             thread_count: num_cpus(),
             hw_accel: false,
         })
+    }
+
+    /// Create a hardware-aware config for the given codec.
+    ///
+    /// Queries [`CodecCapabilities`] to prefer VA-API hardware decoding
+    /// when available, falling back to software backends. This is the
+    /// recommended way to create a decoder config when the `hwaccel`
+    /// feature is enabled.
+    ///
+    /// [`CodecCapabilities`]: crate::hwaccel::CodecCapabilities
+    #[cfg(feature = "hwaccel")]
+    pub fn for_codec_auto(
+        codec: VideoCodec,
+        caps: &crate::hwaccel::CodecCapabilities,
+    ) -> Result<Self> {
+        use crate::hwaccel::CodecBackendKind;
+
+        if let Some(entry) = caps.best_decode(codec) {
+            match entry.backend {
+                CodecBackendKind::Vaapi => {
+                    // VA-API path: check that the vaapi feature is compiled in.
+                    if !cfg!(feature = "vaapi") {
+                        // Hardware detected but vaapi feature not compiled — fall through to software.
+                        return Self::for_codec(codec);
+                    }
+                    Ok(Self {
+                        codec,
+                        backend: DecoderBackend::Vaapi,
+                        thread_count: num_cpus(),
+                        hw_accel: true,
+                    })
+                }
+                CodecBackendKind::Software => Self::for_codec(codec),
+            }
+        } else {
+            // No path at all — try software for a better error message.
+            Self::for_codec(codec)
+        }
     }
 }
 
@@ -369,7 +407,7 @@ impl VideoDecoder {
     }
 }
 
-/// List video codecs and their backends (only includes compiled-in backends)
+/// List video codecs and their backends (only includes compiled-in software backends).
 pub fn supported_codecs() -> Vec<(VideoCodec, DecoderBackend)> {
     let mut codecs = Vec::new();
     if cfg!(feature = "dav1d") {
@@ -383,6 +421,26 @@ pub fn supported_codecs() -> Vec<(VideoCodec, DecoderBackend)> {
         codecs.push((VideoCodec::Vp9, DecoderBackend::LibVpx));
     }
     codecs.push((VideoCodec::Theora, DecoderBackend::Software));
+    codecs
+}
+
+/// List all video codecs and backends, including hardware-accelerated paths.
+///
+/// Probes VA-API (if `vaapi` feature enabled) to include hardware decode/encode
+/// capabilities alongside software backends.
+pub fn supported_codecs_with_hw() -> Vec<(VideoCodec, DecoderBackend)> {
+    let mut codecs = Vec::new();
+
+    // Hardware backends first
+    #[cfg(feature = "vaapi")]
+    if let Some(vaapi) = probe_vaapi() {
+        for codec in vaapi.decode_codecs() {
+            codecs.push((codec, DecoderBackend::Vaapi));
+        }
+    }
+
+    // Then software backends
+    codecs.extend(supported_codecs());
     codecs
 }
 

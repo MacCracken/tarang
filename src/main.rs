@@ -81,18 +81,15 @@ fn cmd_probe_hw() {
         let report = tarang::hwaccel::probe_hardware();
         print!("{report}");
 
-        #[cfg(feature = "vaapi")]
-        if let Some(vaapi) = tarang::video::probe_vaapi() {
-            println!("\nVA-API ({}, {}):", vaapi.driver_name, vaapi.render_node);
-            for cap in &vaapi.capabilities {
-                println!("  {} {} ({})", cap.codec, cap.direction, cap.profile);
-            }
-        }
+        // Codec capability matching
+        let caps = tarang::hwaccel::probe_codec_capabilities();
+        println!("Codec capabilities:");
+        print!("{caps}");
 
         if let Some(best) = report.best_accelerator() {
-            println!("\nRecommended accelerator: {best}");
+            println!("Recommended accelerator: {best}");
         } else {
-            println!("\nNo dedicated accelerators — CPU-only mode");
+            println!("No dedicated accelerators — CPU-only mode");
         }
     }
 
