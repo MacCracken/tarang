@@ -72,13 +72,29 @@ impl EncoderConfigBuilder {
     }
 }
 
-/// Trait for audio encoders
+/// Trait for audio encoders.
+///
+/// For gapless playback, query [`delay_samples`](AudioEncoder::delay_samples)
+/// and [`padding_samples`](AudioEncoder::padding_samples) after encoding to
+/// determine how many samples to skip at start/end during playback.
 pub trait AudioEncoder {
     /// Encode an audio buffer into one or more packets of encoded data.
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>>;
 
     /// Flush any remaining buffered data (encoder delay).
     fn flush(&mut self) -> Result<Vec<Vec<u8>>>;
+
+    /// Encoder delay in samples (priming samples to skip at start).
+    /// Returns 0 if the encoder has no delay.
+    fn delay_samples(&self) -> u32 {
+        0
+    }
+
+    /// Encoder padding in samples (trailing samples to discard).
+    /// Returns 0 if no padding was added.
+    fn padding_samples(&self) -> u32 {
+        0
+    }
 }
 
 /// PCM encoder — converts F32 samples to interleaved integer PCM.

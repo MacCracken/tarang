@@ -9,6 +9,9 @@
 //! memory management, and error handling. C codecs are called through safe
 //! FFI boundaries.
 
+pub mod convert;
+pub mod scale;
+
 #[cfg(feature = "dav1d")]
 pub mod dav1d_dec;
 #[cfg(feature = "openh264")]
@@ -48,6 +51,9 @@ pub use vpx_enc::{VpxEncoder, VpxEncoderConfig};
 // WARNING: LGPL-3.0 — see libde265_dec.rs for removal instructions.
 #[cfg(feature = "h265-decode")]
 pub use libde265_dec::LibDe265Decoder;
+
+pub use convert::convert_pixel_format;
+pub use scale::{ScaleFilter, scale_frame};
 
 use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};
 use std::time::Duration;

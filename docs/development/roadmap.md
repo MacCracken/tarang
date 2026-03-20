@@ -8,19 +8,9 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### Audio pipeline
-
-- [ ] **Streaming decode API** — frame-by-frame decode without `decode_all()` loading entire file; callback or async stream interface
-- [ ] **Sample format conversion** — explicit `AudioBuffer::convert_to(SampleFormat)` instead of relying on encoder-internal conversion
-- [ ] **Gapless playback** — encoder delay / padding metadata for seamless track transitions
-- [ ] **Loudness normalization** — EBU R128 / ReplayGain analysis and adjustment
-- [ ] **Audio effects pipeline** — EQ, compressor, limiter as composable transforms
-
 ### Video pipeline
 
-- [ ] **Frame format conversion** — YUV420p ↔ RGB24 ↔ NV12 as explicit operations (currently scattered in thumbnail/encoder code)
-- [ ] **Scaling/resize** — bilinear/bicubic/Lanczos frame scaling as a standalone operation
-- [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available
+- [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available (VaapiDecoder needed)
 
 ### AI features
 

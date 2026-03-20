@@ -19,6 +19,17 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
 - `Pipeline` reduced from catch-all to genuine pipeline state issues only
 
+### Audio pipeline
+- **Streaming decode API**: already complete via `FileDecoder::next_buffer()` (pull-based iterator)
+- **Sample format conversion**: `AudioBuffer::convert_to(SampleFormat)` — F32 → I16, I32, F64
+- **Gapless playback**: `AudioEncoder::delay_samples()` / `padding_samples()` trait methods for encoder delay/padding metadata
+- **Loudness normalization**: `audio::loudness` module — `measure_loudness()` (simplified BS.1770 LUFS), `apply_gain()`, `normalize_loudness()` with target LUFS; 6 tests
+- **Audio effects pipeline**: `audio::effects` module — `AudioEffect` trait, `EffectChain` for composable transforms, built-in `Gain`, `HighPassFilter`, `Compressor`; 7 tests
+
+### Video pipeline
+- **Frame format conversion**: `video::convert` module — centralized `convert_pixel_format()`, `VideoFrame::convert_to()`, YUV420p↔RGB24↔NV12 conversions
+- **Scaling/resize**: `video::scale` module — `scale_frame()` with `ScaleFilter` (Nearest, Bilinear, Lanczos3) for RGB24 and YUV420p frames
+
 ### Fuzz testing
 - `cargo-fuzz` targets for all 4 demuxers: `fuzz_wav`, `fuzz_mp4`, `fuzz_mkv`, `fuzz_ogg`
 - Each target: probe → read packets → seek on arbitrary input

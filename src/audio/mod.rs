@@ -6,17 +6,19 @@
 mod decode;
 #[cfg(feature = "aac-dec")]
 pub mod decode_aac;
+pub mod effects;
 mod encode;
 #[cfg(feature = "aac-enc")]
 mod encode_aac;
 mod encode_flac;
 #[cfg(feature = "opus-enc")]
 mod encode_opus;
+pub mod loudness;
 mod mix;
 mod output;
 mod probe;
 mod resample;
-mod sample;
+pub(crate) mod sample;
 
 pub use decode::FileDecoder;
 #[cfg(feature = "aac-dec")]

@@ -294,6 +294,68 @@ pub struct AudioBuffer {
     pub timestamp: Duration,
 }
 
+impl AudioBuffer {
+    /// Convert sample format (e.g. F32 → I16 for PCM output).
+    ///
+    /// Currently all decoded audio is F32. This method converts to I16 or I32
+    /// for encoders or outputs that require integer PCM.
+    pub fn convert_to(&self, target: SampleFormat) -> Result<AudioBuffer> {
+        if self.sample_format == target {
+            return Ok(self.clone());
+        }
+        if self.sample_format != SampleFormat::F32 {
+            return Err(TarangError::ConfigError(
+                format!(
+                    "conversion from {:?} not supported — only F32 source",
+                    self.sample_format
+                )
+                .into(),
+            ));
+        }
+
+        let samples = crate::audio::sample::bytes_to_f32(&self.data);
+        let out_bytes = match target {
+            SampleFormat::I16 => {
+                let mut buf = Vec::with_capacity(samples.len() * 2);
+                for &s in samples {
+                    let i = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                    buf.extend_from_slice(&i.to_le_bytes());
+                }
+                buf
+            }
+            SampleFormat::I32 => {
+                let mut buf = Vec::with_capacity(samples.len() * 4);
+                for &s in samples {
+                    let i = (s.clamp(-1.0, 1.0) * 2147483647.0) as i32;
+                    buf.extend_from_slice(&i.to_le_bytes());
+                }
+                buf
+            }
+            SampleFormat::F64 => {
+                let mut buf = Vec::with_capacity(samples.len() * 8);
+                for &s in samples {
+                    buf.extend_from_slice(&(s as f64).to_le_bytes());
+                }
+                buf
+            }
+            _ => {
+                return Err(TarangError::ConfigError(
+                    format!("unsupported target format: {target:?}").into(),
+                ));
+            }
+        };
+
+        Ok(AudioBuffer {
+            data: Bytes::from(out_bytes),
+            sample_format: target,
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            num_samples: self.num_samples,
+            timestamp: self.timestamp,
+        })
+    }
+}
+
 /// Compute the byte size of a YUV420p frame with the given dimensions.
 /// Uses ceiling division for chroma planes (correct for odd sizes).
 pub fn yuv420p_frame_size(width: u32, height: u32) -> usize {
@@ -334,6 +396,15 @@ pub struct VideoFrame {
     pub height: u32,
     /// Presentation timestamp.
     pub timestamp: Duration,
+}
+
+impl VideoFrame {
+    /// Convert this frame to a different pixel format.
+    ///
+    /// Delegates to [`crate::video::convert::convert_pixel_format`].
+    pub fn convert_to(&self, target: PixelFormat) -> Result<VideoFrame> {
+        crate::video::convert::convert_pixel_format(self, target)
+    }
 }
 
 /// Pipeline status
