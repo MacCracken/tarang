@@ -39,6 +39,14 @@ const SIMPLE_BLOCK: u32 = 0xA3;
 const DOC_TYPE: u32 = 0x4282;
 const LANGUAGE: u32 = 0x22B59C;
 
+// Chapter element IDs
+const CHAPTERS: u32 = 0x1043_A770;
+const EDITION_ENTRY: u32 = 0x45B9;
+const CHAPTER_ATOM: u32 = 0xB6;
+const CHAPTER_TIME_START: u32 = 0x91;
+const CHAPTER_DISPLAY: u32 = 0x80;
+const CHAPTER_STRING: u32 = 0x85;
+
 /// Track type values
 const TRACK_TYPE_VIDEO: u64 = 1;
 const TRACK_TYPE_AUDIO: u64 = 2;
@@ -61,6 +69,15 @@ struct MkvTrack {
     language: Option<String>,
 }
 
+/// A chapter marker within an MKV file.
+#[derive(Debug, Clone)]
+pub struct MkvChapter {
+    /// Chapter start time in nanoseconds.
+    pub time_start_ns: u64,
+    /// Chapter title, if present.
+    pub title: Option<String>,
+}
+
 /// MKV/WebM demuxer
 pub struct MkvDemuxer<R: Read + Seek> {
     reader: R,
@@ -79,6 +96,8 @@ pub struct MkvDemuxer<R: Read + Seek> {
     track_map: HashMap<u64, usize>,
     /// Reusable buffer for reading packet data, avoiding per-packet allocation
     packet_buf: Vec<u8>,
+    /// Parsed chapters (from Chapters element).
+    chapters: Vec<MkvChapter>,
 }
 
 impl<R: Read + Seek> MkvDemuxer<R> {
@@ -96,6 +115,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             segment_size: 0,
             track_map: HashMap::new(),
             packet_buf: Vec::new(),
+            chapters: Vec::new(),
         }
     }
 
@@ -417,6 +437,115 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         }
     }
 
+    /// Parse a Chapters element, extracting chapter time and title.
+    fn parse_chapters(&mut self, size: u64) -> Result<()> {
+        let end = self.reader.stream_position().map_err(io_err)? + size;
+
+        while self.reader.stream_position().map_err(io_err)? < end {
+            let (eid, _) = match self.read_element_id() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let (esize, _) = match self.read_element_size() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+
+            if eid == EDITION_ENTRY {
+                self.parse_edition_entry(esize)?;
+            } else {
+                self.reader
+                    .seek(SeekFrom::Current(esize as i64))
+                    .map_err(io_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_edition_entry(&mut self, size: u64) -> Result<()> {
+        let end = self.reader.stream_position().map_err(io_err)? + size;
+
+        while self.reader.stream_position().map_err(io_err)? < end {
+            let (eid, _) = match self.read_element_id() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let (esize, _) = match self.read_element_size() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+
+            if eid == CHAPTER_ATOM {
+                self.parse_chapter_atom(esize)?;
+            } else {
+                self.reader
+                    .seek(SeekFrom::Current(esize as i64))
+                    .map_err(io_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_chapter_atom(&mut self, size: u64) -> Result<()> {
+        let end = self.reader.stream_position().map_err(io_err)? + size;
+        let mut time_start: u64 = 0;
+        let mut title: Option<String> = None;
+
+        while self.reader.stream_position().map_err(io_err)? < end {
+            let (eid, _) = match self.read_element_id() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let (esize, _) = match self.read_element_size() {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+
+            match eid {
+                CHAPTER_TIME_START => {
+                    time_start = self.read_uint(esize)?;
+                }
+                CHAPTER_DISPLAY => {
+                    // Parse ChapterDisplay to get ChapString
+                    let disp_end = self.reader.stream_position().map_err(io_err)? + esize;
+                    while self.reader.stream_position().map_err(io_err)? < disp_end {
+                        let (did, _) = match self.read_element_id() {
+                            Ok(v) => v,
+                            Err(_) => break,
+                        };
+                        let (dsize, _) = match self.read_element_size() {
+                            Ok(v) => v,
+                            Err(_) => break,
+                        };
+                        if did == CHAPTER_STRING {
+                            title = Some(self.read_string(dsize)?);
+                        } else {
+                            self.reader
+                                .seek(SeekFrom::Current(dsize as i64))
+                                .map_err(io_err)?;
+                        }
+                    }
+                }
+                _ => {
+                    self.reader
+                        .seek(SeekFrom::Current(esize as i64))
+                        .map_err(io_err)?;
+                }
+            }
+        }
+
+        self.chapters.push(MkvChapter {
+            time_start_ns: time_start,
+            title,
+        });
+        Ok(())
+    }
+
+    /// Access parsed chapters.
+    pub fn chapters(&self) -> &[MkvChapter] {
+        &self.chapters
+    }
+
     /// Calculate duration in seconds from timecode scale and duration value.
     fn duration_secs(&self) -> Option<Duration> {
         if self.duration_timecode > 0.0 && self.timecode_scale > 0 {
@@ -477,6 +606,9 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                 TRACKS => {
                     self.parse_tracks(esize)?;
                     found_tracks = true;
+                }
+                CHAPTERS => {
+                    self.parse_chapters(esize)?;
                 }
                 CLUSTER => {
                     // First cluster — record its position and stop parsing headers
@@ -1957,5 +2089,96 @@ mod tests {
 
         let packet = demuxer.next_packet().unwrap();
         assert_eq!(&*packet.data, b"Hello world");
+    }
+
+    /// Build a minimal MKV with chapters.
+    fn make_mkv_with_chapters(chapters: &[(u64, &str)]) -> Vec<u8> {
+        let mut file = Vec::new();
+
+        let mut header = Vec::new();
+        write_string_element(&mut header, DOC_TYPE, "matroska");
+        write_master_element(&mut file, EBML_HEADER, &header);
+
+        let mut segment = Vec::new();
+
+        // Info
+        let mut info = Vec::new();
+        write_uint_element(&mut info, TIMECODE_SCALE, 1_000_000);
+        write_float_element(&mut info, DURATION, 60000.0);
+        write_master_element(&mut segment, INFO, &info);
+
+        // Tracks (need at least one)
+        let mut tracks = Vec::new();
+        let mut track_entry = Vec::new();
+        write_uint_element(&mut track_entry, TRACK_NUMBER, 1);
+        write_uint_element(&mut track_entry, TRACK_TYPE, TRACK_TYPE_AUDIO);
+        write_string_element(&mut track_entry, CODEC_ID, "A_OPUS");
+        let mut audio = Vec::new();
+        write_float_element(&mut audio, SAMPLING_FREQ, 48000.0);
+        write_uint_element(&mut audio, CHANNELS, 2);
+        write_master_element(&mut track_entry, AUDIO, &audio);
+        write_master_element(&mut tracks, TRACK_ENTRY, &track_entry);
+        write_master_element(&mut segment, TRACKS, &tracks);
+
+        // Chapters
+        let mut chapters_elem = Vec::new();
+        let mut edition = Vec::new();
+        for &(time_ns, title) in chapters {
+            let mut atom = Vec::new();
+            write_uint_element(&mut atom, CHAPTER_TIME_START, time_ns);
+            let mut display = Vec::new();
+            write_string_element(&mut display, CHAPTER_STRING, title);
+            write_master_element(&mut atom, CHAPTER_DISPLAY, &display);
+            write_master_element(&mut edition, CHAPTER_ATOM, &atom);
+        }
+        write_master_element(&mut chapters_elem, EDITION_ENTRY, &edition);
+        write_master_element(&mut segment, CHAPTERS, &chapters_elem);
+
+        // Cluster
+        let mut cluster = Vec::new();
+        write_uint_element(&mut cluster, TIMECODE, 0);
+        let mut block = Vec::new();
+        write_vint(&mut block, 1);
+        block.extend_from_slice(&0i16.to_be_bytes());
+        block.push(0x80);
+        block.extend_from_slice(&[0x42u8; 64]);
+        write_id(&mut cluster, SIMPLE_BLOCK);
+        write_vint(&mut cluster, block.len() as u64);
+        cluster.extend_from_slice(&block);
+        write_master_element(&mut segment, CLUSTER, &cluster);
+
+        write_master_element(&mut file, SEGMENT, &segment);
+        file
+    }
+
+    #[test]
+    fn mkv_chapters_parsed() {
+        let mkv = make_mkv_with_chapters(&[
+            (0, "Intro"),
+            (10_000_000_000, "Chapter 1"),
+            (30_000_000_000, "Chapter 2"),
+        ]);
+        let cursor = Cursor::new(mkv);
+        let mut demuxer = MkvDemuxer::new(cursor);
+        let _info = demuxer.probe().unwrap();
+
+        let chapters = demuxer.chapters();
+        assert_eq!(chapters.len(), 3);
+        assert_eq!(chapters[0].time_start_ns, 0);
+        assert_eq!(chapters[0].title.as_deref(), Some("Intro"));
+        assert_eq!(chapters[1].time_start_ns, 10_000_000_000);
+        assert_eq!(chapters[1].title.as_deref(), Some("Chapter 1"));
+        assert_eq!(chapters[2].time_start_ns, 30_000_000_000);
+        assert_eq!(chapters[2].title.as_deref(), Some("Chapter 2"));
+    }
+
+    #[test]
+    fn mkv_no_chapters() {
+        let mkv = make_mkv_audio("A_OPUS", 48000.0, 2);
+        let cursor = Cursor::new(mkv);
+        let mut demuxer = MkvDemuxer::new(cursor);
+        let _info = demuxer.probe().unwrap();
+
+        assert!(demuxer.chapters().is_empty());
     }
 }

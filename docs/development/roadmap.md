@@ -14,7 +14,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### API stabilization
 
-- [ ] **Consistent error types** — evaluate whether `TarangError` variants cover all failure modes cleanly; consider module-specific error enums that convert into `TarangError`
+(done — `EncodeError`, `MuxError`, `ConfigError` variants added; `Pipeline` misuses migrated)
 
 ### Codec gaps
 
@@ -24,10 +24,9 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 ### Demuxer/muxer hardening
 
 - [ ] **Fuzz testing** — `cargo-fuzz` targets for MP4, MKV, OGG, WAV demuxers with malformed input
-- [ ] **64-bit MP4 muxing** — full `co64` and extended `mdat` box support for files > 4GB
 - [ ] **Fragmented MP4 (fMP4)** — `moof`/`mdat` segment parsing for streaming/DASH
 - [ ] **MP4 edit lists** — `elst` box parsing for correct timestamp mapping
-- [ ] **MKV chapters** — parse chapter elements for navigation
+- [ ] **Mp4Muxer video track support** — add video track (avc1/hev1/vp09) to MP4 muxer (MKV muxer already supports video)
 - [ ] **OGG chaining** — multiple logical streams concatenated (podcast chapters)
 
 ### Audio pipeline

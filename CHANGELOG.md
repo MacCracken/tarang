@@ -4,6 +4,17 @@
 
 ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 
+### API stabilization — error types
+- Added `EncodeError`, `MuxError`, `ConfigError` variants to `TarangError`
+- Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
+- `Pipeline` reduced from catch-all to genuine pipeline state issues only
+
+### Demuxer/muxer hardening
+- **64-bit MP4 muxing**: MP4 muxer auto-switches from `stco` to `co64` for files > 4GB
+- **MKV chapters**: `MkvDemuxer` parses Chapters/EditionEntry/ChapterAtom EBML elements, extracts time and title; `chapters()` accessor
+- **EBML writer fix**: `write_uint()` now handles values > 0xFFFFFFFF (was truncating to 4 bytes)
+- 4 new tests: chapters parsed, no chapters, co64 branching
+
 ### Bug fixes (found via shruti benchmarks)
 - **Linear resampler off-by-one on stereo buffers** — `resample()` and `resample_sinc()` now derive frame count from actual data length (`src.len() / channels`) instead of trusting `num_samples` field, preventing index-out-of-bounds panic when `num_samples` is set to total interleaved samples rather than frames
 - **`mix_channels` stereo→mono validation** — same fix: derives frame count from data length instead of `num_samples`, preventing false "source buffer too small" errors on stereo buffers

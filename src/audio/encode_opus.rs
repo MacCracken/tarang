@@ -50,7 +50,7 @@ impl OpusEncoder {
 
         let encoder =
             opus::Encoder::new(sample_rate, channels, opus::Application::Audio).map_err(|e| {
-                TarangError::Pipeline(format!("failed to create Opus encoder: {e}").into())
+                TarangError::EncodeError(format!("failed to create Opus encoder: {e}").into())
             })?;
 
         // Standard Opus frame size: 20ms at the given sample rate
@@ -87,7 +87,7 @@ impl AudioEncoder for OpusEncoder {
             let len = self
                 .encoder
                 .encode_float(frame, &mut self.out_buf)
-                .map_err(|e| TarangError::Pipeline(format!("Opus encode error: {e}").into()))?;
+                .map_err(|e| TarangError::EncodeError(format!("Opus encode error: {e}").into()))?;
 
             packets.push(self.out_buf[..len].to_vec());
             offset += self.frame_size;

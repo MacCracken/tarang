@@ -117,7 +117,7 @@ impl<W: Write + Seek> Muxer for WavMuxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".into()));
+            return Err(TarangError::MuxError("header not written".into()));
         }
         self.writer.write_all(data).map_err(io_err)?;
         self.data_bytes_written += data.len() as u32;
@@ -293,7 +293,7 @@ impl<W: Write> Muxer for OggMuxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".into()));
+            return Err(TarangError::MuxError("header not written".into()));
         }
 
         // For Opus, granule position is at 48kHz
@@ -359,10 +359,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
         let total = 8usize.checked_add(data.len()).ok_or_else(|| {
-            TarangError::Pipeline("box size overflow: data too large for u32".into())
+            TarangError::MuxError("box size overflow: data too large for u32".into())
         })?;
         if total > u32::MAX as usize {
-            return Err(TarangError::Pipeline(
+            return Err(TarangError::MuxError(
                 "box size overflow: total size exceeds u32::MAX".into(),
             ));
         }
@@ -547,8 +547,14 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
         // mdat data starts at mdat_offset + 8 (box header)
         let data_start = mdat_offset + 8;
-        let stco = self.build_stco(data_start)?;
-        write_sub_box(&mut stbl, b"stco", &stco);
+        if data_start > u32::MAX as u64 {
+            // 64-bit chunk offsets for files > 4GB
+            let co64 = self.build_co64(data_start);
+            write_sub_box(&mut stbl, b"co64", &co64);
+        } else {
+            let stco = self.build_stco(data_start);
+            write_sub_box(&mut stbl, b"stco", &stco);
+        }
 
         Ok(stbl)
     }
@@ -627,21 +633,21 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_stco(&self, data_start: u64) -> Result<Vec<u8>> {
-        if data_start > u32::MAX as u64 {
-            return Err(TarangError::Pipeline(
-                format!(
-                    "stco offset overflow: mdat data offset {data_start} exceeds u32::MAX; \
-                 file is too large for a 32-bit chunk-offset box (stco)"
-                )
-                .into(),
-            ));
-        }
+    fn build_stco(&self, data_start: u64) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
         buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
         buf.extend_from_slice(&(data_start as u32).to_be_bytes());
-        Ok(buf)
+        buf
+    }
+
+    /// Build a co64 box (64-bit chunk offset table) for files > 4GB.
+    fn build_co64(&self, data_start: u64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
+        buf.extend_from_slice(&data_start.to_be_bytes()); // 64-bit offset
+        buf
     }
 }
 
@@ -662,7 +668,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".into()));
+            return Err(TarangError::MuxError("header not written".into()));
         }
         self.writer.write_all(data).map_err(io_err)?;
         self.sample_sizes.push(data.len() as u32);
@@ -754,10 +760,10 @@ impl<W: Write> MkvMuxer<W> {
         use crate::demux::ebml;
 
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".into()));
+            return Err(TarangError::MuxError("header not written".into()));
         }
         if self.video_config.is_none() {
-            return Err(TarangError::Pipeline(
+            return Err(TarangError::MuxError(
                 "no video track configured — use new_webm()".into(),
             ));
         }
@@ -879,7 +885,7 @@ impl<W: Write> Muxer for MkvMuxer<W> {
         use crate::demux::ebml;
 
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".into()));
+            return Err(TarangError::MuxError("header not written".into()));
         }
 
         // Write SimpleBlock

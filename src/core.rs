@@ -306,12 +306,12 @@ pub fn yuv420p_frame_size(width: u32, height: u32) -> usize {
 /// Validate video encoder dimensions (must be non-zero and even).
 pub fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
     if width == 0 || height == 0 {
-        return Err(TarangError::Pipeline(
+        return Err(TarangError::ConfigError(
             "width and height must be non-zero".into(),
         ));
     }
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
-        return Err(TarangError::Pipeline(
+        return Err(TarangError::ConfigError(
             format!("dimensions must be even, got {width}x{height}").into(),
         ));
     }
@@ -365,6 +365,12 @@ pub enum TarangError {
     Io(#[from] std::io::Error),
     #[error("end of stream")]
     EndOfStream,
+    #[error("encode error: {0}")]
+    EncodeError(Cow<'static, str>),
+    #[error("mux error: {0}")]
+    MuxError(Cow<'static, str>),
+    #[error("configuration error: {0}")]
+    ConfigError(Cow<'static, str>),
     #[error("pipeline error: {0}")]
     Pipeline(Cow<'static, str>),
     #[error("hardware acceleration error: {0}")]
@@ -735,6 +741,18 @@ mod tests {
         assert_eq!(
             TarangError::DemuxError("fail".into()).to_string(),
             "demux error: fail"
+        );
+        assert_eq!(
+            TarangError::EncodeError("bad frame".into()).to_string(),
+            "encode error: bad frame"
+        );
+        assert_eq!(
+            TarangError::MuxError("header missing".into()).to_string(),
+            "mux error: header missing"
+        );
+        assert_eq!(
+            TarangError::ConfigError("invalid".into()).to_string(),
+            "configuration error: invalid"
         );
         assert_eq!(
             TarangError::Pipeline("broken".into()).to_string(),

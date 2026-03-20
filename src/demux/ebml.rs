@@ -70,9 +70,13 @@ pub fn write_uint(buf: &mut Vec<u8>, id: u32, value: u64) {
         buf.push((value >> 16) as u8);
         buf.push((value >> 8) as u8);
         buf.push(value as u8);
-    } else {
+    } else if value <= 0xFFFF_FFFF {
         write_vint(buf, 4);
         buf.extend_from_slice(&(value as u32).to_be_bytes());
+    } else {
+        // 5-8 byte uint: use full 8 bytes
+        write_vint(buf, 8);
+        buf.extend_from_slice(&value.to_be_bytes());
     }
 }
 
