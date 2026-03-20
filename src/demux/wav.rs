@@ -430,4 +430,166 @@ mod tests {
             other => panic!("expected EndOfStream, got {:?}", other),
         }
     }
+
+    #[test]
+    fn test_wav_24bit() {
+        // Build a WAV with 24-bit samples manually (make_wav doesn't handle 24-bit well)
+        let samples: u32 = 100;
+        let sample_rate: u32 = 44100;
+        let channels: u16 = 1;
+        let bits: u16 = 24;
+        let data_size = samples * channels as u32 * (bits as u32 / 8);
+        let file_size = 36 + data_size;
+        let byte_rate = sample_rate * channels as u32 * (bits as u32 / 8);
+        let block_align = channels * (bits / 8);
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        buf.extend_from_slice(&vec![0u8; data_size as usize]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = WavDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio[0].codec, AudioCodec::Pcm);
+        assert_eq!(audio[0].sample_rate, 44100);
+        assert_eq!(audio[0].channels, 1);
+        // 24-bit should report bitrate = 44100 * 1 * 24
+        assert_eq!(audio[0].bitrate, Some(44100 * 24));
+    }
+
+    #[test]
+    fn test_wav_seek_to_middle() {
+        // 44100 samples at 44100 Hz = 1 second
+        let wav = make_wav(44100, 44100, 2, 16);
+        let cursor = Cursor::new(wav);
+        let mut demuxer = WavDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek to 0.5s (midpoint)
+        demuxer.seek(Duration::from_millis(500)).unwrap();
+        let packet = demuxer.next_packet().unwrap();
+
+        // Timestamp should be approximately 0.5s
+        let ts_ms = packet.timestamp.as_millis();
+        assert!(
+            (490..=510).contains(&ts_ms),
+            "expected timestamp near 500ms, got {ts_ms}ms"
+        );
+
+        // Verify bytes_read reflects the seek offset
+        // At 0.5s with 44100Hz, 2ch, 16bit: byte_offset = 22050 * 2 * 2 = 88200
+        // bytes_read should be 88200 + packet.data.len()
+        // We can check indirectly: the remaining data should be about half
+        let mut remaining = packet.data.len();
+        loop {
+            match demuxer.next_packet() {
+                Ok(p) => remaining += p.data.len(),
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        // Total data is 44100 * 2 * 2 = 176400 bytes, half = 88200
+        assert!(
+            (88190..=88210).contains(&remaining),
+            "remaining bytes after seeking to midpoint should be ~88200, got {remaining}"
+        );
+    }
+
+    #[test]
+    fn test_wav_multiple_packets() {
+        // 1000 samples, 1 channel, 16-bit = 2000 bytes of data
+        let wav = make_wav(1000, 44100, 1, 16);
+        let cursor = Cursor::new(wav);
+        let mut demuxer = WavDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        let expected_data_size: usize = 1000 * 2; // 2000 bytes
+        let mut total_bytes = 0usize;
+        let mut packet_count = 0usize;
+        loop {
+            match demuxer.next_packet() {
+                Ok(p) => {
+                    total_bytes += p.data.len();
+                    packet_count += 1;
+                }
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert!(packet_count >= 1, "should read at least one packet");
+        assert_eq!(
+            total_bytes, expected_data_size,
+            "total bytes read should match data chunk size"
+        );
+    }
+
+    #[test]
+    fn test_wav_extra_chunks() {
+        // Build a WAV with a LIST chunk before the data chunk
+        let samples: u32 = 100;
+        let sample_rate: u32 = 44100;
+        let channels: u16 = 2;
+        let bits: u16 = 16;
+        let data_size = samples * channels as u32 * (bits as u32 / 8);
+        let byte_rate = sample_rate * channels as u32 * (bits as u32 / 8);
+        let block_align = channels * (bits / 8);
+
+        // LIST chunk payload: "INFO" + a dummy sub-chunk
+        let list_payload = b"INFOISFTtest software\0\0"; // "ISFT" tag + padded string
+        let list_size = list_payload.len() as u32;
+
+        let file_size = 36 + 8 + list_size + data_size; // 36 (header+fmt) + LIST chunk + data chunk
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&file_size.to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+
+        // fmt chunk
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&channels.to_le_bytes());
+        buf.extend_from_slice(&sample_rate.to_le_bytes());
+        buf.extend_from_slice(&byte_rate.to_le_bytes());
+        buf.extend_from_slice(&block_align.to_le_bytes());
+        buf.extend_from_slice(&bits.to_le_bytes());
+
+        // LIST chunk (extra, should be skipped)
+        buf.extend_from_slice(b"LIST");
+        buf.extend_from_slice(&list_size.to_le_bytes());
+        buf.extend_from_slice(list_payload);
+
+        // data chunk
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_size.to_le_bytes());
+        buf.extend_from_slice(&vec![0u8; data_size as usize]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = WavDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, ContainerFormat::Wav);
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio[0].sample_rate, 44100);
+        assert_eq!(audio[0].channels, 2);
+
+        // Verify we can still read packets (the LIST chunk was skipped)
+        let packet = demuxer.next_packet().unwrap();
+        assert!(!packet.data.is_empty());
+    }
 }

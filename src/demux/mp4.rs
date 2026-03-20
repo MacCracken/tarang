@@ -1752,4 +1752,905 @@ mod tests {
         let packet = demuxer.next_packet().unwrap();
         assert!(!packet.data.is_empty());
     }
+
+    /// Write a box header with extended 64-bit size (size field = 1).
+    /// Returns the offset where the 64-bit size will be patched.
+    fn write_box_header_ext(buf: &mut Vec<u8>, box_type: &[u8; 4]) -> usize {
+        buf.extend_from_slice(&1u32.to_be_bytes()); // size=1 means extended
+        buf.extend_from_slice(box_type);
+        let ext_offset = buf.len();
+        buf.extend_from_slice(&0u64.to_be_bytes()); // placeholder for 64-bit size
+        ext_offset
+    }
+
+    /// Patch an extended box's 64-bit size field.
+    fn patch_box_size_ext(buf: &mut [u8], ext_offset: usize) {
+        // The box starts 12 bytes before the ext_offset (4 size + 4 type + 8 ext)
+        let box_start = ext_offset - 8;
+        let size = (buf.len() - box_start) as u64;
+        buf[ext_offset..ext_offset + 8].copy_from_slice(&size.to_be_bytes());
+    }
+
+    /// Build an MP4 where the ftyp box uses extended 64-bit size.
+    fn make_mp4_extended_ftyp() -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        // ftyp box with extended size
+        let ext_off = write_box_header_ext(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size_ext(&mut buf, ext_off);
+
+        // moov box (normal size)
+        let moov_start = write_box_header(&mut buf, b"moov");
+        {
+            let mvhd_start = write_box_header(&mut buf, b"mvhd");
+            let sample_rate = 44100u32;
+            let num_samples = 10u32;
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&sample_rate.to_be_bytes());
+            buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+            buf.extend_from_slice(&[0u8; 80]);
+            patch_box_size(&mut buf, mvhd_start);
+
+            let trak_start = write_box_header(&mut buf, b"trak");
+            {
+                let tkhd_start = write_box_header(&mut buf, b"tkhd");
+                buf.extend_from_slice(&0u32.to_be_bytes());
+                buf.extend_from_slice(&0u32.to_be_bytes());
+                buf.extend_from_slice(&0u32.to_be_bytes());
+                buf.extend_from_slice(&1u32.to_be_bytes());
+                buf.extend_from_slice(&[0u8; 68]);
+                patch_box_size(&mut buf, tkhd_start);
+
+                let mdia_start = write_box_header(&mut buf, b"mdia");
+                {
+                    let mdhd_start = write_box_header(&mut buf, b"mdhd");
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    buf.extend_from_slice(&sample_rate.to_be_bytes());
+                    buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    patch_box_size(&mut buf, mdhd_start);
+
+                    let hdlr_start = write_box_header(&mut buf, b"hdlr");
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    buf.extend_from_slice(&0u32.to_be_bytes());
+                    buf.extend_from_slice(b"soun");
+                    buf.extend_from_slice(&[0u8; 12]);
+                    buf.push(0);
+                    patch_box_size(&mut buf, hdlr_start);
+
+                    let minf_start = write_box_header(&mut buf, b"minf");
+                    let stbl_start = write_box_header(&mut buf, b"stbl");
+                    {
+                        let stsd_start = write_box_header(&mut buf, b"stsd");
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+                        buf.extend_from_slice(&[0u8; 6]);
+                        buf.extend_from_slice(&1u16.to_be_bytes());
+                        buf.extend_from_slice(&[0u8; 8]);
+                        buf.extend_from_slice(&2u16.to_be_bytes());
+                        buf.extend_from_slice(&16u16.to_be_bytes());
+                        buf.extend_from_slice(&0u16.to_be_bytes());
+                        buf.extend_from_slice(&0u16.to_be_bytes());
+                        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+                        patch_box_size(&mut buf, mp4a_start);
+                        patch_box_size(&mut buf, stsd_start);
+
+                        let stts_start = write_box_header(&mut buf, b"stts");
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        buf.extend_from_slice(&num_samples.to_be_bytes());
+                        buf.extend_from_slice(&1024u32.to_be_bytes());
+                        patch_box_size(&mut buf, stts_start);
+
+                        let stsc_start = write_box_header(&mut buf, b"stsc");
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        buf.extend_from_slice(&num_samples.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        patch_box_size(&mut buf, stsc_start);
+
+                        let sample_size = 64u32;
+                        let stsz_start = write_box_header(&mut buf, b"stsz");
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        buf.extend_from_slice(&sample_size.to_be_bytes());
+                        buf.extend_from_slice(&num_samples.to_be_bytes());
+                        patch_box_size(&mut buf, stsz_start);
+
+                        let stco_start = write_box_header(&mut buf, b"stco");
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        buf.extend_from_slice(&1u32.to_be_bytes());
+                        let stco_offset_pos = buf.len();
+                        buf.extend_from_slice(&0u32.to_be_bytes());
+                        patch_box_size(&mut buf, stco_start);
+
+                        patch_box_size(&mut buf, stbl_start);
+                        patch_box_size(&mut buf, minf_start);
+
+                        // Patch stco after we know mdat position
+                        // (done below)
+                        let _ = stco_offset_pos; // used below
+                        // We need stco_offset_pos outside this block
+                        // so we return it via a trick: store in the buffer and fix later
+
+                        patch_box_size(&mut buf, mdia_start);
+                        patch_box_size(&mut buf, trak_start);
+                        patch_box_size(&mut buf, moov_start);
+
+                        let mdat_data_offset = buf.len() + 8;
+                        buf[stco_offset_pos..stco_offset_pos + 4]
+                            .copy_from_slice(&(mdat_data_offset as u32).to_be_bytes());
+
+                        let total_data = num_samples * sample_size;
+                        let mdat_start = write_box_header(&mut buf, b"mdat");
+                        buf.extend_from_slice(&vec![0xBBu8; total_data as usize]);
+                        patch_box_size(&mut buf, mdat_start);
+                    }
+                }
+            }
+        }
+
+        buf
+    }
+
+    #[test]
+    fn test_mp4_extended_size_box() {
+        let mp4 = make_mp4_extended_ftyp();
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, ContainerFormat::Mp4);
+        assert!(info.has_audio());
+        let audio: Vec<_> = info.audio_streams().collect();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].sample_rate, 44100);
+
+        // Verify packets can be read
+        let pkt = demuxer.next_packet().unwrap();
+        assert_eq!(pkt.data.len(), 64);
+    }
+
+    /// Build an MP4 using co64 (64-bit chunk offsets) instead of stco.
+    fn make_mp4_co64(num_samples: u32, sample_size: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        let trak_start = write_box_header(&mut buf, b"trak");
+
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1024u32.to_be_bytes());
+        patch_box_size(&mut buf, stts_start);
+
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        patch_box_size(&mut buf, stsc_start);
+
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_size.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        patch_box_size(&mut buf, stsz_start);
+
+        // co64 instead of stco
+        let co64_start = write_box_header(&mut buf, b"co64");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        let co64_offset_pos = buf.len();
+        buf.extend_from_slice(&0u64.to_be_bytes()); // 64-bit offset placeholder
+        patch_box_size(&mut buf, co64_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        let mdat_data_offset = (buf.len() + 8) as u64;
+        buf[co64_offset_pos..co64_offset_pos + 8].copy_from_slice(&mdat_data_offset.to_be_bytes());
+
+        let total_data = num_samples * sample_size;
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        buf.extend_from_slice(&vec![0xCCu8; total_data as usize]);
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    #[test]
+    fn test_mp4_co64_large_offsets() {
+        let mp4 = make_mp4_co64(5, 128);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Read all packets and verify correctness
+        let mut count = 0;
+        loop {
+            match demuxer.next_packet() {
+                Ok(pkt) => {
+                    assert_eq!(pkt.data.len(), 128);
+                    assert!(pkt.data.iter().all(|&b| b == 0xCC));
+                    count += 1;
+                }
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert_eq!(count, 5);
+    }
+
+    /// Build an MP4 with per-sample variable sizes in stsz (default_sample_size = 0).
+    fn make_mp4_variable_stsz(sample_sizes: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+        let num_samples = sample_sizes.len() as u32;
+
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        let trak_start = write_box_header(&mut buf, b"trak");
+
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1024u32.to_be_bytes());
+        patch_box_size(&mut buf, stts_start);
+
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        patch_box_size(&mut buf, stsc_start);
+
+        // stsz with default_sample_size=0 and per-sample sizes
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size = 0
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        for &sz in sample_sizes {
+            buf.extend_from_slice(&sz.to_be_bytes());
+        }
+        patch_box_size(&mut buf, stsz_start);
+
+        let stco_start = write_box_header(&mut buf, b"stco");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let stco_offset_pos = buf.len();
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, stco_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        let mdat_data_offset = buf.len() + 8;
+        buf[stco_offset_pos..stco_offset_pos + 4]
+            .copy_from_slice(&(mdat_data_offset as u32).to_be_bytes());
+
+        let total_data: u32 = sample_sizes.iter().sum();
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        // Write each sample with a distinct byte value
+        for (i, &sz) in sample_sizes.iter().enumerate() {
+            buf.extend_from_slice(&vec![(i as u8).wrapping_add(0xA0); sz as usize]);
+        }
+        assert_eq!(
+            buf.len() - mdat_start - 8,
+            total_data as usize,
+            "mdat data size mismatch"
+        );
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    #[test]
+    fn test_mp4_variable_sample_sizes() {
+        let sizes = [100u32, 200, 50, 300, 150];
+        let mp4 = make_mp4_variable_stsz(&sizes);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        for (i, &expected_size) in sizes.iter().enumerate() {
+            let pkt = demuxer.next_packet().unwrap();
+            assert_eq!(
+                pkt.data.len(),
+                expected_size as usize,
+                "sample {i} size mismatch"
+            );
+            // Verify each sample has the expected fill byte
+            let expected_byte = (i as u8).wrapping_add(0xA0);
+            assert!(
+                pkt.data.iter().all(|&b| b == expected_byte),
+                "sample {i} data mismatch"
+            );
+        }
+
+        // Next read should be EndOfStream
+        assert!(matches!(
+            demuxer.next_packet(),
+            Err(TarangError::EndOfStream)
+        ));
+    }
+
+    /// Build an MP4 with multiple stsc entries (different chunk groups).
+    fn make_mp4_multi_stsc(
+        stsc_entries: &[(u32, u32, u32)],
+        num_chunks: u32,
+        num_samples: u32,
+        sample_size: u32,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        let trak_start = write_box_header(&mut buf, b"trak");
+
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(num_samples * 1024).to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        buf.extend_from_slice(&1024u32.to_be_bytes());
+        patch_box_size(&mut buf, stts_start);
+
+        // stsc with multiple entries
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&(stsc_entries.len() as u32).to_be_bytes());
+        for &(first_chunk, samples_per_chunk, desc_idx) in stsc_entries {
+            buf.extend_from_slice(&first_chunk.to_be_bytes());
+            buf.extend_from_slice(&samples_per_chunk.to_be_bytes());
+            buf.extend_from_slice(&desc_idx.to_be_bytes());
+        }
+        patch_box_size(&mut buf, stsc_start);
+
+        // stsz with uniform size
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_size.to_be_bytes());
+        buf.extend_from_slice(&num_samples.to_be_bytes());
+        patch_box_size(&mut buf, stsz_start);
+
+        // stco with num_chunks entries (offsets will be patched)
+        let stco_start = write_box_header(&mut buf, b"stco");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&num_chunks.to_be_bytes());
+        let stco_offsets_start = buf.len();
+        for _ in 0..num_chunks {
+            buf.extend_from_slice(&0u32.to_be_bytes()); // placeholders
+        }
+        patch_box_size(&mut buf, stco_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        // Compute chunk data sizes and patch stco offsets
+        // Walk the stsc table to determine samples per chunk for each chunk
+        let mut samples_in_chunk = vec![0u32; num_chunks as usize];
+        for chunk_idx in 0..num_chunks {
+            let chunk_1based = chunk_idx + 1;
+            // Find which stsc entry applies
+            let mut spc = stsc_entries[0].1;
+            for &(first_chunk, samples_per_chunk, _) in stsc_entries {
+                if chunk_1based >= first_chunk {
+                    spc = samples_per_chunk;
+                } else {
+                    break;
+                }
+            }
+            samples_in_chunk[chunk_idx as usize] = spc;
+        }
+
+        let mdat_header_size = 8u32;
+        let mdat_data_start = buf.len() as u32 + mdat_header_size;
+        let mut offset = mdat_data_start;
+        for i in 0..num_chunks as usize {
+            buf[stco_offsets_start + i * 4..stco_offsets_start + i * 4 + 4]
+                .copy_from_slice(&offset.to_be_bytes());
+            offset += samples_in_chunk[i] * sample_size;
+        }
+
+        let total_data = num_samples * sample_size;
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        buf.extend_from_slice(&vec![0xDDu8; total_data as usize]);
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    #[test]
+    fn test_mp4_multiple_stsc_entries() {
+        // 4 chunks: chunks 1-2 have 3 samples each, chunks 3-4 have 2 samples each
+        // Total: 2*3 + 2*2 = 10 samples
+        let stsc_entries = [
+            (1u32, 3u32, 1u32), // chunks 1-2: 3 samples per chunk
+            (3u32, 2u32, 1u32), // chunks 3-4: 2 samples per chunk
+        ];
+        let mp4 = make_mp4_multi_stsc(&stsc_entries, 4, 10, 32);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        let mut count = 0;
+        loop {
+            match demuxer.next_packet() {
+                Ok(pkt) => {
+                    assert_eq!(pkt.data.len(), 32);
+                    count += 1;
+                }
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert_eq!(count, 10);
+    }
+
+    #[test]
+    fn test_mp4_seek_to_start() {
+        let mp4 = make_mp4_aac(44100, 2, 50, 64);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Read a few packets first
+        for _ in 0..5 {
+            demuxer.next_packet().unwrap();
+        }
+
+        // Seek back to start
+        demuxer.seek(Duration::ZERO).unwrap();
+        let pkt = demuxer.next_packet().unwrap();
+        assert_eq!(pkt.timestamp, Duration::ZERO);
+        assert_eq!(pkt.data.len(), 64);
+    }
+
+    #[test]
+    fn test_mp4_seek_to_end() {
+        let num_samples = 20u32;
+        let mp4 = make_mp4_aac(44100, 2, num_samples, 64);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek way past the end (100 seconds, actual duration ~0.46s)
+        demuxer.seek(Duration::from_secs(100)).unwrap();
+        let result = demuxer.next_packet();
+        assert!(
+            matches!(result, Err(TarangError::EndOfStream)),
+            "expected EndOfStream after seeking past end, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_mp4_seek_to_middle() {
+        let num_samples = 100u32;
+        let mp4 = make_mp4_aac(44100, 2, num_samples, 64);
+        let cursor = Cursor::new(mp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let total_duration = info.duration.unwrap();
+        let midpoint = total_duration / 2;
+
+        demuxer.seek(midpoint).unwrap();
+        let pkt = demuxer.next_packet().unwrap();
+
+        // The packet timestamp should be within one frame of the midpoint
+        let frame_duration = 1024.0 / 44100.0; // ~0.0232s
+        let diff = (pkt.timestamp.as_secs_f64() - midpoint.as_secs_f64()).abs();
+        assert!(
+            diff < frame_duration * 2.0,
+            "seek to middle: expected timestamp near {:.3}s, got {:.3}s (diff {:.3}s)",
+            midpoint.as_secs_f64(),
+            pkt.timestamp.as_secs_f64(),
+            diff,
+        );
+    }
+
+    #[test]
+    fn test_mp4_truncated_box() {
+        // Build a valid MP4 but truncate the mdat data
+        let mp4 = make_mp4_aac(44100, 2, 10, 128);
+        // Find mdat and truncate it so it has less data than claimed
+        let mut mdat_pos = 0;
+        let mut pos = 0;
+        while pos + 8 <= mp4.len() {
+            let size = u32::from_be_bytes(mp4[pos..pos + 4].try_into().unwrap()) as usize;
+            let btype = &mp4[pos + 4..pos + 8];
+            if btype == b"mdat" {
+                mdat_pos = pos;
+                break;
+            }
+            if size == 0 {
+                break;
+            }
+            pos += size;
+        }
+        assert!(mdat_pos > 0, "should find mdat box");
+
+        // Keep mdat header but only 10 bytes of data (instead of 10*128=1280)
+        let truncated = mp4[..mdat_pos + 8 + 10].to_vec();
+        let cursor = Cursor::new(truncated);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // First packet read should fail because mdat is truncated
+        let result = demuxer.next_packet();
+        assert!(
+            result.is_err(),
+            "expected error reading from truncated mdat"
+        );
+    }
+
+    #[test]
+    fn test_mp4_unknown_box_skipped() {
+        // Build a valid MP4 and insert an unknown box ("xxxx") before the moov box
+        let mp4 = make_mp4_aac(44100, 2, 10, 64);
+
+        // Find where moov starts
+        let mut moov_pos = 0;
+        let mut pos = 0;
+        while pos + 8 <= mp4.len() {
+            let size = u32::from_be_bytes(mp4[pos..pos + 4].try_into().unwrap()) as usize;
+            let btype = &mp4[pos + 4..pos + 8];
+            if btype == b"moov" {
+                moov_pos = pos;
+                break;
+            }
+            if size == 0 {
+                break;
+            }
+            pos += size;
+        }
+        assert!(moov_pos > 0);
+
+        // Construct new buffer: ftyp + unknown box + moov + mdat
+        let mut new_buf = Vec::new();
+        new_buf.extend_from_slice(&mp4[..moov_pos]); // ftyp
+
+        // Insert unknown box
+        let unknown_start = write_box_header(&mut new_buf, b"xxxx");
+        new_buf.extend_from_slice(&[0u8; 32]); // some payload
+        patch_box_size(&mut new_buf, unknown_start);
+
+        // The rest (moov + mdat) -- but we need to adjust stco offset
+        // since we inserted bytes. Easier: just rebuild the full thing.
+        // Actually, the stco offset points to an absolute file position in the
+        // mdat, so we need to shift it by the size of the unknown box we inserted.
+        let unknown_box_size = new_buf.len() - moov_pos;
+        new_buf.extend_from_slice(&mp4[moov_pos..]);
+
+        // Find and patch the stco offset in the new buffer
+        // The stco offset value needs to increase by unknown_box_size
+        // Find stco in the new buffer by searching for the box type
+        let mut i = 0;
+        while i + 8 <= new_buf.len() {
+            if &new_buf[i + 4..i + 8] == b"stco" {
+                // stco: size(4) + type(4) + version+flags(4) + entry_count(4) + offset(4)
+                let offset_pos = i + 8 + 4 + 4; // after header + version + count
+                if offset_pos + 4 <= new_buf.len() {
+                    let old_offset =
+                        u32::from_be_bytes(new_buf[offset_pos..offset_pos + 4].try_into().unwrap());
+                    let new_offset = old_offset + unknown_box_size as u32;
+                    new_buf[offset_pos..offset_pos + 4].copy_from_slice(&new_offset.to_be_bytes());
+                }
+                break;
+            }
+            i += 1;
+        }
+
+        let cursor = Cursor::new(new_buf);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, ContainerFormat::Mp4);
+        assert!(info.has_audio());
+
+        // Verify packets still readable
+        let pkt = demuxer.next_packet().unwrap();
+        assert_eq!(pkt.data.len(), 64);
+    }
+
+    #[test]
+    fn test_mp4_max_table_entries_rejected() {
+        // Build an MP4 where stts claims > 50M entries
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&(1024u32).to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        let trak_start = write_box_header(&mut buf, b"trak");
+
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&1024u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&2u16.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        // stts with entry_count = 50_000_001 (exceeds MAX_TABLE_ENTRIES)
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&50_000_001u32.to_be_bytes()); // entry_count > 50M
+        // We don't need to write the actual entries; the count check happens first
+        patch_box_size(&mut buf, stts_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should reject stts with > 50M entries");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("exceeds maximum"),
+            "error should mention exceeds maximum, got: {err_msg}"
+        );
+    }
 }

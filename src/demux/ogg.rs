@@ -1034,6 +1034,374 @@ mod tests {
         assert!(result.is_ok(), "pages under 65535 bytes should be accepted");
     }
 
+    /// Write a raw OGG page where the body is provided directly (not as packets).
+    /// This allows building continuation pages with partial segments.
+    /// `segment_table` and `body` are provided directly.
+    fn write_ogg_page_raw(
+        buf: &mut Vec<u8>,
+        header_type: u8,
+        granule: i64,
+        serial: u32,
+        page_seq: u32,
+        segment_table: &[u8],
+        body: &[u8],
+    ) {
+        let mut page = Vec::with_capacity(27 + segment_table.len() + body.len());
+        page.extend_from_slice(b"OggS");
+        page.push(0); // version
+        page.push(header_type);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&page_seq.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes()); // CRC placeholder
+        page.push(segment_table.len() as u8);
+        page.extend_from_slice(segment_table);
+        page.extend_from_slice(body);
+
+        let crc = ogg_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+
+        buf.extend_from_slice(&page);
+    }
+
+    /// Build a multi-page OGG/Vorbis file with known granule positions on each data page.
+    /// Returns the raw bytes and the granule values used for each data page.
+    fn make_ogg_vorbis_multipage(
+        sample_rate: u32,
+        channels: u8,
+        num_data_pages: usize,
+        samples_per_page: i64,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // BOS page with Vorbis ID header
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(channels);
+        vorbis_id.extend_from_slice(&sample_rate.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Data pages
+        for i in 0..num_data_pages {
+            let granule = samples_per_page * (i as i64 + 1);
+            let data = vec![(i as u8).wrapping_add(0x42); 128];
+            let header_type = if i == num_data_pages - 1 {
+                HEADER_TYPE_EOS
+            } else {
+                0
+            };
+            write_ogg_page(
+                &mut buf,
+                header_type,
+                granule,
+                serial,
+                (i + 1) as u32,
+                &[&data],
+            );
+        }
+
+        buf
+    }
+
+    #[test]
+    fn test_ogg_seek_basic() {
+        // Create a multi-page OGG with 10 pages, each representing 4410 samples
+        // at 44100 Hz (0.1 seconds each). Total duration = 1.0 second.
+        let sample_rate = 44100u32;
+        let samples_per_page = 4410i64;
+        let ogg = make_ogg_vorbis_multipage(sample_rate, 2, 10, samples_per_page);
+
+        let cursor = Cursor::new(ogg);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek to 0.5 seconds (target granule ~22050)
+        demuxer.seek(Duration::from_millis(500)).unwrap();
+
+        // Read the next packet — its timestamp should be >= 0.4s (allowing some bisection imprecision)
+        let pkt = demuxer.next_packet().unwrap();
+        let ts = pkt.timestamp.as_secs_f64();
+        assert!(
+            ts >= 0.3,
+            "after seeking to 0.5s, got packet at {ts}s which is too early"
+        );
+    }
+
+    #[test]
+    fn test_ogg_duration_scan() {
+        // Create OGG with 5 pages of 8820 samples each at 44100 Hz.
+        // Total granule = 44100, so duration should be 1.0 second.
+        let sample_rate = 44100u32;
+        let ogg = make_ogg_vorbis_multipage(sample_rate, 2, 5, 8820);
+
+        let cursor = Cursor::new(ogg);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let duration = info.duration.expect("should have duration");
+        assert!(
+            (duration.as_secs_f64() - 1.0).abs() < 0.01,
+            "expected ~1.0s duration, got {:.3}s",
+            duration.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn test_ogg_continuation_pages() {
+        // Create a packet that spans two pages using continuation.
+        // Page 1: has a partial packet (all segments = 255, so no terminating segment).
+        // Page 2: continuation page that completes the packet.
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // BOS page
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Page 1: one segment of 255 bytes (partial — no terminating segment < 255)
+        let part1 = vec![0xAA; 255];
+        write_ogg_page_raw(&mut buf, 0, -1, serial, 1, &[255u8], &part1);
+
+        // Page 2: continuation page with remaining 100 bytes
+        let part2 = vec![0xBB; 100];
+        write_ogg_page_raw(
+            &mut buf,
+            HEADER_TYPE_CONTINUATION | HEADER_TYPE_EOS,
+            44100,
+            serial,
+            2,
+            &[100u8],
+            &part2,
+        );
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Read packets until we get the reassembled one
+        let pkt = demuxer.next_packet().unwrap();
+        // The combined packet should be 255 + 100 = 355 bytes
+        assert_eq!(
+            pkt.data.len(),
+            355,
+            "continuation packet should be 355 bytes, got {}",
+            pkt.data.len()
+        );
+        // Verify the content is the concatenation
+        assert!(pkt.data[..255].iter().all(|&b| b == 0xAA));
+        assert!(pkt.data[255..].iter().all(|&b| b == 0xBB));
+    }
+
+    #[test]
+    fn test_ogg_invalid_crc() {
+        // Build a valid page, then corrupt the CRC
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Corrupt the CRC (bytes 22..26 of the page)
+        buf[22] ^= 0xFF;
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should fail with invalid CRC");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("CRC mismatch"),
+            "error should mention CRC mismatch, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_ogg_truncated_page() {
+        // Build a valid BOS page header + segment table, but truncate the body
+        let mut buf = Vec::new();
+
+        // Write a valid header manually with a segment that promises 200 bytes
+        buf.extend_from_slice(b"OggS");
+        buf.push(0); // version
+        buf.push(HEADER_TYPE_BOS);
+        buf.extend_from_slice(&0i64.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes()); // serial
+        buf.extend_from_slice(&0u32.to_le_bytes()); // page seq
+        buf.extend_from_slice(&0u32.to_le_bytes()); // CRC (won't get to validation)
+        buf.push(1); // 1 segment
+        buf.push(200); // segment says 200 bytes
+
+        // Only provide 50 bytes of body (truncated)
+        buf.extend_from_slice(&[0x42; 50]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let result = demuxer.probe();
+        assert!(result.is_err(), "should fail when page body is truncated");
+    }
+
+    #[test]
+    fn test_ogg_multiple_streams() {
+        // Create an OGG with 2 logical streams (different serial numbers)
+        let mut buf = Vec::new();
+
+        // Stream 1: Vorbis at 44100Hz
+        let serial1: u32 = 1;
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial1, 0, &[&vorbis_id]);
+
+        // Stream 2: Vorbis at 48000Hz
+        let serial2: u32 = 2;
+        let mut vorbis_id2 = Vec::new();
+        vorbis_id2.push(0x01);
+        vorbis_id2.extend_from_slice(b"vorbis");
+        vorbis_id2.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id2.push(1); // mono
+        vorbis_id2.extend_from_slice(&48000u32.to_le_bytes());
+        vorbis_id2.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id2.extend_from_slice(&96000i32.to_le_bytes());
+        vorbis_id2.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id2.push(0x08);
+        vorbis_id2.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial2, 0, &[&vorbis_id2]);
+
+        // Data page for stream 1
+        let data1 = vec![0x42; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial1, 1, &[&data1]);
+
+        // Data page for stream 2
+        let data2 = vec![0x43; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 48000, serial2, 1, &[&data2]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio: Vec<_> = info.audio_streams().collect();
+        assert_eq!(audio.len(), 2, "should detect 2 audio streams");
+        // Verify different sample rates
+        let rates: Vec<u32> = audio.iter().map(|a| a.sample_rate).collect();
+        assert!(rates.contains(&44100));
+        assert!(rates.contains(&48000));
+    }
+
+    #[test]
+    fn test_ogg_empty_page() {
+        // Build a page with 0 segments — should not panic
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // BOS page with vorbis ID (needed so probe succeeds)
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Empty page (0 segments, 0 body)
+        write_ogg_page_raw(&mut buf, 0, -1, serial, 1, &[], &[]);
+
+        // EOS page with data so we can terminate
+        let data = vec![0x42; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 2, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Should be able to read past the empty page without panic
+        let pkt = demuxer.next_packet().unwrap();
+        assert!(!pkt.data.is_empty());
+    }
+
+    #[test]
+    fn test_ogg_granule_negative_clamp() {
+        // Create pages where granule positions are -1 (not yet known).
+        // Verify the demuxer clamps timestamps to 0 rather than panicking.
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // BOS page
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Data page with granule = -1 (unknown)
+        let data = vec![0x42; 64];
+        write_ogg_page(&mut buf, 0, -1, serial, 1, &[&data]);
+
+        // Another data page with granule = -1
+        let data2 = vec![0x43; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, -1, serial, 2, &[&data2]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Read packets — timestamps should be clamped to 0
+        let pkt = demuxer.next_packet().unwrap();
+        assert_eq!(
+            pkt.timestamp,
+            Duration::ZERO,
+            "negative granule should produce Duration::ZERO timestamp"
+        );
+    }
+
     #[test]
     fn ogg_truncated_page_body_missing() {
         // Build just the OGG page header with a segment table that promises
@@ -1059,5 +1427,319 @@ mod tests {
         let mut demuxer = OggDemuxer::new(cursor);
         let result = demuxer.probe();
         assert!(result.is_err(), "should fail when page body is truncated");
+    }
+
+    #[test]
+    fn test_ogg_find_next_page_start_garbage_prefix() {
+        // Test find_next_page_start() by placing garbage bytes before a valid OGG file.
+        // The demuxer should skip garbage and find the first valid page.
+        let mut buf = Vec::new();
+
+        // 200 bytes of garbage
+        buf.extend_from_slice(&[0xDE; 200]);
+
+        // Now a valid OGG/Vorbis file
+        let serial: u32 = 1;
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        let data = vec![0x42u8; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 1, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+
+        // Use find_next_page_start to skip garbage
+        let page_start = demuxer.find_next_page_start();
+        assert_eq!(page_start, Some(200), "should find page at offset 200");
+    }
+
+    #[test]
+    fn test_ogg_find_next_page_start_eof() {
+        // Test find_next_page_start() when there is no valid OGG page
+        let buf = vec![0xFFu8; 100]; // all garbage, no OggS
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let result = demuxer.find_next_page_start();
+        assert_eq!(result, None, "should return None when no page found");
+    }
+
+    #[test]
+    fn test_ogg_flac_in_ogg_detection() {
+        // Build an OGG file with a FLAC BOS page
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // FLAC in OGG: 0x7F + "FLAC" + mapping_version(2) + num_header_packets(2) + "fLaC" + STREAMINFO
+        let mut flac_header = Vec::new();
+        flac_header.push(0x7F); // packet type
+        flac_header.extend_from_slice(b"FLAC"); // magic
+        flac_header.push(1); // major mapping version
+        flac_header.push(0); // minor mapping version
+        flac_header.extend_from_slice(&1u16.to_be_bytes()); // num header packets
+        flac_header.extend_from_slice(b"fLaC"); // native FLAC magic
+
+        // The code reads the packed sample_rate/channels/bps field from
+        // packet[streaminfo_offset + 10 .. streaminfo_offset + 14] where
+        // streaminfo_offset = 13. So the packed field is at bytes 23..27.
+        //
+        // After "fLaC" (offset 13), the code expects 10 bytes of STREAMINFO
+        // prefix (min_block + max_block + min_frame + max_frame), then the
+        // packed field. We need total packet length >= 51.
+
+        // Offsets 13..22: STREAMINFO prefix (10 bytes)
+        flac_header.extend_from_slice(&4096u16.to_be_bytes()); // min block size
+        flac_header.extend_from_slice(&4096u16.to_be_bytes()); // max block size
+        flac_header.extend_from_slice(&[0x00, 0x10, 0x00]); // min frame size
+        flac_header.extend_from_slice(&[0x00, 0x20, 0x00]); // max frame size
+
+        // Offsets 23..26: packed sample_rate(20) | channels-1(3) | bps-1(5) | total_hi(4)
+        let sr: u32 = 44100;
+        let ch_minus1: u32 = 1; // 2 channels
+        let bps_minus1: u32 = 15; // 16 bits
+        let packed = (sr << 12) | (ch_minus1 << 9) | (bps_minus1 << 4);
+        flac_header.extend_from_slice(&packed.to_be_bytes());
+
+        // Remaining STREAMINFO: total_samples low 32 bits + MD5 (20 bytes)
+        flac_header.extend_from_slice(&0u32.to_be_bytes());
+        flac_header.extend_from_slice(&[0u8; 16]);
+
+        // Pad to at least 51 bytes total
+        while flac_header.len() < 51 {
+            flac_header.push(0);
+        }
+
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&flac_header]);
+
+        // Data page with a FLAC frame (dummy)
+        let data = vec![0xFF, 0xF8, 0x69, 0x98, 0x00, 0x42, 0x42, 0x42];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 1, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].codec, AudioCodec::Flac);
+        assert_eq!(audio[0].sample_rate, 44100);
+        assert_eq!(audio[0].channels, 2);
+    }
+
+    #[test]
+    fn test_ogg_seek_bisection_large_file() {
+        // Create a large-enough OGG file with many pages to trigger bisection (> 8192 bytes apart)
+        // Each page has ~1000 bytes of data; we need hi-lo > 8192 => at least ~10 pages
+        let sample_rate = 44100u32;
+        let samples_per_page = 4410i64; // 0.1s each
+
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        // BOS page with Vorbis ID header
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&sample_rate.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // 50 data pages with ~2000 bytes each => ~100KB file, pages well separated
+        let num_pages = 50;
+        for i in 0..num_pages {
+            let granule = samples_per_page * (i as i64 + 1);
+            let data = vec![(i as u8).wrapping_add(0x42); 2000];
+            let header_type = if i == num_pages - 1 {
+                HEADER_TYPE_EOS
+            } else {
+                0
+            };
+            write_ogg_page(
+                &mut buf,
+                header_type,
+                granule,
+                serial,
+                (i + 1) as u32,
+                &[&data],
+            );
+        }
+
+        assert!(
+            buf.len() > 8192 * 2,
+            "file must be large enough to trigger bisection"
+        );
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        // Seek to 2.5 seconds (in the middle of the file)
+        demuxer.seek(Duration::from_millis(2500)).unwrap();
+
+        // Read the next packet — its timestamp should be reasonably close
+        let pkt = demuxer.next_packet().unwrap();
+        let ts = pkt.timestamp.as_secs_f64();
+        assert!(
+            (1.5..=4.0).contains(&ts),
+            "after seeking to 2.5s in a 5s file, got packet at {ts}s"
+        );
+
+        // Also seek to near the end
+        demuxer.seek(Duration::from_millis(4500)).unwrap();
+        let pkt2 = demuxer.next_packet().unwrap();
+        let ts2 = pkt2.timestamp.as_secs_f64();
+        assert!(
+            ts2 >= 3.0,
+            "after seeking to 4.5s, got packet at {ts2}s which is too early"
+        );
+    }
+
+    #[test]
+    fn test_ogg_seek_to_start() {
+        // Seek to timestamp 0 should work and return packets from the beginning
+        let ogg = make_ogg_vorbis_multipage(44100, 2, 10, 4410);
+        let cursor = Cursor::new(ogg);
+        let mut demuxer = OggDemuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        demuxer.seek(Duration::ZERO).unwrap();
+        let pkt = demuxer.next_packet().unwrap();
+        // Should be at or very near the start
+        assert!(
+            pkt.timestamp.as_secs_f64() < 0.5,
+            "seek to 0 should yield early packet"
+        );
+    }
+
+    #[test]
+    fn test_ogg_opus_duration_with_preskip() {
+        // Verify that Opus duration accounts for pre-skip
+        let ogg = make_ogg_opus(48000, 2);
+        let cursor = Cursor::new(ogg);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let duration = info.duration.unwrap();
+        // Granule is 48000, pre-skip is 312, so effective = 48000 - 312 = 47688
+        // Duration = 47688 / 48000 ~= 0.9935s
+        assert!(
+            (duration.as_secs_f64() - 0.9935).abs() < 0.01,
+            "Opus duration should account for pre-skip, got {:.4}",
+            duration.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn test_ogg_vorbis_bitrate_fallback_to_max() {
+        // Test Vorbis with nominal=0 but max>0, so bitrate falls back to max
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes()); // version
+        vorbis_id.push(2); // channels
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes()); // sample rate
+        vorbis_id.extend_from_slice(&256000i32.to_le_bytes()); // bitrate max = 256000
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes()); // bitrate nominal = 0
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes()); // bitrate min
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        let data = vec![0x42u8; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 1, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio[0].bitrate, Some(256000));
+    }
+
+    #[test]
+    fn test_ogg_vorbis_no_bitrate() {
+        // Test Vorbis with both nominal=0 and max=0
+        let mut buf = Vec::new();
+        let serial: u32 = 1;
+
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes()); // bitrate max = 0
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes()); // bitrate nominal = 0
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes()); // bitrate min = 0
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        let data = vec![0x42u8; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 1, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio[0].bitrate, None);
+    }
+
+    #[test]
+    fn test_ogg_unrecognized_stream_skipped() {
+        // Create an OGG with one unrecognized BOS page followed by a valid Vorbis BOS
+        let mut buf = Vec::new();
+
+        // Unrecognized stream (serial=99) with unknown codec header
+        let unknown_header = b"UnknownCodecHeader1234567890ABCDEF".to_vec();
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, 99, 0, &[&unknown_header]);
+
+        // Valid Vorbis stream (serial=1)
+        let serial: u32 = 1;
+        let mut vorbis_id = Vec::new();
+        vorbis_id.push(0x01);
+        vorbis_id.extend_from_slice(b"vorbis");
+        vorbis_id.extend_from_slice(&0u32.to_le_bytes());
+        vorbis_id.push(2);
+        vorbis_id.extend_from_slice(&44100u32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&128000i32.to_le_bytes());
+        vorbis_id.extend_from_slice(&0i32.to_le_bytes());
+        vorbis_id.push(0x08);
+        vorbis_id.push(0x01);
+        write_ogg_page(&mut buf, HEADER_TYPE_BOS, 0, serial, 0, &[&vorbis_id]);
+
+        // Data page for the recognized stream
+        let data = vec![0x42u8; 64];
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial, 1, &[&data]);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = OggDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        // Only the Vorbis stream should be detected
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].codec, AudioCodec::Vorbis);
     }
 }
