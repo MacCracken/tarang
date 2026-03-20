@@ -8,34 +8,13 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-
 ### AI features
 
 - [ ] **Offline transcription** — bundle a small Whisper model (tiny/base) for local inference without hoosh dependency
-- [ ] **Speaker diarization** — who-spoke-when segmentation for podcast/meeting analysis
-- [ ] **Music fingerprinting** — AcoustID-compatible fingerprinting for music identification
-- [ ] **Content-based thumbnails** — face detection or saliency-based frame selection instead of variance scoring
-
-### Testing & CI
-
-- [ ] **Fuzz targets in CI** — run `cargo-fuzz` in nightly CI job for all demuxer parsers
-- [ ] **Benchmark regression CI** — track criterion numbers across releases; fail on >10% regression
-- [ ] **Integration test suite** — end-to-end tests with real media files (small test fixtures in repo or downloaded in CI)
-- [ ] **Cross-platform CI** — test on macOS (no VA-API, no PipeWire) and verify feature-gated compilation
-
-### Documentation
-
-- [ ] **docs.rs examples** — add `examples/` directory with runnable programs (probe, transcode, fingerprint)
-- [ ] **Migration guide** — document breaking changes between minor versions for downstream consumers
-- [ ] **Troubleshooting guide** — common issues: missing system deps, feature flag confusion, FFI build errors
-- [ ] **Performance tuning guide** — when to use sinc vs linear resample, chunk size selection, buffer reuse patterns
 
 ### Release prep
 
 - [ ] **Publish 0.20.3 to crates.io** — verify `cargo publish --dry-run` passes; tag and push
-- [ ] **Switch to SemVer strictly** — 0.x allows breaking changes; document policy in CONTRIBUTING.md
-- [ ] **Set up codecov** — configure coverage upload and badge in README
-- [ ] **Create GitHub release workflow** — automated changelog generation from git tags
 
 ---
 

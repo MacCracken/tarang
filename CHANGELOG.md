@@ -19,6 +19,24 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
 - `Pipeline` reduced from catch-all to genuine pipeline state issues only
 
+### AI features
+- **Speaker diarization**: `ai::diarize` module — energy-based VAD + spectral clustering for who-spoke-when segmentation; `diarize()` returns `Vec<SpeakerSegment>` with timing and speaker IDs; 8 tests
+- **AcoustID fingerprinting**: `ai::acoustid` module — Chromaprint-compatible compressed fingerprints for music identification; `compute_acoustid()` returns base64-encoded fingerprint string; 7 tests
+- **Content-based thumbnails**: `ThumbnailStrategy::ContentBased` — saliency scoring with edge density, color diversity, skin tone detection, center weighting; replaces variance-only scoring as default; 3 tests
+
+### Documentation
+- **Examples**: `examples/probe.rs` (media info), `examples/transcode.rs` (decode→resample→encode→mux), `examples/fingerprint.rs` (audio fingerprint + comparison)
+- **Migration guide**: `docs/development/migration-guide.md` — 0.19.3→0.20.3 breaking changes and new features
+- **Troubleshooting guide**: `docs/development/troubleshooting.md` — system deps, feature flags, VA-API, runtime errors
+- **Performance guide**: `docs/development/performance-guide.md` — resampling, encoding, hardware accel, memory tuning
+- **SemVer policy**: documented in CONTRIBUTING.md, enforced via cargo-semver-checks in CI
+
+### Testing & CI
+- Fuzz targets in CI workflow (nightly, 60s per demuxer)
+- Benchmark job with criterion
+- macOS cross-platform CI (default features, no VA-API/PipeWire)
+- Integration test roundtrip (WAV mux→demux)
+
 ### Audio pipeline
 - **Streaming decode API**: already complete via `FileDecoder::next_buffer()` (pull-based iterator)
 - **Sample format conversion**: `AudioBuffer::convert_to(SampleFormat)` — F32 → I16, I32, F64

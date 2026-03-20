@@ -167,9 +167,16 @@ src/
 
 ## Versioning
 
-This project uses semantic versioning (`MAJOR.MINOR.PATCH`). Version bumps are handled by
-maintainers using `scripts/version-bump.sh`. Contributors do **not** need to
-bump the version in their PRs.
+This project uses **strict semantic versioning** (`MAJOR.MINOR.PATCH`):
+
+- **Pre-1.0** (current): Minor bumps (0.x → 0.y) may include breaking changes.
+  Patch bumps (0.x.y → 0.x.z) are backwards-compatible.
+- **Post-1.0**: Standard SemVer — breaking changes require major bump.
+
+Version bumps are handled by maintainers using `scripts/version-bump.sh`.
+Contributors do **not** need to bump the version in their PRs.
+
+SemVer compliance is enforced via `cargo-semver-checks` in CI.
 
 ## License
 

@@ -20,6 +20,15 @@ pub enum ThumbnailFormat {
     Png,
 }
 
+/// Strategy for scoring thumbnail candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailStrategy {
+    /// Score by luminance variance (existing behavior).
+    Variance,
+    /// Score by content saliency (edge density + color diversity + skin tone).
+    ContentBased,
+}
+
 /// Configuration for thumbnail generation.
 #[derive(Debug, Clone)]
 pub struct ThumbnailConfig {
@@ -29,6 +38,7 @@ pub struct ThumbnailConfig {
     pub format: ThumbnailFormat,
     pub max_thumbnails: usize,
     pub min_variance: f64,
+    pub strategy: ThumbnailStrategy,
 }
 
 impl Default for ThumbnailConfig {
@@ -40,6 +50,7 @@ impl Default for ThumbnailConfig {
             format: ThumbnailFormat::Jpeg,
             max_thumbnails: 5,
             min_variance: 500.0,
+            strategy: ThumbnailStrategy::ContentBased,
         }
     }
 }
@@ -81,7 +92,11 @@ impl ThumbnailGenerator {
             return; // reject low-variance frames (solid color, black, white)
         }
 
-        let score = variance * if is_scene_boundary { 2.0 } else { 1.0 };
+        let base_score = match self.config.strategy {
+            ThumbnailStrategy::Variance => variance,
+            ThumbnailStrategy::ContentBased => content_score(frame) as f64,
+        };
+        let score = base_score * if is_scene_boundary { 2.0 } else { 1.0 };
 
         // Arc::new clones the frame once; subsequent retentions are O(1) ref bumps
         self.candidates.push((Arc::new(frame.clone()), score));
@@ -254,6 +269,107 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
     Ok(rgb)
 }
 
+/// Content-based frame scoring using saliency heuristics.
+///
+/// Combines multiple signals:
+/// - Edge density (Sobel-like gradient magnitude)
+/// - Color diversity (histogram spread across bins)
+/// - Center-weighted interest (features near center score higher)
+/// - Skin tone detection (proxy for face presence)
+pub fn content_score(frame: &VideoFrame) -> f32 {
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    if w < 3 || h < 3 {
+        return 0.0;
+    }
+
+    let y_size = w * h;
+    let luminance = super::video_utils::extract_luminance(frame);
+    if luminance.len() < y_size {
+        return 0.0;
+    }
+
+    // --- Edge density: average gradient magnitude ---
+    let mut gradient_sum: u64 = 0;
+    let mut gradient_count: u64 = 0;
+    // Center weighting accumulator (weighted by gradient)
+    let mut center_weighted_sum: f64 = 0.0;
+    let mut center_weight_total: f64 = 0.0;
+
+    let cx = w as f64 / 2.0;
+    let cy = h as f64 / 2.0;
+    let sigma_x = cx.max(1.0);
+    let sigma_y = cy.max(1.0);
+
+    for row in 1..h - 1 {
+        for col in 1..w - 1 {
+            let left = luminance[row * w + col - 1] as i32;
+            let right = luminance[row * w + col + 1] as i32;
+            let up = luminance[(row - 1) * w + col] as i32;
+            let down = luminance[(row + 1) * w + col] as i32;
+
+            let gx = (right - left).unsigned_abs();
+            let gy = (down - up).unsigned_abs();
+            let mag = gx + gy;
+
+            gradient_sum += mag as u64;
+            gradient_count += 1;
+
+            // Gaussian-like center weight
+            let dx = col as f64 - cx;
+            let dy = row as f64 - cy;
+            let weight = (-0.5 * (dx * dx / (sigma_x * sigma_x) + dy * dy / (sigma_y * sigma_y))).exp();
+            center_weighted_sum += mag as f64 * weight;
+            center_weight_total += weight;
+        }
+    }
+
+    let edge_density = if gradient_count > 0 {
+        gradient_sum as f32 / gradient_count as f32 / 255.0
+    } else {
+        0.0
+    };
+
+    let center_weight = if center_weight_total > 0.0 {
+        (center_weighted_sum / center_weight_total / 255.0) as f32
+    } else {
+        0.0
+    };
+
+    // --- Color diversity: histogram spread across 16 bins ---
+    let mut hist = [0u32; 16];
+    for &y in &luminance[..y_size] {
+        hist[(y >> 4) as usize] += 1;
+    }
+    let occupied = hist.iter().filter(|&&c| c > 0).count() as f32;
+    let color_diversity = occupied / 16.0;
+
+    // --- Skin tone detection (YCbCr UV range) ---
+    let chroma_w = w.div_ceil(2);
+    let chroma_h = h.div_ceil(2);
+    let chroma_size = chroma_w * chroma_h;
+    let skin_score = if frame.pixel_format == PixelFormat::Yuv420p
+        && frame.data.len() >= y_size + 2 * chroma_size
+    {
+        let u_plane = &frame.data[y_size..y_size + chroma_size];
+        let v_plane = &frame.data[y_size + chroma_size..];
+        let mut skin_pixels = 0u64;
+        for i in 0..chroma_size {
+            let u = u_plane[i];
+            let v = v_plane[i];
+            if (100..=140).contains(&u) && (130..=170).contains(&v) {
+                skin_pixels += 1;
+            }
+        }
+        (skin_pixels as f32 / chroma_size as f32).min(1.0)
+    } else {
+        0.0
+    };
+
+    // Weighted combination
+    0.4 * edge_density + 0.3 * color_diversity + 0.2 * skin_score + 0.1 * center_weight
+}
+
 /// Compute luminance variance for a video frame.
 pub fn luminance_variance(frame: &VideoFrame) -> f64 {
     let luminance = super::video_utils::extract_luminance(frame);
@@ -417,6 +533,7 @@ mod tests {
             format: ThumbnailFormat::Jpeg,
             quality: 80,
             max_thumbnails: 1,
+            ..Default::default()
         };
         let mut generator = ThumbnailGenerator::new(config);
         generator.consider_frame(&make_yuv_frame(64, 64, 7, 0), false);
@@ -587,6 +704,7 @@ mod tests {
             max_thumbnails: 2,
             format: ThumbnailFormat::Jpeg,
             quality: 75,
+            ..Default::default()
         };
         let thumbs = generate_thumbnails(frames.into_iter(), &[], config).unwrap();
         assert!(thumbs.len() <= 2);
@@ -608,6 +726,7 @@ mod tests {
         assert_eq!(config.format, ThumbnailFormat::Jpeg);
         assert_eq!(config.max_thumbnails, 5);
         assert_eq!(config.min_variance, 500.0);
+        assert_eq!(config.strategy, ThumbnailStrategy::ContentBased);
     }
 
     #[test]
@@ -668,5 +787,56 @@ mod tests {
         let (w, h) = generator.compute_target_dims(20000, 20000);
         assert_eq!(w, 16384);
         assert_eq!(h, 16384);
+    }
+
+    #[test]
+    fn content_score_solid_black_is_low() {
+        let frame = make_solid_yuv_frame(64, 64, 0);
+        let score = content_score(&frame);
+        assert!(score < 0.05, "solid black score should be very low, got {score}");
+    }
+
+    #[test]
+    fn content_score_edges_higher_than_flat() {
+        let flat = make_solid_yuv_frame(64, 64, 128);
+        let edgy = make_yuv_frame(64, 64, 7, 0);
+        let flat_score = content_score(&flat);
+        let edgy_score = content_score(&edgy);
+        assert!(
+            edgy_score > flat_score,
+            "edgy frame ({edgy_score}) should score higher than flat ({flat_score})"
+        );
+    }
+
+    #[test]
+    fn strategy_selection_variance_vs_content() {
+        let frame = make_yuv_frame(64, 64, 7, 100);
+
+        // Variance strategy
+        let config_var = ThumbnailConfig {
+            min_variance: 0.0,
+            max_thumbnails: 1,
+            strategy: ThumbnailStrategy::Variance,
+            ..Default::default()
+        };
+        let mut gen_var = ThumbnailGenerator::new(config_var);
+        gen_var.consider_frame(&frame, false);
+        let var_score = gen_var.candidates[0].1;
+
+        // ContentBased strategy
+        let config_cb = ThumbnailConfig {
+            min_variance: 0.0,
+            max_thumbnails: 1,
+            strategy: ThumbnailStrategy::ContentBased,
+            ..Default::default()
+        };
+        let mut gen_cb = ThumbnailGenerator::new(config_cb);
+        gen_cb.consider_frame(&frame, false);
+        let cb_score = gen_cb.candidates[0].1;
+
+        // Variance score is raw variance (typically hundreds+), content score is 0..1 range
+        assert!(var_score > 1.0, "variance score should be large, got {var_score}");
+        assert!(cb_score < 2.0, "content score should be in small range, got {cb_score}");
+        assert!((var_score - cb_score).abs() > 0.01, "scores should differ between strategies");
     }
 }

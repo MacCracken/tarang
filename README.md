@@ -3,6 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/tarang.svg)](https://crates.io/crates/tarang)
 [![Docs.rs](https://docs.rs/tarang/badge.svg)](https://docs.rs/tarang)
 [![CI](https://github.com/MacCracken/tarang/actions/workflows/ci.yml/badge.svg)](https://github.com/MacCracken/tarang/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/MacCracken/tarang/graph/badge.svg)](https://codecov.io/gh/MacCracken/tarang)
 [![License: GPL-3.0](https://img.shields.io/crates/l/tarang.svg)](LICENSE)
 
 **AI-native Rust media framework for AGNOS**

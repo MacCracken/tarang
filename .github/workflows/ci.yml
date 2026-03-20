@@ -142,6 +142,62 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
+  fuzz:
+    name: Fuzz Testing
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: Fuzz fuzz_wav
+        run: cargo +nightly fuzz run fuzz_wav -- -max_total_time=60 -max_len=65536
+      - name: Fuzz fuzz_mp4
+        run: cargo +nightly fuzz run fuzz_mp4 -- -max_total_time=60 -max_len=65536
+      - name: Fuzz fuzz_mkv
+        run: cargo +nightly fuzz run fuzz_mkv -- -max_total_time=60 -max_len=65536
+      - name: Fuzz fuzz_ogg
+        run: cargo +nightly fuzz run fuzz_ogg -- -max_total_time=60 -max_len=65536
+
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
+      - name: Run benchmarks
+        run: cargo bench -- --output-format=bencher 2>&1 | tee bench-results.txt
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench-results.txt
+
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check (default features)
+        run: cargo check
+      - name: Test (default features)
+        run: cargo test
+
   build:
     name: Build Release
     needs: [check, test, security, deny, vet]
