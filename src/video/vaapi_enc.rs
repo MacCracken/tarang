@@ -668,4 +668,40 @@ mod tests {
         assert_eq!(encoder.frames_encoded(), 1);
         println!("Encoded frame: {} bytes", bitstream.len());
     }
+
+    #[test]
+    fn yuv420p_to_nv12_16x16() {
+        let w = 16u32;
+        let h = 16u32;
+        let y_size = (w * h) as usize;
+        let uv_size = y_size / 4;
+        let mut yuv = vec![128u8; y_size]; // Y
+        yuv.extend(vec![64u8; uv_size]); // U
+        yuv.extend(vec![192u8; uv_size]); // V
+
+        let nv12 = yuv420p_to_nv12(&yuv, w, h);
+        assert_eq!(nv12.len(), y_size + y_size / 2);
+        // Y plane unchanged
+        assert!(nv12[..y_size].iter().all(|&b| b == 128));
+        // UV plane: interleaved U=64, V=192
+        for i in 0..uv_size {
+            assert_eq!(nv12[y_size + i * 2], 64, "U at {i}");
+            assert_eq!(nv12[y_size + i * 2 + 1], 192, "V at {i}");
+        }
+    }
+
+    #[test]
+    fn yuv420p_to_nv12_2x2() {
+        // Smallest valid YUV420p: 2x2
+        let yuv = vec![
+            1, 2, 3, 4, // Y (2x2)
+            10,  // U (1x1)
+            20,  // V (1x1)
+        ];
+        let nv12 = yuv420p_to_nv12(&yuv, 2, 2);
+        assert_eq!(nv12.len(), 6); // Y=4 + UV=2
+        assert_eq!(&nv12[..4], &[1, 2, 3, 4]);
+        assert_eq!(nv12[4], 10); // U
+        assert_eq!(nv12[5], 20); // V
+    }
 }

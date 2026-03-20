@@ -319,4 +319,37 @@ mod tests {
         let packets = enc.flush().unwrap();
         assert!(packets.is_empty());
     }
+
+    #[test]
+    fn encoder_config_builder_defaults() {
+        let config = EncoderConfig::builder(AudioCodec::Flac).build();
+        assert_eq!(config.codec, AudioCodec::Flac);
+        assert_eq!(config.sample_rate, 44100);
+        assert_eq!(config.channels, 2);
+        assert_eq!(config.bits_per_sample, 16);
+    }
+
+    #[test]
+    fn encoder_config_builder_custom() {
+        let config = EncoderConfig::builder(AudioCodec::Pcm)
+            .sample_rate(96000)
+            .channels(1)
+            .bits_per_sample(24)
+            .build();
+        assert_eq!(config.codec, AudioCodec::Pcm);
+        assert_eq!(config.sample_rate, 96000);
+        assert_eq!(config.channels, 1);
+        assert_eq!(config.bits_per_sample, 24);
+    }
+
+    #[test]
+    fn encoder_config_builder_creates_working_encoder() {
+        let config = EncoderConfig::builder(AudioCodec::Pcm)
+            .sample_rate(48000)
+            .channels(2)
+            .bits_per_sample(16)
+            .build();
+        let enc = create_encoder(&config);
+        assert!(enc.is_ok());
+    }
 }

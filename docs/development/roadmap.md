@@ -8,6 +8,10 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
+### P1 — Bugs (found via shruti benchmarks, 2026-03-20)
+
+(both fixed — see CHANGELOG 0.20.3)
+
 ### API stabilization
 
 - [ ] **Consistent error types** — evaluate whether `TarangError` variants cover all failure modes cleanly; consider module-specific error enums that convert into `TarangError`

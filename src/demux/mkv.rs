@@ -1866,4 +1866,96 @@ mod tests {
         let result = demuxer.read_float(3);
         assert!(result.is_err(), "float size 3 should be invalid");
     }
+
+    /// Build a minimal MKV with a subtitle track.
+    fn make_mkv_subtitle(codec_id: &str, language: Option<&str>) -> Vec<u8> {
+        let mut file = Vec::new();
+
+        let mut header = Vec::new();
+        write_string_element(&mut header, DOC_TYPE, "matroska");
+        write_master_element(&mut file, EBML_HEADER, &header);
+
+        let mut segment = Vec::new();
+
+        let mut info = Vec::new();
+        write_uint_element(&mut info, TIMECODE_SCALE, 1_000_000);
+        write_float_element(&mut info, DURATION, 5000.0);
+        write_master_element(&mut segment, INFO, &info);
+
+        let mut tracks = Vec::new();
+        let mut track_entry = Vec::new();
+        write_uint_element(&mut track_entry, TRACK_NUMBER, 1);
+        write_uint_element(&mut track_entry, TRACK_TYPE, TRACK_TYPE_SUBTITLE);
+        write_string_element(&mut track_entry, CODEC_ID, codec_id);
+        if let Some(lang) = language {
+            write_string_element(&mut track_entry, LANGUAGE, lang);
+        }
+
+        write_master_element(&mut tracks, TRACK_ENTRY, &track_entry);
+        write_master_element(&mut segment, TRACKS, &tracks);
+
+        let mut cluster = Vec::new();
+        write_uint_element(&mut cluster, TIMECODE, 0);
+
+        let mut block = Vec::new();
+        write_vint(&mut block, 1);
+        block.extend_from_slice(&0i16.to_be_bytes());
+        block.push(0x80);
+        block.extend_from_slice(b"Hello world");
+
+        write_id(&mut cluster, SIMPLE_BLOCK);
+        write_vint(&mut cluster, block.len() as u64);
+        cluster.extend_from_slice(&block);
+
+        write_master_element(&mut segment, CLUSTER, &cluster);
+        write_master_element(&mut file, SEGMENT, &segment);
+        file
+    }
+
+    #[test]
+    fn mkv_subtitle_probe() {
+        let mkv = make_mkv_subtitle("S_TEXT/UTF8", Some("en"));
+        let cursor = Cursor::new(mkv);
+        let mut demuxer = MkvDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.format, ContainerFormat::Mkv);
+        assert!(!info.has_audio());
+        assert!(!info.has_video());
+        assert_eq!(info.streams.len(), 1);
+
+        match &info.streams[0] {
+            StreamInfo::Subtitle { language } => {
+                assert_eq!(language.as_deref(), Some("en"));
+            }
+            other => panic!("expected Subtitle stream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mkv_subtitle_no_language() {
+        let mkv = make_mkv_subtitle("S_TEXT/ASS", None);
+        let cursor = Cursor::new(mkv);
+        let mut demuxer = MkvDemuxer::new(cursor);
+        let info = demuxer.probe().unwrap();
+
+        assert_eq!(info.streams.len(), 1);
+        match &info.streams[0] {
+            StreamInfo::Subtitle { language } => {
+                assert!(language.is_none());
+            }
+            other => panic!("expected Subtitle stream, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mkv_subtitle_read_packet() {
+        let mkv = make_mkv_subtitle("S_TEXT/UTF8", Some("fr"));
+        let cursor = Cursor::new(mkv);
+        let mut demuxer = MkvDemuxer::new(cursor);
+        let _info = demuxer.probe().unwrap();
+
+        let packet = demuxer.next_packet().unwrap();
+        assert_eq!(&*packet.data, b"Hello world");
+    }
 }

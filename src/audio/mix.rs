@@ -36,19 +36,11 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     }
 
     let src = bytes_to_f32(&buf.data);
-    let frames = buf.num_samples;
-    let required_src = frames
-        .checked_mul(src_ch)
-        .ok_or_else(|| TarangError::Pipeline("source size overflow".into()))?;
-    if src.len() < required_src {
-        return Err(TarangError::Pipeline(
-            format!(
-                "source buffer too small: need {} samples, have {}",
-                required_src,
-                src.len()
-            )
-            .into(),
-        ));
+    // Derive frame count from actual data length to handle callers that
+    // set num_samples to total interleaved samples rather than frames.
+    let frames = src.len() / src_ch.max(1);
+    if frames == 0 {
+        return Err(TarangError::Pipeline("source buffer has no frames".into()));
     }
     let required_dst = frames
         .checked_mul(target_ch)
@@ -364,6 +356,7 @@ mod tests {
     fn test_mix_bounds_validation() {
         // Create a buffer that claims more samples than data actually present.
         // The data has only 2 f32 samples (8 bytes) but num_samples says 100 frames of stereo.
+        // With the fix, frame count is derived from data length (1 frame), so this now works.
         let buf = AudioBuffer {
             data: Bytes::copy_from_slice(f32_to_bytes(&[1.0f32, -1.0])),
             sample_format: SampleFormat::F32,
@@ -373,14 +366,33 @@ mod tests {
             timestamp: Duration::ZERO,
         };
         let result = mix_channels(&buf, ChannelLayout::Mono);
-        assert!(
-            result.is_err(),
-            "mix should reject undersized source buffer"
-        );
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("too small"),
-            "error should mention buffer too small, got: {err_msg}"
-        );
+        // Now derives frame count from data (1 frame), should succeed
+        assert!(result.is_ok(), "mix should derive frames from data length");
+        let out = result.unwrap();
+        assert_eq!(out.num_samples, 1);
+    }
+
+    /// Regression: shruti benchmark found that stereo→mono with
+    /// num_samples set to total interleaved count (not frames) caused
+    /// "source buffer too small" validation error.
+    #[test]
+    fn mix_stereo_to_mono_interleaved_num_samples() {
+        // Simulate a buffer where num_samples = total samples (not frames)
+        let samples = vec![0.8f32, 0.2, 0.6, 0.4]; // 2 frames stereo
+        let buf = AudioBuffer {
+            data: Bytes::copy_from_slice(f32_to_bytes(&samples)),
+            sample_format: SampleFormat::F32,
+            channels: 2,
+            sample_rate: 44100,
+            num_samples: 4, // BUG: should be 2 frames, but set to 4 total samples
+            timestamp: Duration::ZERO,
+        };
+        // This must not error — should derive frame count from data length
+        let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
+        assert_eq!(out.channels, 1);
+        assert_eq!(out.num_samples, 2);
+        let dst = bytes_to_f32(&out.data);
+        assert!((dst[0] - 0.5).abs() < 1e-6); // (0.8 + 0.2) / 2
+        assert!((dst[1] - 0.5).abs() < 1e-6); // (0.6 + 0.4) / 2
     }
 }

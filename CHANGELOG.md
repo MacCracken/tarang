@@ -4,6 +4,11 @@
 
 ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 
+### Bug fixes (found via shruti benchmarks)
+- **Linear resampler off-by-one on stereo buffers** — `resample()` and `resample_sinc()` now derive frame count from actual data length (`src.len() / channels`) instead of trusting `num_samples` field, preventing index-out-of-bounds panic when `num_samples` is set to total interleaved samples rather than frames
+- **`mix_channels` stereo→mono validation** — same fix: derives frame count from data length instead of `num_samples`, preventing false "source buffer too small" errors on stereo buffers
+- 3 regression tests added: `resample_stereo_interleaved_num_samples`, `resample_stereo_downsample`, `mix_stereo_to_mono_interleaved_num_samples`
+
 ### P1 fixes
 
 #### VA-API encode pipeline (fully wired)

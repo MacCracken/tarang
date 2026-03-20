@@ -32,7 +32,9 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
 
     let src = bytes_to_f32(&buf.data);
     let ch = buf.channels as usize;
-    let src_frames = buf.num_samples;
+    // Derive frame count from actual data length to handle callers that
+    // set num_samples to total interleaved samples rather than frames.
+    let src_frames = src.len() / ch.max(1);
 
     let ratio = target_rate as f64 / buf.sample_rate as f64;
     let dst_frames = (src_frames as f64 * ratio).round() as usize;
@@ -156,7 +158,7 @@ pub fn resample_sinc(
 
     let src = bytes_to_f32(&buf.data);
     let ch = buf.channels as usize;
-    let src_frames = buf.num_samples;
+    let src_frames = src.len() / ch.max(1);
 
     let ratio = target_rate as f64 / buf.sample_rate as f64;
     let dst_frames = (src_frames as f64 * ratio).round() as usize;
@@ -275,6 +277,7 @@ mod tests {
     use super::*;
 
     use crate::audio::sample::{make_test_buffer as make_buffer, make_test_sine as make_sine};
+    use std::time::Duration;
 
     #[test]
     fn resample_noop() {
@@ -636,5 +639,38 @@ mod tests {
             err_msg.contains("too large") || err_msg.contains("1GB"),
             "error should mention size limit, got: {err_msg}"
         );
+    }
+
+    /// Regression: shruti benchmark found that stereo buffers with
+    /// num_samples set to total interleaved count (not frames) caused
+    /// index-out-of-bounds panic in the stereo fast path.
+    #[test]
+    fn resample_stereo_interleaved_num_samples() {
+        // Simulate a buffer where num_samples = total samples (not frames)
+        let samples = vec![0.5f32; 200]; // 100 frames stereo
+        let buf = AudioBuffer {
+            data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&samples)),
+            sample_format: SampleFormat::F32,
+            channels: 2,
+            sample_rate: 44100,
+            num_samples: 200, // BUG: should be 100 frames, but set to 200 total samples
+            timestamp: Duration::ZERO,
+        };
+        // This must not panic — should derive frame count from data length
+        let out = resample(&buf, 48000).unwrap();
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.sample_rate, 48000);
+        assert!(out.num_samples > 0);
+    }
+
+    /// Regression: ensure correct stereo resample with properly-set num_samples.
+    #[test]
+    fn resample_stereo_downsample() {
+        let samples = make_sine(440.0, 48000, 4800, 2);
+        let buf = make_buffer(&samples, 2, 48000);
+        let out = resample(&buf, 16000).unwrap();
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.sample_rate, 16000);
+        assert_eq!(out.data.len(), out.num_samples * 2 * 4);
     }
 }
