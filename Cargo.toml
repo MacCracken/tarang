@@ -22,6 +22,8 @@ rav1e = ["dep:rav1e"]
 openh264 = ["dep:openh264"]
 openh264-enc = ["dep:openh264"]
 vaapi = ["dep:cros-libva"]
+# H.265 software decode (LGPL — see WARNING in src/video/libde265_dec.rs)
+h265-decode = ["dep:libde265-rs"]
 # Hardware detection
 hwaccel = ["dep:ai-hwaccel"]
 # Audio
@@ -70,6 +72,11 @@ rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
 cros-libva = { version = "0.0.13", optional = true }
 ai-hwaccel = { version = "0.19", optional = true, default-features = false, features = ["vulkan"] }
+# WARNING: libde265-rs is LGPL-3.0. Not included in `full` feature.
+# Enable `h265-decode` only if your project's license is GPL-compatible.
+# To remove: delete this dep, the feature, src/video/libde265_dec.rs, and
+# the mod/use lines in src/video/mod.rs.
+libde265-rs = { version = "0.2", optional = true, features = ["system-libde265"] }
 
 [dev-dependencies]
 tempfile = "3"

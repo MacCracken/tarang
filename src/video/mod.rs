@@ -25,6 +25,9 @@ pub mod vaapi_probe;
 pub mod vpx_dec;
 #[cfg(feature = "vpx-enc")]
 pub mod vpx_enc;
+// WARNING: libde265 is LGPL-3.0. See libde265_dec.rs header for removal instructions.
+#[cfg(feature = "h265-decode")]
+pub mod libde265_dec;
 
 #[cfg(feature = "dav1d")]
 pub use dav1d_dec::Dav1dDecoder;
@@ -42,6 +45,9 @@ pub use vaapi_probe::{HwAccelReport, HwCodecCapability, HwCodecDirection, probe_
 pub use vpx_dec::VpxDecoder;
 #[cfg(feature = "vpx-enc")]
 pub use vpx_enc::{VpxEncoder, VpxEncoderConfig};
+// WARNING: LGPL-3.0 — see libde265_dec.rs for removal instructions.
+#[cfg(feature = "h265-decode")]
+pub use libde265_dec::LibDe265Decoder;
 
 use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, VideoStreamInfo};
 use std::time::Duration;
@@ -134,12 +140,16 @@ impl DecoderConfig {
                 DecoderBackend::LibVpx
             }
             VideoCodec::H265 => {
-                return Err(TarangError::UnsupportedCodec(
-                    "H.265 software decode not available — no free decoder exists. \
-                     Use DecoderConfig::for_codec_auto() with the `hwaccel` feature \
-                     to decode via VA-API hardware acceleration."
-                        .into(),
-                ));
+                if cfg!(feature = "h265-decode") {
+                    // WARNING: libde265 is LGPL-3.0
+                    DecoderBackend::Software
+                } else {
+                    return Err(TarangError::UnsupportedCodec(
+                        "H.265 software decode requires the `h265-decode` feature (LGPL-3.0), \
+                         or use DecoderConfig::for_codec_auto() with `hwaccel` for VA-API."
+                            .into(),
+                    ));
+                }
             }
             VideoCodec::Theora => DecoderBackend::Software,
         };
@@ -508,8 +518,16 @@ mod tests {
     }
 
     #[test]
-    fn h265_unsupported() {
-        assert!(DecoderConfig::for_codec(VideoCodec::H265).is_err());
+    fn h265_decode_config() {
+        let result = DecoderConfig::for_codec(VideoCodec::H265);
+        if cfg!(feature = "h265-decode") {
+            // With h265-decode feature, software decode via libde265 is available
+            let config = result.unwrap();
+            assert_eq!(config.backend, DecoderBackend::Software);
+        } else {
+            // Without the feature, H.265 is unsupported in software
+            assert!(result.is_err());
+        }
     }
 
     #[test]

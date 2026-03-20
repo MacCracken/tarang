@@ -8,17 +8,8 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### P1 — Bugs (found via shruti benchmarks, 2026-03-20)
-
-(both fixed — see CHANGELOG 0.20.3)
-
-### API stabilization
-
-(done — `EncodeError`, `MuxError`, `ConfigError` variants added; `Pipeline` misuses migrated)
-
 ### Codec gaps
 
-- [ ] **HEVC/H.265 software decoding** — VA-API hardware decode works (0.20.3); still no pure-Rust or BSD-licensed software decoder
 - [ ] **DASH segmentation** — fMP4/WebM segment generation for adaptive streaming (WebM muxer now supports VP9+Opus)
 
 ### Demuxer/muxer hardening
@@ -26,7 +17,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 - [ ] **Fuzz testing** — `cargo-fuzz` targets for MP4, MKV, OGG, WAV demuxers with malformed input
 - [ ] **Fragmented MP4 (fMP4)** — `moof`/`mdat` segment parsing for streaming/DASH
 - [ ] **MP4 edit lists** — `elst` box parsing for correct timestamp mapping
-- [ ] **Mp4Muxer video track support** — add video track (avc1/hev1/vp09) to MP4 muxer (MKV muxer already supports video)
 - [ ] **OGG chaining** — multiple logical streams concatenated (podcast chapters)
 
 ### Audio pipeline

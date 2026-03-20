@@ -4,6 +4,16 @@
 
 ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 
+### H.265/HEVC software decoding
+- `LibDe265Decoder` — software H.265 decode via libde265 (`h265-decode` feature)
+- **WARNING: LGPL-3.0** — deliberately excluded from `full` feature; opt-in only
+- Push-based API: `push_data()`/`push_nal()` → `decode()` → `next_frame()`
+- Multi-threaded slice decoding via `start_threads()`
+- Outputs YUV420p `VideoFrame` with stride-aware plane extraction
+- `DecoderConfig::for_codec(H265)` now succeeds when feature enabled
+- Removal instructions in module header and Cargo.toml comments
+- 4 new tests
+
 ### API stabilization — error types
 - Added `EncodeError`, `MuxError`, `ConfigError` variants to `TarangError`
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
@@ -13,7 +23,12 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - **64-bit MP4 muxing**: MP4 muxer auto-switches from `stco` to `co64` for files > 4GB
 - **MKV chapters**: `MkvDemuxer` parses Chapters/EditionEntry/ChapterAtom EBML elements, extracts time and title; `chapters()` accessor
 - **EBML writer fix**: `write_uint()` now handles values > 0xFFFFFFFF (was truncating to 4 bytes)
-- 4 new tests: chapters parsed, no chapters, co64 branching
+- **Mp4Muxer video track support**: `Mp4Muxer::new_with_video()` for audio+video MP4 files
+  - `write_video_packet()` for video samples to track 2
+  - Video stsd with codec-specific box types: avc1 (H.264), hev1 (H.265), vp09 (VP9), av01 (AV1)
+  - vmhd, video tkhd (with dimensions), stss (sync samples), 90kHz timescale
+  - 3 new tests: video creation, error handling, codec ID verification
+- 7 new tests total for demux/mux hardening
 
 ### Bug fixes (found via shruti benchmarks)
 - **Linear resampler off-by-one on stereo buffers** — `resample()` and `resample_sinc()` now derive frame count from actual data length (`src.len() / channels`) instead of trusting `num_samples` field, preventing index-out-of-bounds panic when `num_samples` is set to total interleaved samples rather than frames
