@@ -90,7 +90,7 @@ pub fn apply_gain(buf: &AudioBuffer, gain_db: f32) -> Result<AudioBuffer> {
         .collect();
 
     Ok(AudioBuffer {
-        data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&out)),
+        data: crate::audio::sample::f32_vec_into_bytes(out),
         sample_format: buf.sample_format,
         channels: buf.channels,
         sample_rate: buf.sample_rate,

@@ -93,7 +93,7 @@ impl AudioEffect for Gain {
         let samples = crate::audio::sample::bytes_to_f32(&buf.data);
         let out: Vec<f32> = samples.iter().map(|&s| s * self.multiplier).collect();
         Ok(AudioBuffer {
-            data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&out)),
+            data: crate::audio::sample::f32_vec_into_bytes(out),
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
@@ -159,7 +159,7 @@ impl AudioEffect for HighPassFilter {
         }
 
         Ok(AudioBuffer {
-            data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&out)),
+            data: crate::audio::sample::f32_vec_into_bytes(out),
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
@@ -211,7 +211,7 @@ impl AudioEffect for Compressor {
             .collect();
 
         Ok(AudioBuffer {
-            data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&out)),
+            data: crate::audio::sample::f32_vec_into_bytes(out),
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,

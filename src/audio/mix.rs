@@ -145,7 +145,7 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     );
 
     Ok(AudioBuffer {
-        data: Bytes::copy_from_slice(f32_to_bytes(&dst)),
+        data: f32_vec_into_bytes(dst),
         sample_format: SampleFormat::F32,
         channels: target_ch as u16,
         sample_rate: buf.sample_rate,
@@ -154,7 +154,7 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     })
 }
 
-use super::sample::{bytes_to_f32, f32_to_bytes};
+use super::sample::{bytes_to_f32, f32_to_bytes, f32_vec_into_bytes};
 
 #[cfg(test)]
 mod tests {

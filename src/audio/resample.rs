@@ -58,12 +58,12 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     // compiler can auto-vectorize the inner interpolation loops.
     let mut idx0s = Vec::with_capacity(dst_frames);
     let mut idx1s = Vec::with_capacity(dst_frames);
-    let mut fracs: Vec<f64> = Vec::with_capacity(dst_frames);
+    let mut fracs: Vec<f32> = Vec::with_capacity(dst_frames);
 
     for frame in 0..dst_frames {
         let src_pos = frame as f64 / ratio;
         let src_idx = src_pos as usize;
-        let frac = src_pos - src_idx as f64;
+        let frac = (src_pos - src_idx as f64) as f32;
         idx0s.push(src_idx.min(src_frames - 1));
         idx1s.push((src_idx + 1).min(src_frames - 1));
         fracs.push(frac);
@@ -77,19 +77,19 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
             for k in 0..4 {
                 let frame = base + k;
                 let s0 = src[idx0s[frame]];
-                dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame] as f32;
+                dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
             }
         }
         for frame in (chunks * 4)..dst_frames {
             let s0 = src[idx0s[frame]];
-            dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame] as f32;
+            dst[frame] = s0 + (src[idx1s[frame]] - s0) * fracs[frame];
         }
     } else if ch == 2 {
         // Stereo fast path: process both channels per frame together
         for frame in 0..dst_frames {
             let i0 = idx0s[frame] * 2;
             let i1 = idx1s[frame] * 2;
-            let f = fracs[frame] as f32;
+            let f = fracs[frame];
             let s0l = src[i0];
             let s0r = src[i0 + 1];
             dst[frame * 2] = s0l + (src[i1] - s0l) * f;
@@ -100,7 +100,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         for frame in 0..dst_frames {
             let i0 = idx0s[frame];
             let i1 = idx1s[frame];
-            let f = fracs[frame] as f32;
+            let f = fracs[frame];
             for c in 0..ch {
                 let s0 = src[i0 * ch + c];
                 dst[frame * ch + c] = s0 + (src[i1 * ch + c] - s0) * f;
@@ -118,7 +118,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     );
 
     Ok(AudioBuffer {
-        data: Bytes::copy_from_slice(f32_to_bytes(&dst)),
+        data: f32_vec_into_bytes(dst),
         sample_format: SampleFormat::F32,
         channels: buf.channels,
         sample_rate: target_rate,
@@ -244,7 +244,7 @@ pub fn resample_sinc(
     );
 
     Ok(AudioBuffer {
-        data: Bytes::copy_from_slice(f32_to_bytes(&dst)),
+        data: f32_vec_into_bytes(dst),
         sample_format: SampleFormat::F32,
         channels: buf.channels,
         sample_rate: target_rate,
@@ -270,7 +270,7 @@ fn hann_window(x: f64, half_width: f64) -> f64 {
     }
 }
 
-use super::sample::{bytes_to_f32, f32_to_bytes};
+use super::sample::{bytes_to_f32, f32_to_bytes, f32_vec_into_bytes};
 
 #[cfg(test)]
 mod tests {

@@ -45,6 +45,21 @@ pub(crate) fn f32_to_bytes(samples: &[f32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, byte_len) }
 }
 
+/// Convert an owned `Vec<f32>` into `Bytes` without copying.
+///
+/// This avoids the double-allocation of `Bytes::copy_from_slice(f32_to_bytes(&vec))`.
+/// The Vec's allocation is transferred directly to the Bytes handle.
+pub(crate) fn f32_vec_into_bytes(samples: Vec<f32>) -> bytes::Bytes {
+    let byte_len = samples.len() * 4;
+    let ptr = samples.as_ptr() as *mut u8;
+    let cap = samples.capacity() * 4;
+    std::mem::forget(samples);
+    // SAFETY: Vec<f32> layout is compatible with Vec<u8> (same allocator, f32=4 bytes).
+    // We forget the original Vec and reconstruct a Vec<u8> with the same pointer/len/capacity.
+    let byte_vec = unsafe { Vec::from_raw_parts(ptr, byte_len, cap) };
+    bytes::Bytes::from(byte_vec)
+}
+
 /// Create an `AudioBuffer` from f32 samples (test utility, available to all audio test modules).
 #[cfg(test)]
 pub(crate) fn make_test_buffer(

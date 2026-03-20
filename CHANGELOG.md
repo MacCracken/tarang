@@ -19,6 +19,11 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
 - `Pipeline` reduced from catch-all to genuine pipeline state issues only
 
+### Performance optimizations
+- **Zero-copy f32→Bytes**: `f32_vec_into_bytes()` transfers Vec ownership to Bytes without copying; applied to resample, mix, effects, loudness (eliminates ~50% of audio pipeline allocation bandwidth)
+- **VA-API format caching**: NV12 image format queried once in constructor, not per frame (eliminates 1 ioctl/frame for encode + decode)
+- **Resample SIMD enablement**: `fracs` array changed from f64 to f32, enabling 8-wide AVX auto-vectorization in interpolation loops (~2x mono resample throughput)
+
 ### Security audit (pre-release)
 - **MKV SimpleBlock size cap**: 64MB limit prevents OOM on malformed files (was uncapped)
 - **MKV seek overflow guard**: `skip_bytes()` helper validates `esize <= i64::MAX` before seeking (12 sites fixed)

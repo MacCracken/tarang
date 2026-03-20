@@ -152,6 +152,8 @@ pub struct VaapiEncoder {
     frame_rate_num: u32,
     frame_rate_den: u32,
     frames_encoded: u64,
+    /// Cached NV12 image format (queried once in constructor).
+    nv12_fmt: cros_libva::VAImageFormat,
 }
 
 /// Number of surfaces to rotate through for encoding.
@@ -224,6 +226,17 @@ impl VaapiEncoder {
                 TarangError::HwAccelError(format!("failed to create context: {e:?}").into())
             })?;
 
+        // Cache NV12 image format (avoid per-frame ioctl)
+        let image_fmts = display.query_image_formats().map_err(|e| {
+            TarangError::HwAccelError(format!("failed to query image formats: {e:?}").into())
+        })?;
+        let nv12_fmt = image_fmts
+            .into_iter()
+            .find(|f| f.fourcc == cros_libva::VA_FOURCC_NV12)
+            .ok_or_else(|| {
+                TarangError::HwAccelError("driver does not support NV12 image format".into())
+            })?;
+
         Ok(Self {
             display,
             _config: va_config,
@@ -238,6 +251,7 @@ impl VaapiEncoder {
             frame_rate_num: config.frame_rate_num,
             frame_rate_den: config.frame_rate_den,
             frames_encoded: 0,
+            nv12_fmt,
         })
     }
 
@@ -264,16 +278,7 @@ impl VaapiEncoder {
 
         let nv12_data = yuv420p_to_nv12(&frame.data, self.width, self.height);
 
-        // Query NV12 image format for surface upload
-        let image_fmts = self.display.query_image_formats().map_err(|e| {
-            TarangError::HwAccelError(format!("failed to query image formats: {e:?}").into())
-        })?;
-        let nv12_fmt = image_fmts
-            .into_iter()
-            .find(|f| f.fourcc == cros_libva::VA_FOURCC_NV12)
-            .ok_or_else(|| {
-                TarangError::HwAccelError("driver does not support NV12 image format".into())
-            })?;
+        let nv12_fmt = self.nv12_fmt;
 
         // Create coded buffer for output bitstream
         let coded_buffer = self

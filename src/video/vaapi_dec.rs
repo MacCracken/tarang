@@ -71,6 +71,8 @@ pub struct VaapiDecoder {
     width: u32,
     height: u32,
     frames_decoded: u64,
+    /// Cached NV12 image format.
+    nv12_fmt: cros_libva::VAImageFormat,
 }
 
 impl VaapiDecoder {
@@ -138,6 +140,17 @@ impl VaapiDecoder {
                 TarangError::HwAccelError(format!("failed to create context: {e:?}").into())
             })?;
 
+        // Cache NV12 image format
+        let image_fmts = display.query_image_formats().map_err(|e| {
+            TarangError::HwAccelError(format!("query image formats: {e:?}").into())
+        })?;
+        let nv12_fmt = image_fmts
+            .into_iter()
+            .find(|f| f.fourcc == VA_FOURCC_NV12)
+            .ok_or_else(|| {
+                TarangError::HwAccelError("NV12 image format not available".into())
+            })?;
+
         Ok(Self {
             display,
             _config: config,
@@ -146,6 +159,7 @@ impl VaapiDecoder {
             width,
             height,
             frames_decoded: 0,
+            nv12_fmt,
         })
     }
 
@@ -211,15 +225,7 @@ impl VaapiDecoder {
         })?;
 
         // Read back decoded frame as NV12
-        let image_fmts = self.display.query_image_formats().map_err(|e| {
-            TarangError::HwAccelError(format!("query image formats: {e:?}").into())
-        })?;
-        let nv12_fmt = image_fmts
-            .into_iter()
-            .find(|f| f.fourcc == VA_FOURCC_NV12)
-            .ok_or_else(|| {
-                TarangError::HwAccelError("NV12 image format not available".into())
-            })?;
+        let nv12_fmt = self.nv12_fmt;
 
         let image = picture
             .create_image(
