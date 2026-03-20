@@ -84,6 +84,29 @@ jobs:
       - name: Run tests with codec features
         run: cargo test --features openh264,openh264-enc,vpx,vpx-enc,dav1d,vaapi
 
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev
+      - name: Build docs (warnings as errors)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+      - name: Verify required files exist
+        run: |
+          for file in README.md LICENSE CHANGELOG.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md VERSION; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Required file $file is missing"
+              exit 1
+            fi
+          done
+          echo "All required documentation files present"
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
