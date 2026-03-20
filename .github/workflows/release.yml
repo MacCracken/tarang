@@ -23,7 +23,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev nasm
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
       - name: Verify version consistency
         run: |
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')

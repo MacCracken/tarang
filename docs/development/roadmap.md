@@ -55,6 +55,20 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 - [ ] **Scaling/resize** — bilinear/bicubic/Lanczos frame scaling as a standalone operation
 - [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available
 
+### ai-hwaccel integration
+
+- [ ] **Optional `ai-hwaccel` dependency** — feature-gated (`hwaccel` feature) to query GPU/NPU/TPU capabilities at runtime via `AcceleratorRegistry`
+- [ ] **Automatic backend selection** — `VideoDecoder::new_auto()` queries ai-hwaccel for available hardware; picks fastest backend (VA-API → dav1d → openh264 fallback chain)
+- [ ] **Hardware-aware transcoding** — use detected accelerators to distribute encode work across available GPUs
+- [ ] **`tarang probe --hw`** — surface hardware acceleration capabilities alongside media info
+- [ ] **Capability matching** — map ai-hwaccel's `AcceleratorProfile` to tarang codec features (e.g., NVIDIA → VA-API H.264, Intel → QSV, Apple → VideoToolbox)
+
+### AGNOS ecosystem integration
+
+- [ ] **Jalwa integration** — ensure Jalwa media player can use tarang as a drop-in decode/playback library
+- [ ] **Tazama integration** — verify transcode pipeline (demux → decode → process → encode → mux) works end-to-end for video editor use cases
+- [ ] **Shruti integration** — validate low-latency audio I/O path (PipeWire SPSC ring buffer) for DAW real-time constraints
+
 ### AI features
 
 - [ ] **Offline transcription** — bundle a small Whisper model (tiny/base) for local inference without hoosh dependency
