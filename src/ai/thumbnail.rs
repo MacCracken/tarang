@@ -13,6 +13,7 @@ use std::time::Duration;
 use super::scene::SceneBoundary;
 
 /// Thumbnail output format.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbnailFormat {
     Jpeg,

@@ -47,6 +47,7 @@ use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame, Vide
 use std::time::Duration;
 
 /// Video decoder status
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderStatus {
     /// Ready to accept input
@@ -60,6 +61,7 @@ pub enum DecoderStatus {
 }
 
 /// Codec backend implementation
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderBackend {
     /// dav1d — AV1 decoder (C FFI)

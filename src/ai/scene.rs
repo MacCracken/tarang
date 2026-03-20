@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 /// Type of scene boundary detected.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SceneBoundaryType {
     HardCut,

@@ -12,6 +12,8 @@ struct VpxImageGuard {
 
 impl Drop for VpxImageGuard {
     fn drop(&mut self) {
+        // SAFETY: self.img was successfully allocated by vpx_img_alloc and has not been freed.
+        // VpxImageGuard is only constructed after a successful alloc, so this is always valid.
         unsafe { vpx_sys::vpx_img_free(&mut self.img) };
     }
 }
@@ -72,6 +74,7 @@ impl VpxEncoder {
             ));
         }
 
+        // SAFETY: vpx_codec_vp8_cx/vp9_cx return static function pointers; always valid.
         let iface = match config.codec {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_cx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_cx() },
@@ -85,12 +88,15 @@ impl VpxEncoder {
         // Get default encoder config — use MaybeUninit since the struct may contain
         // types that cannot be zero-initialized (e.g. function pointers)
         let mut cfg = std::mem::MaybeUninit::<vpx_sys::vpx_codec_enc_cfg_t>::uninit();
+        // SAFETY: iface is a valid codec interface pointer obtained above. cfg.as_mut_ptr()
+        // points to uninitialized memory that vpx_codec_enc_config_default will fully populate.
         let res = unsafe { vpx_sys::vpx_codec_enc_config_default(iface, cfg.as_mut_ptr(), 0) };
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
             return Err(TarangError::Pipeline(
                 format!("vpx_codec_enc_config_default failed: {res:?}").into(),
             ));
         }
+        // SAFETY: vpx_codec_enc_config_default returned VPX_CODEC_OK, so cfg is fully initialized.
         let mut cfg = unsafe { cfg.assume_init() };
 
         cfg.g_w = config.width;
@@ -101,7 +107,10 @@ impl VpxEncoder {
         cfg.g_threads = config.threads;
         cfg.g_error_resilient = 0;
 
+        // SAFETY: vpx_codec_ctx_t is a C struct with no invariants; zero-init is valid pre-init state.
         let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
+        // SAFETY: ctx is zero-initialized (valid pre-init state), iface and cfg are valid from
+        // above. ABI version is passed for compatibility checking by libvpx.
         let res = unsafe {
             vpx_sys::vpx_codec_enc_init_ver(
                 &mut ctx,
@@ -120,6 +129,8 @@ impl VpxEncoder {
 
         // Set speed/quality tradeoff for VP9
         if config.codec == VideoCodec::Vp9 {
+            // SAFETY: ctx was successfully initialized by vpx_codec_enc_init_ver above.
+            // VP8E_SET_CPUUSED is a valid control ID for VP9 encoders.
             let ctl_res = unsafe {
                 vpx_sys::vpx_codec_control_(
                     &mut ctx,
@@ -128,6 +139,7 @@ impl VpxEncoder {
                 )
             };
             if ctl_res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
+                // SAFETY: ctx was successfully initialized; must be destroyed before returning.
                 unsafe { vpx_sys::vpx_codec_destroy(&mut ctx) };
                 return Err(TarangError::Pipeline(
                     format!("vpx VP8E_SET_CPUUSED failed: {ctl_res:?}").into(),
@@ -163,7 +175,10 @@ impl VpxEncoder {
             ));
         }
 
+        // SAFETY: vpx_image_t is a C struct; zero-init is valid pre-alloc state.
         let mut raw_img: vpx_sys::vpx_image_t = unsafe { std::mem::zeroed() };
+        // SAFETY: raw_img is zero-initialized. vpx_img_alloc will populate it for the
+        // given I420 format and validated dimensions. Returns null on failure (checked below).
         let alloc_result = unsafe {
             vpx_sys::vpx_img_alloc(
                 &mut raw_img,
@@ -202,7 +217,11 @@ impl VpxEncoder {
                 ));
             }
             let dst_offset = row as isize * guard.img.stride[0] as isize;
+            // SAFETY: planes[0] is valid for stride[0]*height bytes (vpx_img_alloc guarantee).
+            // dst_offset = row * stride is within the allocated Y plane.
             let dst_ptr = unsafe { guard.img.planes[0].offset(dst_offset) };
+            // SAFETY: src bounds validated above, dst is within the allocated image plane,
+            // and width bytes are copied (non-overlapping: frame.data vs vpx image memory).
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     frame.data[src_start..].as_ptr(),
@@ -231,7 +250,9 @@ impl VpxEncoder {
                 ));
             }
             let dst_offset = row as isize * guard.img.stride[1] as isize;
+            // SAFETY: planes[1] is valid for stride[1]*chroma_h bytes (vpx_img_alloc guarantee).
             let dst_ptr = unsafe { guard.img.planes[1].offset(dst_offset) };
+            // SAFETY: src bounds validated above, dst within allocated U plane, non-overlapping.
             unsafe {
                 std::ptr::copy_nonoverlapping(frame.data[src_start..].as_ptr(), dst_ptr, chroma_w);
             }
@@ -256,7 +277,9 @@ impl VpxEncoder {
                 ));
             }
             let dst_offset = row as isize * guard.img.stride[2] as isize;
+            // SAFETY: planes[2] is valid for stride[2]*chroma_h bytes (vpx_img_alloc guarantee).
             let dst_ptr = unsafe { guard.img.planes[2].offset(dst_offset) };
+            // SAFETY: src bounds validated above, dst within allocated V plane, non-overlapping.
             unsafe {
                 std::ptr::copy_nonoverlapping(frame.data[src_start..].as_ptr(), dst_ptr, chroma_w);
             }
@@ -266,6 +289,8 @@ impl VpxEncoder {
         let pts = frame.timestamp.as_millis() as i64;
 
         // VPX_DL_GOOD_QUALITY = 1000000
+        // SAFETY: self.ctx was successfully initialized in new(). guard.img was allocated and
+        // populated with valid I420 data above. pts is a valid presentation timestamp.
         let res =
             unsafe { vpx_sys::vpx_codec_encode(&mut self.ctx, &guard.img, pts, 1, 0, 1_000_000) };
 
@@ -286,6 +311,8 @@ impl VpxEncoder {
 
     /// Flush the encoder — signal end of stream and drain remaining packets.
     pub fn flush(&mut self) -> Result<Vec<Vec<u8>>> {
+        // SAFETY: self.ctx is a valid initialized encoder. Passing null image signals
+        // end-of-stream to libvpx, which drains any buffered frames.
         let res = unsafe {
             vpx_sys::vpx_codec_encode(&mut self.ctx, std::ptr::null(), self.pts, 1, 0, 1_000_000)
         };
@@ -304,14 +331,21 @@ impl VpxEncoder {
         let mut iter: vpx_sys::vpx_codec_iter_t = std::ptr::null();
 
         loop {
+            // SAFETY: self.ctx is a valid encoder that just completed an encode call.
+            // iter is initialized to null and updated by libvpx to track iteration state.
             let pkt = unsafe { vpx_sys::vpx_codec_get_cx_data(&mut self.ctx, &mut iter) };
             if pkt.is_null() {
                 break;
             }
 
+            // SAFETY: null check above guarantees pkt is valid. The pointer remains valid
+            // until the next vpx_codec_encode call, which does not happen in this loop.
             let pkt = unsafe { &*pkt };
             if pkt.kind == vpx_sys::vpx_codec_cx_pkt_kind::VPX_CODEC_CX_FRAME_PKT {
+                // SAFETY: pkt.kind == CX_FRAME_PKT guarantees the frame union variant is active.
                 let frame_data = unsafe { pkt.data.frame };
+                // SAFETY: frame_data.buf points to frame_data.sz bytes of encoded data owned
+                // by libvpx. Valid until the next encode call. Data is copied to Vec immediately.
                 let buf = unsafe {
                     std::slice::from_raw_parts(frame_data.buf as *const u8, frame_data.sz)
                 };
@@ -337,6 +371,8 @@ impl VpxEncoder {
 
 impl Drop for VpxEncoder {
     fn drop(&mut self) {
+        // SAFETY: self.ctx was successfully initialized in new() and has not been destroyed.
+        // VpxEncoder is not Clone, so this runs exactly once.
         unsafe {
             vpx_sys::vpx_codec_destroy(&mut self.ctx);
         }

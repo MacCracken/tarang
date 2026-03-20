@@ -20,7 +20,7 @@ unsafe impl Send for VpxDecoder {}
 
 impl VpxDecoder {
     pub fn new(codec: VideoCodec) -> Result<Self> {
-        // Safety: vpx_codec_vp8_dx/vp9_dx return static function pointers; always valid.
+        // SAFETY: vpx_codec_vp8_dx/vp9_dx return static function pointers; always valid.
         let iface = match codec {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_dx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_dx() },
@@ -31,10 +31,12 @@ impl VpxDecoder {
             }
         };
 
-        // Safety: vpx_codec_ctx_t is a C struct with no invariants; zero-init is valid pre-init state.
+        // SAFETY: vpx_codec_ctx_t is a C struct with no invariants; zero-init is valid pre-init state.
         let mut ctx: vpx_sys::vpx_codec_ctx_t = unsafe { std::mem::zeroed() };
         let cfg: *const vpx_sys::vpx_codec_dec_cfg_t = std::ptr::null();
 
+        // SAFETY: ctx is zero-initialized (valid pre-init state), iface is valid from above,
+        // cfg is null (use defaults). ABI version is passed for compatibility checking.
         let res = unsafe {
             vpx_sys::vpx_codec_dec_init_ver(
                 &mut ctx,
@@ -74,6 +76,8 @@ impl VpxDecoder {
             ));
         }
 
+        // SAFETY: self.ctx was successfully initialized in new(). data.as_ptr() is valid for
+        // data.len() bytes (validated to fit in u32 above). No user_priv data is passed.
         let res = unsafe {
             vpx_sys::vpx_codec_decode(
                 &mut self.ctx,
@@ -94,11 +98,16 @@ impl VpxDecoder {
         let mut iter: vpx_sys::vpx_codec_iter_t = std::ptr::null();
 
         loop {
+            // SAFETY: self.ctx is valid. iter is initialized to null and updated by libvpx
+            // to track iteration state. Returns null when no more frames are available.
             let img = unsafe { vpx_sys::vpx_codec_get_frame(&mut self.ctx, &mut iter) };
             if img.is_null() {
                 break;
             }
 
+            // SAFETY: null check above guarantees img is valid. The pointer remains valid
+            // until the next vpx_codec_decode call, which does not happen in this loop.
+            // All pixel data is copied into owned Vecs before returning.
             let img = unsafe { &*img };
             let width = img.d_w;
             let height = img.d_h;
@@ -155,7 +164,7 @@ impl VpxDecoder {
             }
 
             // Copy YUV420p planes using isize stride arithmetic (handles negative strides).
-            // Safety: libvpx guarantees planes[0..3] point to valid I420 image data with
+            // SAFETY: libvpx guarantees planes[0..3] point to valid I420 image data with
             // stride[0..3] bytes per row. Format was validated above. Pointers remain valid
             // until the next vpx_codec_decode call, which we don't make within this scope.
             // Y plane
@@ -213,6 +222,8 @@ impl VpxDecoder {
 
 impl Drop for VpxDecoder {
     fn drop(&mut self) {
+        // SAFETY: self.ctx was successfully initialized in new() and has not been destroyed.
+        // VpxDecoder is not Clone, so this runs exactly once.
         unsafe {
             vpx_sys::vpx_codec_destroy(&mut self.ctx);
         }

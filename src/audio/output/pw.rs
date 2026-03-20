@@ -57,7 +57,7 @@ impl RingBuffer {
             if wp >= self.capacity {
                 return to_write;
             }
-            // Safety: single producer, wp is only modified here.
+            // SAFETY: single producer, wp is only modified here.
             // data[wp] is not read by consumer until write_pos is updated.
             unsafe {
                 let ptr = self.data.as_ptr().add(wp) as *mut f32;
@@ -88,7 +88,7 @@ impl RingBuffer {
     }
 }
 
-// Safety: RingBuffer uses atomics for coordination. The data vec is only written
+// SAFETY: RingBuffer uses atomics for coordination. The data vec is only written
 // by the producer (via raw pointer with atomic fence) and read by the consumer
 // after the write_pos fence. This is the standard SPSC ring buffer pattern.
 unsafe impl Sync for RingBuffer {}
@@ -187,7 +187,7 @@ impl AudioOutput for PipeWireOutput {
                 "audio buffer size not aligned to f32".into(),
             ));
         }
-        // Safety: AudioBuffer data originates from F32 serialization; heap alignment >= 8 bytes.
+        // SAFETY: AudioBuffer data originates from F32 serialization; heap alignment >= 8 bytes.
         debug_assert!(buf.data.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0);
         let samples =
             unsafe { std::slice::from_raw_parts(buf.data.as_ptr() as *const f32, byte_len / 4) };
@@ -349,7 +349,7 @@ fn pw_thread_main(
                     && let Some(slice) = data.data()
                 {
                     let n_frames = slice.len() / (ch * 4);
-                    // Safety: PipeWire MAP_BUFFERS guarantees the slice is valid F32-aligned
+                    // SAFETY: PipeWire MAP_BUFFERS guarantees the slice is valid F32-aligned
                     // memory for the negotiated format (F32LE).
                     let dst: &mut [f32] = unsafe {
                         std::slice::from_raw_parts_mut(slice.as_ptr() as *mut f32, n_frames * ch)

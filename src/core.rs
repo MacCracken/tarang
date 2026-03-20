@@ -10,6 +10,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// Supported audio codecs
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AudioCodec {
     Pcm,
@@ -38,6 +39,7 @@ impl std::fmt::Display for AudioCodec {
 }
 
 /// Supported video codecs
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VideoCodec {
     H264,
@@ -62,6 +64,7 @@ impl std::fmt::Display for VideoCodec {
 }
 
 /// Supported container formats
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ContainerFormat {
     Mp4,
@@ -150,6 +153,7 @@ impl std::fmt::Display for ContainerFormat {
 }
 
 /// Sample format for decoded audio
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SampleFormat {
     I16,
@@ -170,6 +174,7 @@ impl SampleFormat {
 }
 
 /// Pixel format for decoded video frames
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PixelFormat {
     Yuv420p,
@@ -204,6 +209,7 @@ pub struct VideoStreamInfo {
 }
 
 /// A stream within a media container
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamInfo {
     Audio(AudioStreamInfo),
@@ -298,6 +304,7 @@ pub struct VideoFrame {
 }
 
 /// Pipeline status
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PipelineState {
     Idle,
@@ -310,6 +317,7 @@ pub enum PipelineState {
 }
 
 /// Error types for the Tarang framework
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum TarangError {
     #[error("unsupported codec: {0}")]

@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Media content classification
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentType {
     Music,

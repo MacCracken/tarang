@@ -6,19 +6,19 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
-## Waiting on Upstream
-
-- [ ] **VA-API encode pipeline completion** — surface upload, parameter buffers, bitstream readback. Blocked on `cros-codecs` updating its `cros-libva` dependency from `^0.0.12` to `^0.0.13`. Upstream repo has had no commits since March 2025. Workarounds: fork cros-codecs, use `[patch]`, or downgrade to cros-libva 0.0.12. *(added 2026-03-16, audited 2026-03-19)*
-
-- [ ] **rav1e `paste` dependency** — PR #3442 merged upstream (paste → pastey), but no release since 0.8.1 (September 2025). Resolves automatically when rav1e cuts 0.8.2 or 0.9.0. *(added 2026-03-16, audited 2026-03-19)*
-
----
-
 ## Pre-v1 (0.20–0.x)
+
+### P1 — Must-fix before 0.20.3
+
+- [x] **`#[non_exhaustive]` on all public enums** — 16 enums across 7 files: `AudioCodec`, `VideoCodec`, `ContainerFormat`, `SampleFormat`, `PixelFormat`, `StreamInfo`, `TarangError`, `PipelineState`, `ContentType`, `SceneBoundaryType`, `ThumbnailFormat`, `WhisperModel`, `ChannelLayout`, `DecoderStatus`, `DecoderBackend`, `HwCodecDirection`
+- [x] **Unsafe audit pass** — All `unsafe` blocks now have `// SAFETY:` comments. Normalized inconsistent `Safety:` → `SAFETY:` across `sample.rs`, `pw.rs`, `vpx_dec.rs`. Documented 16 new blocks in `vpx_enc.rs`, 8 in `vpx_dec.rs`.
+- [ ] **Pure Rust AAC encode alternative** — currently FFI-only via `fdk-aac`. Evaluate pure-Rust options or document the FFI requirement clearly for downstream consumers who can't link C libraries.
+- [ ] **H.265 decode path** — no BSD-licensed decoder available today. Document the gap explicitly in lib.rs codec tables and evaluate VA-API decode as a hardware-only fallback.
+- [ ] **Unblock VA-API encode** — upstream `cros-libva` stalled since March 2025. Fork `cros-codecs` or use `[patch]` to unblock rather than waiting indefinitely.
+- [ ] **Unblock rav1e** — no release since Sept 2025. Pin `paste` workaround or vendor the fix to stop blocking AV1 encode in CI.
 
 ### API stabilization
 
-- [ ] **`#[non_exhaustive]` on all public enums** — `AudioCodec`, `VideoCodec`, `ContainerFormat`, `SampleFormat`, `PixelFormat`, `StreamInfo`, `TarangError` — prevents downstream breakage when adding variants
 - [ ] **Review public API surface** — audit every `pub fn`, `pub struct`, `pub enum` for consistency; ensure all public items have doc comments; hide internal helpers behind `pub(crate)`
 - [ ] **Consistent error types** — evaluate whether `TarangError` variants cover all failure modes cleanly; consider module-specific error enums that convert into `TarangError`
 - [ ] **Trait stability** — finalize `Demuxer`, `Muxer`, `AudioEncoder`, `AudioOutput` traits; document contracts, lifetimes, and threading guarantees

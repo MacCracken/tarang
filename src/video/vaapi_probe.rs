@@ -12,6 +12,7 @@ use cros_libva::{Display, VAEntrypoint, VAProfile};
 use std::path::Path;
 
 /// Direction a hardware codec operates in.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HwCodecDirection {
     Decode,

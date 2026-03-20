@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::{TranscriptionRequest, TranscriptionResult};
 
 /// Whisper model size selection.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhisperModel {
     Tiny,

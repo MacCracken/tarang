@@ -26,7 +26,7 @@ pub(crate) fn bytes_to_f32(bytes: &[u8]) -> &[f32] {
     if bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) != 0 {
         return &[];
     }
-    // Safety: AudioBuffer data originates from Vec<f32> serialized via to_le_bytes or
+    // SAFETY: AudioBuffer data originates from Vec<f32> serialized via to_le_bytes or
     // Bytes::copy_from_slice, so alignment is guaranteed by the heap allocator (>=8 bytes).
     // Length is validated above as a multiple of 4. Alignment is checked above at runtime.
     unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const f32, len) }
@@ -40,7 +40,7 @@ pub(crate) fn f32_to_bytes(samples: &[f32]) -> &[u8] {
     if byte_len == 0 {
         return &[];
     }
-    // Safety: f32 is Pod-like — every bit pattern is valid when read as u8.
+    // SAFETY: f32 is Pod-like — every bit pattern is valid when read as u8.
     // byte_len is validated above via checked_mul.
     unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, byte_len) }
 }

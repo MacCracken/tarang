@@ -6,6 +6,7 @@ use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 use bytes::Bytes;
 
 /// Target channel layout for mixing
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelLayout {
     Mono,
