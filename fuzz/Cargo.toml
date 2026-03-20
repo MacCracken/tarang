@@ -1,0 +1,46 @@
+[package]
+name = "tarang-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tarang]
+path = ".."
+
+# Patch cros-libva (inherited from parent workspace)
+[patch.crates-io]
+cros-libva = { path = "../patches/cros-libva" }
+
+[[bin]]
+name = "fuzz_wav"
+path = "fuzz_targets/fuzz_wav.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mp4"
+path = "fuzz_targets/fuzz_mp4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mkv"
+path = "fuzz_targets/fuzz_mkv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ogg"
+path = "fuzz_targets/fuzz_ogg.rs"
+test = false
+doc = false
+bench = false

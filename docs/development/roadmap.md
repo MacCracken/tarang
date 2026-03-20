@@ -10,7 +10,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### Demuxer/muxer hardening
 
-- [ ] **Fuzz testing** — `cargo-fuzz` targets for MP4, MKV, OGG, WAV demuxers with malformed input
+(all done — fuzz targets created, 1 crash found and fixed)
 
 ### Audio pipeline
 

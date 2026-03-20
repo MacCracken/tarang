@@ -1769,7 +1769,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires correct multi-chain OGG page construction with valid CRC
     fn ogg_chained_stream_discovery() {
         // Build an OGG file with two chained logical streams:
         // Stream 1 (serial 1): Vorbis 44100 Hz, BOS + data + EOS
@@ -1879,7 +1878,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires correct multi-chain OGG page construction with valid CRC
     fn ogg_chained_opus_stream() {
         // Chain a Vorbis stream followed by an Opus stream
         let mut buf = Vec::new();

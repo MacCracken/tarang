@@ -19,6 +19,12 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
 - `Pipeline` reduced from catch-all to genuine pipeline state issues only
 
+### Fuzz testing
+- `cargo-fuzz` targets for all 4 demuxers: `fuzz_wav`, `fuzz_mp4`, `fuzz_mkv`, `fuzz_ogg`
+- Each target: probe → read packets → seek on arbitrary input
+- **Bug found and fixed**: MP4 `data_offset + data_size` arithmetic overflow on malformed boxes — replaced with `saturating_add` across 12 sites
+- Results: WAV 15.8M runs, MP4 11.4M runs, MKV 6.3M runs, OGG 6.9M runs — 0 crashes after fix
+
 ### Demuxer/muxer hardening
 - **64-bit MP4 muxing**: MP4 muxer auto-switches from `stco` to `co64` for files > 4GB
 - **MKV chapters**: `MkvDemuxer` parses Chapters/EditionEntry/ChapterAtom EBML elements, extracts time and title; `chapters()` accessor

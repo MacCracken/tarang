@@ -182,7 +182,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         } else {
             self.reader
-                .seek(SeekFrom::Start(header.data_offset + header.data_size))
+                .seek(SeekFrom::Start(header.data_offset.saturating_add(header.data_size)))
                 .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         }
         Ok(())
@@ -283,7 +283,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
         // We need to manually iterate since we can't borrow self mutably in the closure
         // while also borrowing track. So we collect box positions first.
-        let trak_end = header.data_offset + header.data_size;
+        let trak_end = header.data_offset.saturating_add(header.data_size);
         self.reader
             .seek(SeekFrom::Start(header.data_offset))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
@@ -326,7 +326,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
 
             match &child.box_type {
                 b"tkhd" => self.parse_tkhd(&child, track)?,
@@ -386,7 +386,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
 
             if &child.box_type == b"elst" {
                 self.parse_elst(&child, track)?;
@@ -473,7 +473,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
 
             match &child.box_type {
                 b"mdhd" => self.parse_mdhd(&child, track)?,
@@ -571,7 +571,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
 
             if &child.box_type == b"stbl" {
                 self.parse_stbl_children(child_end.min(end), track)?;
@@ -595,7 +595,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
 
             match &child.box_type {
                 b"stsd" => self.parse_stsd(&child, track)?,
@@ -993,7 +993,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
     /// Parse a moof (movie fragment) box, extracting sample offsets/sizes from trun.
     fn parse_moof(&mut self, header: &BoxHeader) -> Result<()> {
-        let moof_end = header.data_offset + header.data_size;
+        let moof_end = header.data_offset.saturating_add(header.data_size);
         let moof_start = header.data_offset - 8; // include 8-byte box header
         self.reader
             .seek(SeekFrom::Start(header.data_offset))
@@ -1006,7 +1006,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
             if &child.box_type == b"traf" {
                 self.parse_traf(&child, moof_start)?;
             }
@@ -1019,7 +1019,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
     /// Parse a traf (track fragment) box.
     fn parse_traf(&mut self, header: &BoxHeader, moof_start: u64) -> Result<()> {
-        let traf_end = header.data_offset + header.data_size;
+        let traf_end = header.data_offset.saturating_add(header.data_size);
         self.reader
             .seek(SeekFrom::Start(header.data_offset))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
@@ -1033,7 +1033,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 Ok(h) => h,
                 Err(_) => break,
             };
-            let child_end = child.data_offset + child.data_size;
+            let child_end = child.data_offset.saturating_add(child.data_size);
             match &child.box_type {
                 b"tfhd" => {
                     self.reader.seek(SeekFrom::Start(child.data_offset)).map_err(|e| {
@@ -1189,7 +1189,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                 }
                 b"moov" => {
                     found_moov = true;
-                    let moov_end = header.data_offset + header.data_size;
+                    let moov_end = header.data_offset.saturating_add(header.data_size);
                     // Parse moov children
                     while self.reader.stream_position().map_err(|e| {
                         TarangError::DemuxError(format!("position error: {e}").into())
@@ -1199,7 +1199,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                             Ok(h) => h,
                             Err(_) => break,
                         };
-                        let child_end = child.data_offset + child.data_size;
+                        let child_end = child.data_offset.saturating_add(child.data_size);
 
                         match &child.box_type {
                             b"mvhd" => self.parse_mvhd(&child)?,
