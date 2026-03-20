@@ -87,7 +87,7 @@ impl AudioOutput for NullOutput {
 
     fn write(&mut self, buf: &AudioBuffer) -> Result<()> {
         if self.config.is_none() {
-            return Err(TarangError::Pipeline("output not opened".to_string()));
+            return Err(TarangError::Pipeline("output not opened".into()));
         }
         self.samples_written += buf.num_samples as u64;
         Ok(())

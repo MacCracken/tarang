@@ -54,7 +54,7 @@ impl AudioDecoder {
                 sample_rate: 0,
                 channels: 0,
             }),
-            other => Err(TarangError::UnsupportedCodec(other.to_string())),
+            other => Err(TarangError::UnsupportedCodec(other.to_string().into())),
         }
     }
 

@@ -12,10 +12,10 @@ use bytes::Bytes;
 /// For offline/high-quality use, sinc interpolation can be added later.
 pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     if target_rate == 0 {
-        return Err(TarangError::Pipeline("target sample rate is 0".to_string()));
+        return Err(TarangError::Pipeline("target sample rate is 0".into()));
     }
     if buf.sample_rate == 0 || buf.channels == 0 || buf.num_samples == 0 {
-        return Err(TarangError::Pipeline("invalid source buffer".to_string()));
+        return Err(TarangError::Pipeline("invalid source buffer".into()));
     }
 
     // No-op if rates match — return cheaply without cloning data
@@ -38,13 +38,16 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     let dst_frames = (src_frames as f64 * ratio).round() as usize;
 
     if dst_frames == 0 {
-        return Err(TarangError::Pipeline("resampled to 0 frames".to_string()));
+        return Err(TarangError::Pipeline("resampled to 0 frames".into()));
     }
 
     if dst_frames.checked_mul(ch).is_none() || dst_frames * ch * 4 >= 1_073_741_824 {
-        return Err(TarangError::Pipeline(format!(
-            "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
-        )));
+        return Err(TarangError::Pipeline(
+            format!(
+                "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
+            )
+            .into(),
+        ));
     }
 
     let mut dst = vec![0.0f32; dst_frames * ch];
@@ -130,14 +133,14 @@ pub fn resample_sinc(
     window_size: usize,
 ) -> Result<AudioBuffer> {
     if target_rate == 0 {
-        return Err(TarangError::Pipeline("target sample rate is 0".to_string()));
+        return Err(TarangError::Pipeline("target sample rate is 0".into()));
     }
     if buf.sample_rate == 0 || buf.channels == 0 || buf.num_samples == 0 {
-        return Err(TarangError::Pipeline("invalid source buffer".to_string()));
+        return Err(TarangError::Pipeline("invalid source buffer".into()));
     }
     if window_size == 0 || window_size > 1024 {
         return Err(TarangError::Pipeline(
-            "window_size must be between 1 and 1024".to_string(),
+            "window_size must be between 1 and 1024".into(),
         ));
     }
     if buf.sample_rate == target_rate {
@@ -159,13 +162,16 @@ pub fn resample_sinc(
     let dst_frames = (src_frames as f64 * ratio).round() as usize;
 
     if dst_frames == 0 {
-        return Err(TarangError::Pipeline("resampled to 0 frames".to_string()));
+        return Err(TarangError::Pipeline("resampled to 0 frames".into()));
     }
 
     if dst_frames.checked_mul(ch).is_none() || dst_frames * ch * 4 >= 1_073_741_824 {
-        return Err(TarangError::Pipeline(format!(
-            "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
-        )));
+        return Err(TarangError::Pipeline(
+            format!(
+                "resampled output too large: {dst_frames} frames * {ch} channels exceeds 1GB cap"
+            )
+            .into(),
+        ));
     }
 
     let half_win = window_size as i64;

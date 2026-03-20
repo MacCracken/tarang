@@ -45,7 +45,7 @@ pub trait Demuxer {
 /// Detect container format from magic bytes
 pub fn detect_format(header: &[u8]) -> Result<ContainerFormat> {
     ContainerFormat::from_magic(header)
-        .ok_or_else(|| TarangError::UnsupportedFormat("unknown format".to_string()))
+        .ok_or_else(|| TarangError::UnsupportedFormat("unknown format".into()))
 }
 
 #[cfg(test)]

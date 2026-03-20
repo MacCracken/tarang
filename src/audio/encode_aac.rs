@@ -18,7 +18,7 @@ impl AacEncoder {
     pub fn new(config: &EncoderConfig) -> Result<Self> {
         if config.codec != AudioCodec::Aac {
             return Err(TarangError::UnsupportedCodec(
-                "AacEncoder requires Aac codec".to_string(),
+                "AacEncoder requires Aac codec".into(),
             ));
         }
 
@@ -30,15 +30,16 @@ impl AacEncoder {
                 1 => fdk_aac::enc::ChannelMode::Mono,
                 2 => fdk_aac::enc::ChannelMode::Stereo,
                 _ => {
-                    return Err(TarangError::UnsupportedCodec(format!(
-                        "AAC supports 1 or 2 channels, got {}",
-                        config.channels
-                    )));
+                    return Err(TarangError::UnsupportedCodec(
+                        format!("AAC supports 1 or 2 channels, got {}", config.channels).into(),
+                    ));
                 }
             },
             audio_object_type: fdk_aac::enc::AudioObjectType::Mpeg4LowComplexity,
         })
-        .map_err(|e| TarangError::Pipeline(format!("failed to create AAC encoder: {e:?}")))?;
+        .map_err(|e| {
+            TarangError::Pipeline(format!("failed to create AAC encoder: {e:?}").into())
+        })?;
 
         // Pre-allocate i16 buffer for a typical frame size (1024 samples per channel)
         let initial_capacity = 1024 * config.channels as usize;
@@ -69,7 +70,7 @@ impl AudioEncoder for AacEncoder {
         let info = self
             .encoder
             .info()
-            .map_err(|e| TarangError::Pipeline(format!("AAC encoder info error: {e:?}")))?;
+            .map_err(|e| TarangError::Pipeline(format!("AAC encoder info error: {e:?}").into()))?;
         let frame_size = info.frameLength as usize * self.channels as usize;
 
         let mut offset = 0;
@@ -78,7 +79,7 @@ impl AudioEncoder for AacEncoder {
             let result = self
                 .encoder
                 .encode(&self.buf_i16[offset..offset + frame_size], &mut out)
-                .map_err(|e| TarangError::Pipeline(format!("AAC encode error: {e:?}")))?;
+                .map_err(|e| TarangError::Pipeline(format!("AAC encode error: {e:?}").into()))?;
 
             if result.output_size > 0 {
                 out.truncate(result.output_size);
@@ -97,7 +98,7 @@ impl AudioEncoder for AacEncoder {
         let result = self
             .encoder
             .encode(empty, &mut out)
-            .map_err(|e| TarangError::Pipeline(format!("AAC flush error: {e:?}")))?;
+            .map_err(|e| TarangError::Pipeline(format!("AAC flush error: {e:?}").into()))?;
 
         if result.output_size > 0 {
             out.truncate(result.output_size);

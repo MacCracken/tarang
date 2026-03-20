@@ -63,12 +63,12 @@ impl VpxEncoder {
         crate::core::validate_video_dimensions(config.width, config.height)?;
         if config.frame_rate_num == 0 || config.frame_rate_den == 0 {
             return Err(TarangError::Pipeline(
-                "VpxEncoder: frame_rate_num and frame_rate_den must be non-zero".to_string(),
+                "VpxEncoder: frame_rate_num and frame_rate_den must be non-zero".into(),
             ));
         }
         if config.frame_rate_num > i32::MAX as u32 || config.frame_rate_den > i32::MAX as u32 {
             return Err(TarangError::Pipeline(
-                "VpxEncoder: frame_rate_num/den must fit in i32".to_string(),
+                "VpxEncoder: frame_rate_num/den must fit in i32".into(),
             ));
         }
 
@@ -76,9 +76,9 @@ impl VpxEncoder {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_cx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_cx() },
             other => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "VpxEncoder does not support {other}"
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("VpxEncoder does not support {other}").into(),
+                ));
             }
         };
 
@@ -87,9 +87,9 @@ impl VpxEncoder {
         let mut cfg = std::mem::MaybeUninit::<vpx_sys::vpx_codec_enc_cfg_t>::uninit();
         let res = unsafe { vpx_sys::vpx_codec_enc_config_default(iface, cfg.as_mut_ptr(), 0) };
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::Pipeline(format!(
-                "vpx_codec_enc_config_default failed: {res:?}"
-            )));
+            return Err(TarangError::Pipeline(
+                format!("vpx_codec_enc_config_default failed: {res:?}").into(),
+            ));
         }
         let mut cfg = unsafe { cfg.assume_init() };
 
@@ -113,9 +113,9 @@ impl VpxEncoder {
         };
 
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::Pipeline(format!(
-                "vpx_codec_enc_init failed: {res:?}"
-            )));
+            return Err(TarangError::Pipeline(
+                format!("vpx_codec_enc_init failed: {res:?}").into(),
+            ));
         }
 
         // Set speed/quality tradeoff for VP9
@@ -129,9 +129,9 @@ impl VpxEncoder {
             };
             if ctl_res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
                 unsafe { vpx_sys::vpx_codec_destroy(&mut ctx) };
-                return Err(TarangError::Pipeline(format!(
-                    "vpx VP8E_SET_CPUUSED failed: {ctl_res:?}"
-                )));
+                return Err(TarangError::Pipeline(
+                    format!("vpx VP8E_SET_CPUUSED failed: {ctl_res:?}").into(),
+                ));
             }
         }
 
@@ -154,10 +154,13 @@ impl VpxEncoder {
         let expected_size = crate::core::yuv420p_frame_size(self.width, self.height);
 
         if frame.data.len() < expected_size {
-            return Err(TarangError::Pipeline(format!(
-                "VideoFrame data too small: got {} bytes, expected {expected_size}",
-                frame.data.len()
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "VideoFrame data too small: got {} bytes, expected {expected_size}",
+                    frame.data.len()
+                )
+                .into(),
+            ));
         }
 
         let mut raw_img: vpx_sys::vpx_image_t = unsafe { std::mem::zeroed() };
@@ -172,7 +175,7 @@ impl VpxEncoder {
         };
 
         if alloc_result.is_null() {
-            return Err(TarangError::Pipeline("vpx_img_alloc failed".to_string()));
+            return Err(TarangError::Pipeline("vpx_img_alloc failed".into()));
         }
 
         // RAII guard created only after successful alloc — no forget() needed
@@ -186,14 +189,17 @@ impl VpxEncoder {
         for row in 0..self.height as usize {
             let src_start = row
                 .checked_mul(self.width as usize)
-                .ok_or_else(|| TarangError::Pipeline("Y plane row*width overflow".to_string()))?;
+                .ok_or_else(|| TarangError::Pipeline("Y plane row*width overflow".into()))?;
             if src_start + self.width as usize > frame.data.len() {
-                return Err(TarangError::Pipeline(format!(
-                    "Y plane src out of bounds: {} + {} > {}",
-                    src_start,
-                    self.width,
-                    frame.data.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!(
+                        "Y plane src out of bounds: {} + {} > {}",
+                        src_start,
+                        self.width,
+                        frame.data.len()
+                    )
+                    .into(),
+                ));
             }
             let dst_offset = row as isize * guard.img.stride[0] as isize;
             let dst_ptr = unsafe { guard.img.planes[0].offset(dst_offset) };
@@ -211,15 +217,18 @@ impl VpxEncoder {
         for row in 0..chroma_h {
             let row_offset = row
                 .checked_mul(chroma_w)
-                .ok_or_else(|| TarangError::Pipeline("U plane row*width overflow".to_string()))?;
+                .ok_or_else(|| TarangError::Pipeline("U plane row*width overflow".into()))?;
             let src_start = u_offset + row_offset;
             if src_start + chroma_w > frame.data.len() {
-                return Err(TarangError::Pipeline(format!(
-                    "U plane src out of bounds: {} + {} > {}",
-                    src_start,
-                    chroma_w,
-                    frame.data.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!(
+                        "U plane src out of bounds: {} + {} > {}",
+                        src_start,
+                        chroma_w,
+                        frame.data.len()
+                    )
+                    .into(),
+                ));
             }
             let dst_offset = row as isize * guard.img.stride[1] as isize;
             let dst_ptr = unsafe { guard.img.planes[1].offset(dst_offset) };
@@ -233,15 +242,18 @@ impl VpxEncoder {
         for row in 0..chroma_h {
             let row_offset = row
                 .checked_mul(chroma_w)
-                .ok_or_else(|| TarangError::Pipeline("V plane row*width overflow".to_string()))?;
+                .ok_or_else(|| TarangError::Pipeline("V plane row*width overflow".into()))?;
             let src_start = v_offset + row_offset;
             if src_start + chroma_w > frame.data.len() {
-                return Err(TarangError::Pipeline(format!(
-                    "V plane src out of bounds: {} + {} > {}",
-                    src_start,
-                    chroma_w,
-                    frame.data.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!(
+                        "V plane src out of bounds: {} + {} > {}",
+                        src_start,
+                        chroma_w,
+                        frame.data.len()
+                    )
+                    .into(),
+                ));
             }
             let dst_offset = row as isize * guard.img.stride[2] as isize;
             let dst_ptr = unsafe { guard.img.planes[2].offset(dst_offset) };
@@ -261,9 +273,9 @@ impl VpxEncoder {
         drop(guard);
 
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::Pipeline(format!(
-                "vpx_codec_encode failed: {res:?}"
-            )));
+            return Err(TarangError::Pipeline(
+                format!("vpx_codec_encode failed: {res:?}").into(),
+            ));
         }
 
         self.pts = pts + 1;
@@ -279,9 +291,9 @@ impl VpxEncoder {
         };
 
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::Pipeline(format!(
-                "vpx_codec_encode flush failed: {res:?}"
-            )));
+            return Err(TarangError::Pipeline(
+                format!("vpx_codec_encode flush failed: {res:?}").into(),
+            ));
         }
 
         Ok(self.drain_packets())

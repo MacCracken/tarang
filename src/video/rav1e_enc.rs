@@ -55,15 +55,18 @@ impl Rav1eEncoder {
             .with_encoder_config(enc_config)
             .with_threads(0); // auto
 
-        let context = rav1e_cfg
-            .new_context()
-            .map_err(|e| TarangError::Pipeline(format!("rav1e context creation failed: {e}")))?;
+        let context = rav1e_cfg.new_context().map_err(|e| {
+            TarangError::Pipeline(format!("rav1e context creation failed: {e}").into())
+        })?;
 
         if !config.width.is_multiple_of(2) || !config.height.is_multiple_of(2) {
-            return Err(TarangError::Pipeline(format!(
-                "rav1e requires even dimensions, got {}x{}",
-                config.width, config.height
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "rav1e requires even dimensions, got {}x{}",
+                    config.width, config.height
+                )
+                .into(),
+            ));
         }
 
         Ok(Self {
@@ -77,10 +80,13 @@ impl Rav1eEncoder {
     /// Send a YUV420p frame to the encoder.
     pub fn send_frame(&mut self, frame: &VideoFrame) -> Result<()> {
         if frame.width != self.width || frame.height != self.height {
-            return Err(TarangError::Pipeline(format!(
-                "frame dimensions {}x{} don't match encoder {}x{}",
-                frame.width, frame.height, self.width, self.height
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "frame dimensions {}x{} don't match encoder {}x{}",
+                    frame.width, frame.height, self.width, self.height
+                )
+                .into(),
+            ));
         }
 
         let mut enc_frame = self.context.new_frame();
@@ -90,11 +96,14 @@ impl Rav1eEncoder {
         let chroma_h = (self.height / 2) as usize;
         let expected_size = crate::core::yuv420p_frame_size(self.width, self.height);
         if frame.data.len() < expected_size {
-            return Err(TarangError::Pipeline(format!(
-                "frame data too small: {} bytes, expected at least {}",
-                frame.data.len(),
-                expected_size
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "frame data too small: {} bytes, expected at least {}",
+                    frame.data.len(),
+                    expected_size
+                )
+                .into(),
+            ));
         }
 
         // Y plane
@@ -104,14 +113,13 @@ impl Rav1eEncoder {
             let needed = (self.height as usize - 1)
                 .checked_mul(stride)
                 .ok_or_else(|| {
-                    TarangError::Pipeline("Y plane (height-1)*stride overflow".to_string())
+                    TarangError::Pipeline("Y plane (height-1)*stride overflow".into())
                 })?
                 + self.width as usize;
             if plane.len() < needed {
-                return Err(TarangError::Pipeline(format!(
-                    "rav1e Y plane buffer too small: {} < {needed}",
-                    plane.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!("rav1e Y plane buffer too small: {} < {needed}", plane.len()).into(),
+                ));
             }
             for row in 0..self.height as usize {
                 let src_start = row * self.width as usize;
@@ -128,13 +136,12 @@ impl Rav1eEncoder {
             let stride = enc_frame.planes[1].cfg.stride;
             let plane = enc_frame.planes[1].data_origin_mut();
             let needed = (chroma_h - 1).checked_mul(stride).ok_or_else(|| {
-                TarangError::Pipeline("U plane (chroma_h-1)*stride overflow".to_string())
+                TarangError::Pipeline("U plane (chroma_h-1)*stride overflow".into())
             })? + chroma_w;
             if plane.len() < needed {
-                return Err(TarangError::Pipeline(format!(
-                    "rav1e U plane buffer too small: {} < {needed}",
-                    plane.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!("rav1e U plane buffer too small: {} < {needed}", plane.len()).into(),
+                ));
             }
             for row in 0..chroma_h {
                 let src_start = u_offset + row * chroma_w;
@@ -151,13 +158,12 @@ impl Rav1eEncoder {
             let stride = enc_frame.planes[2].cfg.stride;
             let plane = enc_frame.planes[2].data_origin_mut();
             let needed = (chroma_h - 1).checked_mul(stride).ok_or_else(|| {
-                TarangError::Pipeline("V plane (chroma_h-1)*stride overflow".to_string())
+                TarangError::Pipeline("V plane (chroma_h-1)*stride overflow".into())
             })? + chroma_w;
             if plane.len() < needed {
-                return Err(TarangError::Pipeline(format!(
-                    "rav1e V plane buffer too small: {} < {needed}",
-                    plane.len()
-                )));
+                return Err(TarangError::Pipeline(
+                    format!("rav1e V plane buffer too small: {} < {needed}", plane.len()).into(),
+                ));
             }
             for row in 0..chroma_h {
                 let src_start = v_offset + row * chroma_w;
@@ -170,7 +176,7 @@ impl Rav1eEncoder {
 
         self.context
             .send_frame(enc_frame)
-            .map_err(|e| TarangError::Pipeline(format!("rav1e send_frame: {e}")))?;
+            .map_err(|e| TarangError::Pipeline(format!("rav1e send_frame: {e}").into()))?;
 
         Ok(())
     }
@@ -184,7 +190,9 @@ impl Rav1eEncoder {
             }
             Err(rav1e::EncoderStatus::NeedMoreData) => Ok(None),
             Err(rav1e::EncoderStatus::LimitReached) => Ok(None),
-            Err(e) => Err(TarangError::Pipeline(format!("rav1e receive_packet: {e}"))),
+            Err(e) => Err(TarangError::Pipeline(
+                format!("rav1e receive_packet: {e}").into(),
+            )),
         }
     }
 
@@ -204,7 +212,7 @@ impl Rav1eEncoder {
                 Err(rav1e::EncoderStatus::EnoughData) => continue,
                 Err(rav1e::EncoderStatus::Encoded) => continue,
                 Err(e) => {
-                    return Err(TarangError::Pipeline(format!("rav1e flush: {e}")));
+                    return Err(TarangError::Pipeline(format!("rav1e flush: {e}").into()));
                 }
             }
         }

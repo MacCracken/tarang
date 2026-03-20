@@ -19,7 +19,7 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
 
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &format_opts, &meta_opts)
-        .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}")))?;
+        .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}").into()))?;
 
     let format = probed.format;
 

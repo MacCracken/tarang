@@ -28,7 +28,7 @@ impl Default for DaimonConfig {
     fn default() -> Self {
         Self {
             endpoint: std::env::var("DAIMON_URL")
-                .unwrap_or_else(|_| "http://localhost:8090".to_string()),
+                .unwrap_or_else(|_| "http://localhost:8090".into()),
             api_key: std::env::var("DAIMON_API_KEY").ok(),
             timeout_secs: 30,
         }
@@ -47,10 +47,9 @@ pub struct HooshLlmConfig {
 impl Default for HooshLlmConfig {
     fn default() -> Self {
         Self {
-            endpoint: std::env::var("HOOSH_URL")
-                .unwrap_or_else(|_| "http://localhost:8088".to_string()),
+            endpoint: std::env::var("HOOSH_URL").unwrap_or_else(|_| "http://localhost:8088".into()),
             api_key: std::env::var("HOOSH_API_KEY").ok(),
-            model: std::env::var("HOOSH_MODEL").unwrap_or_else(|_| "llama3".to_string()),
+            model: std::env::var("HOOSH_MODEL").unwrap_or_else(|_| "llama3".into()),
             timeout_secs: 60,
         }
     }
@@ -71,20 +70,19 @@ impl DaimonClient {
         if config.endpoint.is_empty()
             || !(config.endpoint.starts_with("http://") || config.endpoint.starts_with("https://"))
         {
-            return Err(TarangError::NetworkError(format!(
-                "invalid daimon endpoint: {:?}",
-                config.endpoint
-            )));
+            return Err(TarangError::NetworkError(
+                format!("invalid daimon endpoint: {:?}", config.endpoint).into(),
+            ));
         }
         if config.timeout_secs == 0 {
             return Err(TarangError::NetworkError(
-                "daimon timeout must be > 0".to_string(),
+                "daimon timeout must be > 0".into(),
             ));
         }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}").into()))?;
         Ok(Self { config, http })
     }
 
@@ -106,7 +104,7 @@ impl DaimonClient {
         let embedding = fingerprint_to_embedding(fingerprint);
         if embedding.is_empty() {
             return Err(TarangError::AiError(
-                "empty fingerprint — nothing to index".to_string(),
+                "empty fingerprint — nothing to index".into(),
             ));
         }
 
@@ -126,20 +124,20 @@ impl DaimonClient {
         }
 
         let resp = req.send().await.map_err(|e| {
-            TarangError::NetworkError(format!("vector insert failed for {file_path}: {e}"))
+            TarangError::NetworkError(format!("vector insert failed for {file_path}: {e}").into())
         })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body_bytes = read_body_limited(resp).await.unwrap_or_default();
             let body = String::from_utf8_lossy(&body_bytes);
-            return Err(TarangError::NetworkError(format!(
-                "vector insert returned {status}: {body}"
-            )));
+            return Err(TarangError::NetworkError(
+                format!("vector insert returned {status}: {body}").into(),
+            ));
         }
 
         info!(path = %file_path, hashes = fingerprint.hashes.len(), "Indexed fingerprint in vector store");
-        Ok(file_path.to_string())
+        Ok(file_path.into())
     }
 
     /// Search for similar media by fingerprint.
@@ -168,7 +166,7 @@ impl DaimonClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| TarangError::NetworkError(format!("vector search failed: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("vector search failed: {e}").into()))?;
         // NOTE: search failure logged at call site via warn! (see query_media)
 
         if !resp.status().is_success() {
@@ -219,7 +217,7 @@ impl DaimonClient {
         }
 
         let resp = req.send().await.map_err(|e| {
-            TarangError::NetworkError(format!("RAG ingest failed for {file_path}: {e}"))
+            TarangError::NetworkError(format!("RAG ingest failed for {file_path}: {e}").into())
         })?;
 
         if !resp.status().is_success() {
@@ -249,7 +247,7 @@ impl DaimonClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| TarangError::NetworkError(format!("RAG query failed: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("RAG query failed: {e}").into()))?;
         // NOTE: non-success status logged via warn! above
 
         if !resp.status().is_success() {
@@ -287,10 +285,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("agent registration failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            TarangError::NetworkError(format!("agent registration failed: {e}").into())
+        })?;
 
         if resp.status().is_success() {
             info!("Registered tarang as multimodal agent with daimon");
@@ -314,10 +311,9 @@ impl DaimonClient {
             req = req.header("Authorization", auth);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| TarangError::NetworkError(format!("collection create failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            TarangError::NetworkError(format!("collection create failed: {e}").into())
+        })?;
 
         // 409 = already exists, which is fine
         if resp.status().is_success() || resp.status().as_u16() == 409 {
@@ -343,20 +339,19 @@ impl HooshLlmClient {
         if config.endpoint.is_empty()
             || !(config.endpoint.starts_with("http://") || config.endpoint.starts_with("https://"))
         {
-            return Err(TarangError::NetworkError(format!(
-                "invalid hoosh LLM endpoint: {:?}",
-                config.endpoint
-            )));
+            return Err(TarangError::NetworkError(
+                format!("invalid hoosh LLM endpoint: {:?}", config.endpoint).into(),
+            ));
         }
         if config.timeout_secs == 0 {
             return Err(TarangError::NetworkError(
-                "hoosh timeout must be > 0".to_string(),
+                "hoosh timeout must be > 0".into(),
             ));
         }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("HTTP client error: {e}").into()))?;
         Ok(Self { config, http })
     }
 
@@ -388,14 +383,14 @@ impl HooshLlmClient {
         }
 
         let resp = req.send().await.map_err(|e| {
-            TarangError::NetworkError(format!("hoosh LLM describe_content failed: {e}"))
+            TarangError::NetworkError(format!("hoosh LLM describe_content failed: {e}").into())
         })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            return Err(TarangError::NetworkError(format!(
-                "hoosh LLM returned {status}"
-            )));
+            return Err(TarangError::NetworkError(
+                format!("hoosh LLM returned {status}").into(),
+            ));
         }
 
         let result: serde_json::Value = read_json_limited(resp).await?;
@@ -475,19 +470,24 @@ const MAX_RESPONSE_BYTES: usize = 10_485_760;
 async fn read_body_limited(resp: reqwest::Response) -> Result<bytes::Bytes> {
     let content_length = resp.content_length().unwrap_or(0) as usize;
     if content_length > MAX_RESPONSE_BYTES {
-        return Err(TarangError::NetworkError(format!(
-            "response body too large: {content_length} bytes (limit: {MAX_RESPONSE_BYTES})"
-        )));
+        return Err(TarangError::NetworkError(
+            format!(
+                "response body too large: {content_length} bytes (limit: {MAX_RESPONSE_BYTES})"
+            )
+            .into(),
+        ));
     }
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| TarangError::NetworkError(format!("failed to read response body: {e}")))?;
+    let body = resp.bytes().await.map_err(|e| {
+        TarangError::NetworkError(format!("failed to read response body: {e}").into())
+    })?;
     if body.len() > MAX_RESPONSE_BYTES {
-        return Err(TarangError::NetworkError(format!(
-            "response body too large: {} bytes (limit: {MAX_RESPONSE_BYTES})",
-            body.len()
-        )));
+        return Err(TarangError::NetworkError(
+            format!(
+                "response body too large: {} bytes (limit: {MAX_RESPONSE_BYTES})",
+                body.len()
+            )
+            .into(),
+        ));
     }
     Ok(body)
 }
@@ -495,8 +495,9 @@ async fn read_body_limited(resp: reqwest::Response) -> Result<bytes::Bytes> {
 /// Read a response body and deserialize as JSON, with size limit.
 async fn read_json_limited<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
     let body = read_body_limited(resp).await?;
-    serde_json::from_slice(&body)
-        .map_err(|e| TarangError::NetworkError(format!("failed to parse JSON response: {e}")))
+    serde_json::from_slice(&body).map_err(|e| {
+        TarangError::NetworkError(format!("failed to parse JSON response: {e}").into())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -696,8 +697,8 @@ mod tests {
             })],
             duration: Some(Duration::from_secs(180)),
             file_size: None,
-            title: Some("Test Song".to_string()),
-            artist: Some("Test Artist".to_string()),
+            title: Some("Test Song".into()),
+            artist: Some("Test Artist".into()),
             album: None,
         };
         let analysis = MediaAnalysis {
@@ -731,8 +732,8 @@ mod tests {
             })],
             duration: Some(Duration::from_secs(300)),
             file_size: None,
-            title: Some("Opus No. 1".to_string()),
-            artist: Some("Composer".to_string()),
+            title: Some("Opus No. 1".into()),
+            artist: Some("Composer".into()),
             album: None,
         };
         let analysis = MediaAnalysis {
@@ -762,8 +763,8 @@ mod tests {
         };
         let desc = parse_description_response(json, &analysis).unwrap();
         assert_eq!(desc.summary, "A rock song");
-        assert_eq!(desc.genre, Some("rock".to_string()));
-        assert_eq!(desc.mood, Some("energetic".to_string()));
+        assert_eq!(desc.genre, Some("rock".into()));
+        assert_eq!(desc.mood, Some("energetic".into()));
         assert_eq!(desc.tags, vec!["guitar", "drums"]);
     }
 
@@ -779,7 +780,7 @@ mod tests {
         };
         let desc = parse_description_response(response, &analysis).unwrap();
         assert_eq!(desc.summary, "A calm podcast");
-        assert_eq!(desc.genre, Some("talk".to_string()));
+        assert_eq!(desc.genre, Some("talk".into()));
     }
 
     #[test]
@@ -827,10 +828,10 @@ mod tests {
     fn content_description_serialization() {
         let desc = ContentDescription {
             summary: "A test".to_string(),
-            genre: Some("test".to_string()),
+            genre: Some("test".into()),
             mood: None,
             tags: vec!["a".to_string(), "b".to_string()],
-            content_rating: Some("G".to_string()),
+            content_rating: Some("G".into()),
         };
         let json = serde_json::to_string(&desc).unwrap();
         let parsed: ContentDescription = serde_json::from_str(&json).unwrap();
@@ -938,14 +939,14 @@ mod tests {
             ],
             duration: Some(Duration::from_secs(120)),
             file_size: Some(75_000_000),
-            title: Some("My Video".to_string()),
+            title: Some("My Video".into()),
             artist: None,
             album: None,
         };
         let analysis = MediaAnalysis {
             content_type: crate::ai::ContentType::Movie,
             quality_score: 85.0,
-            codec_recommendation: Some("use AV1".to_string()),
+            codec_recommendation: Some("use AV1".into()),
             estimated_complexity: 0.7,
             tags: vec!["video".to_string(), "hd".to_string()],
         };
@@ -974,7 +975,7 @@ mod tests {
                     duration: Some(Duration::from_secs(60)),
                 }),
                 StreamInfo::Subtitle {
-                    language: Some("en".to_string()),
+                    language: Some("en".into()),
                 },
                 StreamInfo::Subtitle { language: None },
             ],
@@ -1028,7 +1029,7 @@ mod tests {
             ],
             duration: Some(Duration::from_secs(600)),
             file_size: None,
-            title: Some("Nature Documentary".to_string()),
+            title: Some("Nature Documentary".into()),
             artist: None,
             album: None,
         };
@@ -1114,9 +1115,9 @@ Hope that helps!"#;
         };
         let desc = parse_description_response(response, &analysis).unwrap();
         assert_eq!(desc.summary, "A classical piece");
-        assert_eq!(desc.genre, Some("classical".to_string()));
-        assert_eq!(desc.mood, Some("serene".to_string()));
-        assert_eq!(desc.content_rating, Some("G".to_string()));
+        assert_eq!(desc.genre, Some("classical".into()));
+        assert_eq!(desc.mood, Some("serene".into()));
+        assert_eq!(desc.content_rating, Some("G".into()));
     }
 
     #[test]

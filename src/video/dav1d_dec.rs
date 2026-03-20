@@ -17,7 +17,7 @@ impl Dav1dDecoder {
     pub fn new() -> Result<Self> {
         let settings = dav1d::Settings::new();
         let decoder = dav1d::Decoder::with_settings(&settings)
-            .map_err(|e| TarangError::DecodeError(format!("dav1d init failed: {e}")))?;
+            .map_err(|e| TarangError::DecodeError(format!("dav1d init failed: {e}").into()))?;
 
         Ok(Self {
             decoder,
@@ -33,7 +33,7 @@ impl Dav1dDecoder {
     pub fn send_data(&mut self, data: &[u8], timestamp: i64) -> Result<()> {
         self.decoder
             .send_data(data.to_vec(), Some(timestamp), None, None)
-            .map_err(|e| TarangError::DecodeError(format!("dav1d send_data: {e}")))
+            .map_err(|e| TarangError::DecodeError(format!("dav1d send_data: {e}").into()))
     }
 
     /// Try to get a decoded frame. Returns None if the decoder needs more data.
@@ -45,10 +45,13 @@ impl Dav1dDecoder {
 
                 // Only YUV420p is supported; reject other layouts
                 if pic.pixel_layout() != dav1d::PixelLayout::I420 {
-                    return Err(TarangError::DecodeError(format!(
-                        "unsupported pixel layout {:?}, expected I420",
-                        pic.pixel_layout()
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!(
+                            "unsupported pixel layout {:?}, expected I420",
+                            pic.pixel_layout()
+                        )
+                        .into(),
+                    ));
                 }
 
                 let stride = pic.stride(dav1d::PlanarImageComponent::Y) as usize;
@@ -62,9 +65,9 @@ impl Dav1dDecoder {
                 // least as wide as the plane's pixel row, otherwise row-copy below
                 // would read out of bounds.
                 if stride < width as usize {
-                    return Err(TarangError::DecodeError(format!(
-                        "Y plane stride {stride} is less than width {width}"
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!("Y plane stride {stride} is less than width {width}").into(),
+                    ));
                 }
                 let y_size = width as usize * height as usize;
 
@@ -75,10 +78,9 @@ impl Dav1dDecoder {
                     let start = row * stride;
                     let end = start + width as usize;
                     if end > plane.len() {
-                        return Err(TarangError::DecodeError(format!(
-                            "Y plane too small: need {end}, have {}",
-                            plane.len()
-                        )));
+                        return Err(TarangError::DecodeError(
+                            format!("Y plane too small: need {end}, have {}", plane.len()).into(),
+                        ));
                     }
                     yuv_data.extend_from_slice(&plane[start..end]);
                 }
@@ -90,24 +92,25 @@ impl Dav1dDecoder {
                 let v_plane = pic.plane(dav1d::PlanarImageComponent::V);
 
                 if u_stride < chroma_w {
-                    return Err(TarangError::DecodeError(format!(
-                        "U plane stride {u_stride} is less than chroma width {chroma_w}"
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!("U plane stride {u_stride} is less than chroma width {chroma_w}")
+                            .into(),
+                    ));
                 }
                 if v_stride < chroma_w {
-                    return Err(TarangError::DecodeError(format!(
-                        "V plane stride {v_stride} is less than chroma width {chroma_w}"
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!("V plane stride {v_stride} is less than chroma width {chroma_w}")
+                            .into(),
+                    ));
                 }
 
                 for row in 0..chroma_h {
                     let start = row * u_stride;
                     let end = start + chroma_w;
                     if end > u_plane.len() {
-                        return Err(TarangError::DecodeError(format!(
-                            "U plane too small: need {end}, have {}",
-                            u_plane.len()
-                        )));
+                        return Err(TarangError::DecodeError(
+                            format!("U plane too small: need {end}, have {}", u_plane.len()).into(),
+                        ));
                     }
                     yuv_data.extend_from_slice(&u_plane[start..end]);
                 }
@@ -115,10 +118,9 @@ impl Dav1dDecoder {
                     let start = row * v_stride;
                     let end = start + chroma_w;
                     if end > v_plane.len() {
-                        return Err(TarangError::DecodeError(format!(
-                            "V plane too small: need {end}, have {}",
-                            v_plane.len()
-                        )));
+                        return Err(TarangError::DecodeError(
+                            format!("V plane too small: need {end}, have {}", v_plane.len()).into(),
+                        ));
                     }
                     yuv_data.extend_from_slice(&v_plane[start..end]);
                 }
@@ -138,7 +140,9 @@ impl Dav1dDecoder {
                 }))
             }
             Err(dav1d::Error::Again) => Ok(None),
-            Err(e) => Err(TarangError::DecodeError(format!("dav1d decode: {e}"))),
+            Err(e) => Err(TarangError::DecodeError(
+                format!("dav1d decode: {e}").into(),
+            )),
         }
     }
 

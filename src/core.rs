@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -275,13 +276,13 @@ pub fn yuv420p_frame_size(width: u32, height: u32) -> usize {
 pub fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
     if width == 0 || height == 0 {
         return Err(TarangError::Pipeline(
-            "width and height must be non-zero".to_string(),
+            "width and height must be non-zero".into(),
         ));
     }
     if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
-        return Err(TarangError::Pipeline(format!(
-            "dimensions must be even, got {width}x{height}"
-        )));
+        return Err(TarangError::Pipeline(
+            format!("dimensions must be even, got {width}x{height}").into(),
+        ));
     }
     Ok(())
 }
@@ -312,27 +313,27 @@ pub enum PipelineState {
 #[derive(Debug, thiserror::Error)]
 pub enum TarangError {
     #[error("unsupported codec: {0}")]
-    UnsupportedCodec(String),
+    UnsupportedCodec(Cow<'static, str>),
     #[error("unsupported container format: {0}")]
-    UnsupportedFormat(String),
+    UnsupportedFormat(Cow<'static, str>),
     #[error("decode error: {0}")]
-    DecodeError(String),
+    DecodeError(Cow<'static, str>),
     #[error("demux error: {0}")]
-    DemuxError(String),
+    DemuxError(Cow<'static, str>),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("end of stream")]
     EndOfStream,
     #[error("pipeline error: {0}")]
-    Pipeline(String),
+    Pipeline(Cow<'static, str>),
     #[error("hardware acceleration error: {0}")]
-    HwAccelError(String),
+    HwAccelError(Cow<'static, str>),
     #[error("AI feature error: {0}")]
-    AiError(String),
+    AiError(Cow<'static, str>),
     #[error("network error: {0}")]
-    NetworkError(String),
+    NetworkError(Cow<'static, str>),
     #[error("image error: {0}")]
-    ImageError(String),
+    ImageError(Cow<'static, str>),
 }
 
 pub type Result<T> = std::result::Result<T, TarangError>;
@@ -490,12 +491,12 @@ mod tests {
                     duration: Some(Duration::from_secs(120)),
                 }),
                 StreamInfo::Subtitle {
-                    language: Some("en".to_string()),
+                    language: Some("en".into()),
                 },
             ],
             duration: Some(Duration::from_secs(120)),
             file_size: Some(75_000_000),
-            title: Some("Test Video".to_string()),
+            title: Some("Test Video".into()),
             artist: None,
             album: None,
         };
@@ -526,9 +527,9 @@ mod tests {
             })],
             duration: Some(Duration::from_secs(300)),
             file_size: Some(30_000_000),
-            title: Some("Track 1".to_string()),
-            artist: Some("Artist".to_string()),
-            album: Some("Album".to_string()),
+            title: Some("Track 1".into()),
+            artist: Some("Artist".into()),
+            album: Some("Album".into()),
         };
 
         assert!(!info.has_video());
@@ -545,7 +546,7 @@ mod tests {
 
     #[test]
     fn tarang_error_display() {
-        let err = TarangError::UnsupportedCodec("HEVC".to_string());
+        let err = TarangError::UnsupportedCodec("HEVC".into());
         assert_eq!(err.to_string(), "unsupported codec: HEVC");
 
         let err = TarangError::EndOfStream;
@@ -664,7 +665,7 @@ mod tests {
             id: Uuid::new_v4(),
             format: ContainerFormat::Mkv,
             streams: vec![StreamInfo::Subtitle {
-                language: Some("fr".to_string()),
+                language: Some("fr".into()),
             }],
             duration: None,
             file_size: None,
@@ -679,35 +680,35 @@ mod tests {
     #[test]
     fn tarang_error_all_variants_display() {
         assert_eq!(
-            TarangError::UnsupportedFormat("X".to_string()).to_string(),
+            TarangError::UnsupportedFormat("X".into()).to_string(),
             "unsupported container format: X"
         );
         assert_eq!(
-            TarangError::DecodeError("bad".to_string()).to_string(),
+            TarangError::DecodeError("bad".into()).to_string(),
             "decode error: bad"
         );
         assert_eq!(
-            TarangError::DemuxError("fail".to_string()).to_string(),
+            TarangError::DemuxError("fail".into()).to_string(),
             "demux error: fail"
         );
         assert_eq!(
-            TarangError::Pipeline("broken".to_string()).to_string(),
+            TarangError::Pipeline("broken".into()).to_string(),
             "pipeline error: broken"
         );
         assert_eq!(
-            TarangError::HwAccelError("no gpu".to_string()).to_string(),
+            TarangError::HwAccelError("no gpu".into()).to_string(),
             "hardware acceleration error: no gpu"
         );
         assert_eq!(
-            TarangError::AiError("oops".to_string()).to_string(),
+            TarangError::AiError("oops".into()).to_string(),
             "AI feature error: oops"
         );
         assert_eq!(
-            TarangError::NetworkError("timeout".to_string()).to_string(),
+            TarangError::NetworkError("timeout".into()).to_string(),
             "network error: timeout"
         );
         assert_eq!(
-            TarangError::ImageError("corrupt".to_string()).to_string(),
+            TarangError::ImageError("corrupt".into()).to_string(),
             "image error: corrupt"
         );
     }

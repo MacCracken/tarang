@@ -98,9 +98,7 @@ impl ThumbnailGenerator {
             let (dst_w, dst_h) = self.compute_target_dims(frame.width, frame.height);
 
             let src_img: RgbImage = ImageBuffer::from_raw(frame.width, frame.height, rgb)
-                .ok_or_else(|| {
-                    TarangError::ImageError("failed to create image buffer".to_string())
-                })?;
+                .ok_or_else(|| TarangError::ImageError("failed to create image buffer".into()))?;
 
             let resized = image::imageops::resize(
                 &src_img,
@@ -183,10 +181,13 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
         return Ok(frame.data.to_vec());
     }
     if frame.pixel_format != PixelFormat::Yuv420p {
-        return Err(TarangError::ImageError(format!(
-            "unsupported pixel format for RGB conversion: {:?}",
-            frame.pixel_format
-        )));
+        return Err(TarangError::ImageError(
+            format!(
+                "unsupported pixel format for RGB conversion: {:?}",
+                frame.pixel_format
+            )
+            .into(),
+        ));
     }
 
     let w = frame.width as usize;
@@ -196,7 +197,7 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
     let chroma_h = h.div_ceil(2);
 
     if frame.data.len() < y_size + 2 * chroma_w * chroma_h {
-        return Err(TarangError::ImageError("frame data too small".to_string()));
+        return Err(TarangError::ImageError("frame data too small".into()));
     }
 
     let y_plane = &frame.data[..y_size];
@@ -282,13 +283,13 @@ fn encode_image(
             let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
             encoder
                 .write_image(raw, w, h, image::ExtendedColorType::Rgb8)
-                .map_err(|e| TarangError::ImageError(format!("JPEG encode failed: {e}")))?;
+                .map_err(|e| TarangError::ImageError(format!("JPEG encode failed: {e}").into()))?;
         }
         ThumbnailFormat::Png => {
             let encoder = PngEncoder::new(&mut buf);
             encoder
                 .write_image(raw, w, h, image::ExtendedColorType::Rgb8)
-                .map_err(|e| TarangError::ImageError(format!("PNG encode failed: {e}")))?;
+                .map_err(|e| TarangError::ImageError(format!("PNG encode failed: {e}").into()))?;
         }
     }
     Ok(buf.into_inner())

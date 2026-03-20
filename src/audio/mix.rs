@@ -31,27 +31,30 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
         });
     }
     if src_ch == 0 || buf.num_samples == 0 {
-        return Err(TarangError::Pipeline("invalid source buffer".to_string()));
+        return Err(TarangError::Pipeline("invalid source buffer".into()));
     }
 
     let src = bytes_to_f32(&buf.data);
     let frames = buf.num_samples;
     let required_src = frames
         .checked_mul(src_ch)
-        .ok_or_else(|| TarangError::Pipeline("source size overflow".to_string()))?;
+        .ok_or_else(|| TarangError::Pipeline("source size overflow".into()))?;
     if src.len() < required_src {
-        return Err(TarangError::Pipeline(format!(
-            "source buffer too small: need {} samples, have {}",
-            required_src,
-            src.len()
-        )));
+        return Err(TarangError::Pipeline(
+            format!(
+                "source buffer too small: need {} samples, have {}",
+                required_src,
+                src.len()
+            )
+            .into(),
+        ));
     }
     let required_dst = frames
         .checked_mul(target_ch)
-        .ok_or_else(|| TarangError::Pipeline("destination size overflow".to_string()))?;
+        .ok_or_else(|| TarangError::Pipeline("destination size overflow".into()))?;
     if required_dst.checked_mul(4).is_none() {
         return Err(TarangError::Pipeline(
-            "destination buffer size exceeds addressable memory".to_string(),
+            "destination buffer size exceeds addressable memory".into(),
         ));
     }
     let mut dst = vec![0.0f32; required_dst];
@@ -135,9 +138,9 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
             }
         }
         _ => {
-            return Err(TarangError::Pipeline(format!(
-                "unsupported channel mix: {src_ch} → {target_ch}"
-            )));
+            return Err(TarangError::Pipeline(
+                format!("unsupported channel mix: {src_ch} → {target_ch}").into(),
+            ));
         }
     }
 

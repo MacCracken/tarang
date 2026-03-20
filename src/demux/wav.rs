@@ -41,12 +41,12 @@ impl<R: Read + Seek> WavDemuxer<R> {
 impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
     fn probe(&mut self) -> Result<MediaInfo> {
         let mut header = [0u8; 12];
-        self.reader
-            .read_exact(&mut header)
-            .map_err(|e| TarangError::DemuxError(format!("failed to read WAV header: {e}")))?;
+        self.reader.read_exact(&mut header).map_err(|e| {
+            TarangError::DemuxError(format!("failed to read WAV header: {e}").into())
+        })?;
 
         if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-            return Err(TarangError::UnsupportedFormat("not a WAV file".to_string()));
+            return Err(TarangError::UnsupportedFormat("not a WAV file".into()));
         }
 
         // Parse chunks
@@ -67,7 +67,7 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             if chunk_id == b"fmt " {
                 let mut fmt = [0u8; 16];
                 self.reader.read_exact(&mut fmt).map_err(|e| {
-                    TarangError::DemuxError(format!("failed to read fmt chunk: {e}"))
+                    TarangError::DemuxError(format!("failed to read fmt chunk: {e}").into())
                 })?;
 
                 self.channels = u16::from_le_bytes([fmt[2], fmt[3]]);
@@ -78,35 +78,32 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
                 if chunk_size > 16 {
                     self.reader
                         .seek(std::io::SeekFrom::Current((chunk_size - 16) as i64))
-                        .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+                        .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
                 }
             } else if chunk_id == b"data" {
-                self.data_offset = self
-                    .reader
-                    .stream_position()
-                    .map_err(|e| TarangError::DemuxError(format!("failed to get position: {e}")))?;
+                self.data_offset = self.reader.stream_position().map_err(|e| {
+                    TarangError::DemuxError(format!("failed to get position: {e}").into())
+                })?;
                 self.data_size = chunk_size;
                 break;
             } else {
                 self.reader
                     .seek(std::io::SeekFrom::Current(chunk_size as i64))
-                    .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+                    .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
             }
         }
 
         if self.sample_rate == 0 {
-            return Err(TarangError::DemuxError("no fmt chunk found".to_string()));
+            return Err(TarangError::DemuxError("no fmt chunk found".into()));
         }
 
         if self.channels == 0 {
-            return Err(TarangError::DemuxError(
-                "invalid WAV: channels is 0".to_string(),
-            ));
+            return Err(TarangError::DemuxError("invalid WAV: channels is 0".into()));
         }
 
         if self.bits_per_sample == 0 {
             return Err(TarangError::DemuxError(
-                "invalid WAV: bits_per_sample is 0".to_string(),
+                "invalid WAV: bits_per_sample is 0".into(),
             ));
         }
 
@@ -164,7 +161,7 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
         let bytes_per_sample = self.bits_per_sample as u64 / 8;
         if bytes_per_sample == 0 {
             return Err(TarangError::DemuxError(
-                "invalid WAV: bytes_per_sample is 0".to_string(),
+                "invalid WAV: bytes_per_sample is 0".into(),
             ));
         }
 
@@ -177,7 +174,7 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
         let n = self
             .reader
             .read(&mut buf)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
         if n == 0 {
             return Err(TarangError::EndOfStream);
         }
@@ -206,7 +203,7 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
         let bytes_per_sample = (self.bits_per_sample as u64 / 8) * self.channels as u64;
         if bytes_per_sample == 0 {
             return Err(TarangError::DemuxError(
-                "cannot seek: bytes_per_sample is 0".to_string(),
+                "cannot seek: bytes_per_sample is 0".into(),
             ));
         }
         let target_sample = (timestamp.as_secs_f64() * self.sample_rate as f64) as u64;
@@ -214,15 +211,18 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
 
         // Clamp to data_size to prevent seeking past the data chunk
         if byte_offset > self.data_size {
-            return Err(TarangError::DemuxError(format!(
-                "seek offset {byte_offset} exceeds data size {}",
-                self.data_size
-            )));
+            return Err(TarangError::DemuxError(
+                format!(
+                    "seek offset {byte_offset} exceeds data size {}",
+                    self.data_size
+                )
+                .into(),
+            ));
         }
 
         self.reader
             .seek(std::io::SeekFrom::Start(self.data_offset + byte_offset))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         self.bytes_read = byte_offset;
         Ok(())
     }

@@ -48,8 +48,10 @@ impl OpenH264Encoder {
                 config.frame_rate_num as f32 / config.frame_rate_den as f32,
             ));
 
-        let encoder = openh264::encoder::Encoder::with_api_config(api, enc_config)
-            .map_err(|e| TarangError::Pipeline(format!("openh264 encoder init failed: {e:?}")))?;
+        let encoder =
+            openh264::encoder::Encoder::with_api_config(api, enc_config).map_err(|e| {
+                TarangError::Pipeline(format!("openh264 encoder init failed: {e:?}").into())
+            })?;
 
         Ok(Self {
             encoder,
@@ -62,38 +64,43 @@ impl OpenH264Encoder {
     /// Encode a YUV420p frame. Returns encoded H.264 NAL units.
     pub fn encode(&mut self, frame: &VideoFrame) -> Result<Vec<u8>> {
         if frame.width != self.width || frame.height != self.height {
-            return Err(TarangError::Pipeline(format!(
-                "frame dimensions {}x{} do not match encoder {}x{}",
-                frame.width, frame.height, self.width, self.height
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "frame dimensions {}x{} do not match encoder {}x{}",
+                    frame.width, frame.height, self.width, self.height
+                )
+                .into(),
+            ));
         }
         if frame.pixel_format != crate::core::PixelFormat::Yuv420p {
-            return Err(TarangError::Pipeline(format!(
-                "expected YUV420p frame, got {:?}",
-                frame.pixel_format
-            )));
+            return Err(TarangError::Pipeline(
+                format!("expected YUV420p frame, got {:?}", frame.pixel_format).into(),
+            ));
         }
 
         let w = self.width as usize;
         let h = self.height as usize;
-        let y_size = w.checked_mul(h).ok_or_else(|| {
-            TarangError::Pipeline("overflow computing Y plane size (w*h)".to_string())
-        })?;
+        let y_size = w
+            .checked_mul(h)
+            .ok_or_else(|| TarangError::Pipeline("overflow computing Y plane size (w*h)".into()))?;
         // Floor division is safe here — dimensions are validated even in new()
         let chroma_w = w / 2;
         let chroma_h = h / 2;
-        let chroma_size = chroma_w.checked_mul(chroma_h).ok_or_else(|| {
-            TarangError::Pipeline("overflow computing chroma plane size".to_string())
-        })?;
+        let chroma_size = chroma_w
+            .checked_mul(chroma_h)
+            .ok_or_else(|| TarangError::Pipeline("overflow computing chroma plane size".into()))?;
         let expected_size = y_size.checked_add(2 * chroma_size).ok_or_else(|| {
-            TarangError::Pipeline("overflow computing total YUV420p frame size".to_string())
+            TarangError::Pipeline("overflow computing total YUV420p frame size".into())
         })?;
 
         if frame.data.len() < expected_size {
-            return Err(TarangError::Pipeline(format!(
-                "VideoFrame data too small: got {} bytes, expected {expected_size}",
-                frame.data.len()
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "VideoFrame data too small: got {} bytes, expected {expected_size}",
+                    frame.data.len()
+                )
+                .into(),
+            ));
         }
 
         // Borrow slices from frame.data without copying
@@ -107,7 +114,7 @@ impl OpenH264Encoder {
         let bitstream = self
             .encoder
             .encode_at(&yuv, ts)
-            .map_err(|e| TarangError::Pipeline(format!("openh264 encode: {e:?}")))?;
+            .map_err(|e| TarangError::Pipeline(format!("openh264 encode: {e:?}").into()))?;
 
         let output = bitstream.to_vec();
         self.frames_encoded += 1;

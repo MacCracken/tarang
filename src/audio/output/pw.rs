@@ -156,7 +156,7 @@ impl AudioOutput for PipeWireOutput {
             .spawn(move || {
                 pw_thread_main(ring_ref, running_ref, signal_ref, rate, channels, ch);
             })
-            .map_err(|e| TarangError::Pipeline(format!("spawn PipeWire thread: {e}")))?;
+            .map_err(|e| TarangError::Pipeline(format!("spawn PipeWire thread: {e}").into()))?;
 
         self.pw_thread = Some(handle);
         self.config = Some(*config);
@@ -178,13 +178,13 @@ impl AudioOutput for PipeWireOutput {
 
     fn write(&mut self, buf: &AudioBuffer) -> Result<()> {
         if self.config.is_none() {
-            return Err(TarangError::Pipeline("output not opened".to_string()));
+            return Err(TarangError::Pipeline("output not opened".into()));
         }
 
         let byte_len = buf.data.len();
         if !byte_len.is_multiple_of(4) {
             return Err(TarangError::Pipeline(
-                "audio buffer size not aligned to f32".to_string(),
+                "audio buffer size not aligned to f32".into(),
             ));
         }
         // Safety: AudioBuffer data originates from F32 serialization; heap alignment >= 8 bytes.

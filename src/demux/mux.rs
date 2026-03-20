@@ -92,7 +92,7 @@ impl<W: Write + Seek> Muxer for WavMuxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".to_string()));
+            return Err(TarangError::Pipeline("header not written".into()));
         }
         self.writer.write_all(data).map_err(io_err)?;
         self.data_bytes_written += data.len() as u32;
@@ -140,9 +140,9 @@ impl<W: Write> OggMuxer<W> {
         match config.codec {
             crate::core::AudioCodec::Opus | crate::core::AudioCodec::Vorbis => {}
             other => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "OGG muxer does not support {other}"
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("OGG muxer does not support {other}").into(),
+                ));
             }
         }
         // Randomize serial to support concurrent streams
@@ -256,10 +256,9 @@ impl<W: Write> Muxer for OggMuxer<W> {
                 self.write_page(0x02, 0, &[&id_header])?; // BOS
             }
             _ => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "OGG muxer does not support {}",
-                    self.config.codec
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("OGG muxer does not support {}", self.config.codec).into(),
+                ));
             }
         }
 
@@ -269,7 +268,7 @@ impl<W: Write> Muxer for OggMuxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".to_string()));
+            return Err(TarangError::Pipeline("header not written".into()));
         }
 
         // For Opus, granule position is at 48kHz
@@ -335,11 +334,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
         let total = 8usize.checked_add(data.len()).ok_or_else(|| {
-            TarangError::Pipeline("box size overflow: data too large for u32".to_string())
+            TarangError::Pipeline("box size overflow: data too large for u32".into())
         })?;
         if total > u32::MAX as usize {
             return Err(TarangError::Pipeline(
-                "box size overflow: total size exceeds u32::MAX".to_string(),
+                "box size overflow: total size exceeds u32::MAX".into(),
             ));
         }
         let size = total as u32;
@@ -605,10 +604,13 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     fn build_stco(&self, data_start: u64) -> Result<Vec<u8>> {
         if data_start > u32::MAX as u64 {
-            return Err(TarangError::Pipeline(format!(
-                "stco offset overflow: mdat data offset {data_start} exceeds u32::MAX; \
+            return Err(TarangError::Pipeline(
+                format!(
+                    "stco offset overflow: mdat data offset {data_start} exceeds u32::MAX; \
                  file is too large for a 32-bit chunk-offset box (stco)"
-            )));
+                )
+                .into(),
+            ));
         }
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
@@ -635,7 +637,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
 
     fn write_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".to_string()));
+            return Err(TarangError::Pipeline("header not written".into()));
         }
         self.writer.write_all(data).map_err(io_err)?;
         self.sample_sizes.push(data.len() as u32);
@@ -777,7 +779,7 @@ impl<W: Write> Muxer for MkvMuxer<W> {
         use crate::demux::ebml;
 
         if !self.header_written {
-            return Err(TarangError::Pipeline("header not written".to_string()));
+            return Err(TarangError::Pipeline("header not written".into()));
         }
 
         // Write SimpleBlock
@@ -827,7 +829,7 @@ impl<W: Write> MkvMuxer<W> {
 }
 
 fn io_err(e: std::io::Error) -> TarangError {
-    TarangError::DemuxError(format!("mux write error: {e}"))
+    TarangError::DemuxError(format!("mux write error: {e}").into())
 }
 
 #[cfg(test)]

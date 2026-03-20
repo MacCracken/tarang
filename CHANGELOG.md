@@ -4,6 +4,25 @@
 
 Single-crate restructure, crates.io publishing, comprehensive security hardening, supply-chain audit.
 
+### Zero-copy optimizations
+- `f32_vec_into_bytes()`: zero-copy Vec<f32> → Vec<u8> reinterpretation (no memcpy)
+- Resample (linear + sinc): ownership transfer instead of Bytes::copy_from_slice
+- Mix: same ownership transfer pattern
+- decode_all(): ownership transfer for accumulated f32 data
+
+### Error allocation reduction
+- `TarangError` variants now use `Cow<'static, str>` instead of `String`
+- Static error messages use `Cow::Borrowed` (zero allocation)
+- Dynamic messages use `Cow::Owned` (allocates only when needed)
+- ~250 allocation sites across 30 files updated
+
+### Crate documentation
+- Comprehensive lib.rs doc comment (191 lines) for docs.rs/crates.io
+- Introduction, supported formats tables, quick start example
+- Step-by-step guide (probe → decode → process → analyze)
+- Feature flags table, CLI usage, MSRV, versioning
+- Supply-chain: regenerated cargo-vet exemptions for criterion + aws-lc deps
+
 ### Performance optimizations
 - FLAC BitWriter: pre-allocate 8KB per frame (eliminated incremental Vec growth)
 - MP4/OGG/MKV demuxers: reuse packet/page buffers across reads (eliminated per-packet allocation)

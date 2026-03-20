@@ -35,9 +35,9 @@ impl PcmEncoder {
         match config.bits_per_sample {
             16 | 24 | 32 => {}
             other => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "PCM encoder: unsupported bits_per_sample {other}"
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("PCM encoder: unsupported bits_per_sample {other}").into(),
+                ));
             }
         }
         Ok(Self {
@@ -54,17 +54,23 @@ impl AudioEncoder for PcmEncoder {
             .num_samples
             .checked_mul(self.channels as usize)
             .ok_or_else(|| {
-                TarangError::Pipeline(format!(
-                    "overflow computing expected samples: {} * {}",
-                    buf.num_samples, self.channels
-                ))
+                TarangError::Pipeline(
+                    format!(
+                        "overflow computing expected samples: {} * {}",
+                        buf.num_samples, self.channels
+                    )
+                    .into(),
+                )
             })?;
         if samples.len() < expected {
-            return Err(TarangError::Pipeline(format!(
-                "buffer has {} samples but expected {}",
-                samples.len(),
-                expected
-            )));
+            return Err(TarangError::Pipeline(
+                format!(
+                    "buffer has {} samples but expected {}",
+                    samples.len(),
+                    expected
+                )
+                .into(),
+            ));
         }
 
         let mut out = Vec::with_capacity(expected * (self.bits_per_sample as usize / 8));
@@ -112,9 +118,9 @@ pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
         AudioCodec::Opus => Ok(Box::new(super::OpusEncoder::new(config)?)),
         #[cfg(feature = "aac-enc")]
         AudioCodec::Aac => Ok(Box::new(super::AacEncoder::new(config)?)),
-        other => Err(TarangError::UnsupportedCodec(format!(
-            "no encoder for {other}"
-        ))),
+        other => Err(TarangError::UnsupportedCodec(
+            format!("no encoder for {other}").into(),
+        )),
     }
 }
 

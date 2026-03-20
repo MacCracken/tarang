@@ -20,7 +20,7 @@ impl OpusEncoder {
     pub fn new(config: &EncoderConfig) -> Result<Self> {
         if config.codec != AudioCodec::Opus {
             return Err(TarangError::UnsupportedCodec(
-                "OpusEncoder requires Opus codec".to_string(),
+                "OpusEncoder requires Opus codec".into(),
             ));
         }
 
@@ -28,10 +28,9 @@ impl OpusEncoder {
             1 => opus::Channels::Mono,
             2 => opus::Channels::Stereo,
             _ => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "Opus supports 1 or 2 channels, got {}",
-                    config.channels
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("Opus supports 1 or 2 channels, got {}", config.channels).into(),
+                ));
             }
         };
 
@@ -39,15 +38,20 @@ impl OpusEncoder {
         let sample_rate = match config.sample_rate {
             8000 | 12000 | 16000 | 24000 | 48000 => config.sample_rate,
             _ => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "Opus requires 8/12/16/24/48 kHz, got {}",
-                    config.sample_rate
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!(
+                        "Opus requires 8/12/16/24/48 kHz, got {}",
+                        config.sample_rate
+                    )
+                    .into(),
+                ));
             }
         };
 
-        let encoder = opus::Encoder::new(sample_rate, channels, opus::Application::Audio)
-            .map_err(|e| TarangError::Pipeline(format!("failed to create Opus encoder: {e}")))?;
+        let encoder =
+            opus::Encoder::new(sample_rate, channels, opus::Application::Audio).map_err(|e| {
+                TarangError::Pipeline(format!("failed to create Opus encoder: {e}").into())
+            })?;
 
         // Standard Opus frame size: 20ms at the given sample rate
         let frame_size = (sample_rate as usize) / 50; // 20ms
@@ -83,7 +87,7 @@ impl AudioEncoder for OpusEncoder {
             let len = self
                 .encoder
                 .encode_float(frame, &mut self.out_buf)
-                .map_err(|e| TarangError::Pipeline(format!("Opus encode error: {e}")))?;
+                .map_err(|e| TarangError::Pipeline(format!("Opus encode error: {e}").into()))?;
 
             packets.push(self.out_buf[..len].to_vec());
             offset += self.frame_size;

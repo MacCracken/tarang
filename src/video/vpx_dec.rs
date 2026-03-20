@@ -25,9 +25,9 @@ impl VpxDecoder {
             VideoCodec::Vp8 => unsafe { vpx_sys::vpx_codec_vp8_dx() },
             VideoCodec::Vp9 => unsafe { vpx_sys::vpx_codec_vp9_dx() },
             other => {
-                return Err(TarangError::UnsupportedCodec(format!(
-                    "VpxDecoder does not support {other}"
-                )));
+                return Err(TarangError::UnsupportedCodec(
+                    format!("VpxDecoder does not support {other}").into(),
+                ));
             }
         };
 
@@ -46,9 +46,9 @@ impl VpxDecoder {
         };
 
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::DecodeError(format!(
-                "vpx_codec_dec_init failed: {res:?}"
-            )));
+            return Err(TarangError::DecodeError(
+                format!("vpx_codec_dec_init failed: {res:?}").into(),
+            ));
         }
 
         Ok(Self {
@@ -70,7 +70,7 @@ impl VpxDecoder {
     pub fn decode(&mut self, data: &[u8], timestamp: Duration) -> Result<Vec<VideoFrame>> {
         if data.len() > u32::MAX as usize {
             return Err(TarangError::DecodeError(
-                "packet exceeds u32::MAX bytes".to_string(),
+                "packet exceeds u32::MAX bytes".into(),
             ));
         }
 
@@ -85,9 +85,9 @@ impl VpxDecoder {
         };
 
         if res != vpx_sys::vpx_codec_err_t::VPX_CODEC_OK {
-            return Err(TarangError::DecodeError(format!(
-                "vpx_codec_decode failed: {res:?}"
-            )));
+            return Err(TarangError::DecodeError(
+                format!("vpx_codec_decode failed: {res:?}").into(),
+            ));
         }
 
         let mut frames = Vec::new();
@@ -105,16 +105,19 @@ impl VpxDecoder {
 
             if width == 0 || height == 0 {
                 return Err(TarangError::DecodeError(
-                    "decoded frame has zero width or height".to_string(),
+                    "decoded frame has zero width or height".into(),
                 ));
             }
 
             // Verify I420 format — VP9 profile 1+ can produce 4:2:2/4:4:4
             if img.fmt != vpx_sys::vpx_img_fmt::VPX_IMG_FMT_I420 {
-                return Err(TarangError::DecodeError(format!(
-                    "unsupported pixel format from libvpx: {:?}, expected I420",
-                    img.fmt
-                )));
+                return Err(TarangError::DecodeError(
+                    format!(
+                        "unsupported pixel format from libvpx: {:?}, expected I420",
+                        img.fmt
+                    )
+                    .into(),
+                ));
             }
 
             // Pre-allocate output buffer
@@ -128,22 +131,27 @@ impl VpxDecoder {
             let u_stride = img.stride[1] as isize;
             let v_stride = img.stride[2] as isize;
             if (y_stride.unsigned_abs()) < width as usize {
-                return Err(TarangError::DecodeError(format!(
-                    "Y plane stride {} is less than width {width}",
-                    y_stride
-                )));
+                return Err(TarangError::DecodeError(
+                    format!("Y plane stride {} is less than width {width}", y_stride).into(),
+                ));
             }
             if (u_stride.unsigned_abs()) < chroma_w {
-                return Err(TarangError::DecodeError(format!(
-                    "U plane stride {} is less than chroma width {chroma_w}",
-                    u_stride
-                )));
+                return Err(TarangError::DecodeError(
+                    format!(
+                        "U plane stride {} is less than chroma width {chroma_w}",
+                        u_stride
+                    )
+                    .into(),
+                ));
             }
             if (v_stride.unsigned_abs()) < chroma_w {
-                return Err(TarangError::DecodeError(format!(
-                    "V plane stride {} is less than chroma width {chroma_w}",
-                    v_stride
-                )));
+                return Err(TarangError::DecodeError(
+                    format!(
+                        "V plane stride {} is less than chroma width {chroma_w}",
+                        v_stride
+                    )
+                    .into(),
+                ));
             }
 
             // Copy YUV420p planes using isize stride arithmetic (handles negative strides).
@@ -153,7 +161,7 @@ impl VpxDecoder {
             // Y plane
             for row in 0..height as isize {
                 let offset = row.checked_mul(y_stride).ok_or_else(|| {
-                    TarangError::DecodeError("Y plane row*stride overflow".to_string())
+                    TarangError::DecodeError("Y plane row*stride overflow".into())
                 })?;
                 let ptr = unsafe { img.planes[0].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, width as usize) };
@@ -163,7 +171,7 @@ impl VpxDecoder {
             // U plane
             for row in 0..chroma_h as isize {
                 let offset = row.checked_mul(u_stride).ok_or_else(|| {
-                    TarangError::DecodeError("U plane row*stride overflow".to_string())
+                    TarangError::DecodeError("U plane row*stride overflow".into())
                 })?;
                 let ptr = unsafe { img.planes[1].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };
@@ -173,7 +181,7 @@ impl VpxDecoder {
             // V plane
             for row in 0..chroma_h as isize {
                 let offset = row.checked_mul(v_stride).ok_or_else(|| {
-                    TarangError::DecodeError("V plane row*stride overflow".to_string())
+                    TarangError::DecodeError("V plane row*stride overflow".into())
                 })?;
                 let ptr = unsafe { img.planes[2].offset(offset) };
                 let slice = unsafe { std::slice::from_raw_parts(ptr, chroma_w) };

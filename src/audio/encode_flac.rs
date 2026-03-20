@@ -295,7 +295,7 @@ impl FlacEncoder {
     pub fn new(config: &EncoderConfig) -> Result<Self> {
         if config.codec != AudioCodec::Flac {
             return Err(TarangError::UnsupportedCodec(
-                "FlacEncoder requires Flac codec".to_string(),
+                "FlacEncoder requires Flac codec".into(),
             ));
         }
         let bps = match config.bits_per_sample {
@@ -675,7 +675,7 @@ impl AudioEncoder for FlacEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
         if self.channels > 8 {
             return Err(TarangError::UnsupportedCodec(
-                "FLAC supports max 8 channels".to_string(),
+                "FLAC supports max 8 channels".into(),
             ));
         }
         let float_samples = bytes_to_f32(&buf.data);

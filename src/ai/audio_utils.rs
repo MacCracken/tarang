@@ -53,10 +53,13 @@ pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
             }
             Ok(mono)
         }
-        _ => Err(TarangError::AiError(format!(
-            "unsupported sample format for mono extraction: {:?}",
-            buf.sample_format
-        ))),
+        _ => Err(TarangError::AiError(
+            format!(
+                "unsupported sample format for mono extraction: {:?}",
+                buf.sample_format
+            )
+            .into(),
+        )),
     }
 }
 

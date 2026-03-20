@@ -87,7 +87,9 @@ impl HooshClient {
         let http = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|e| TarangError::NetworkError(format!("failed to create HTTP client: {e}")))?;
+            .map_err(|e| {
+                TarangError::NetworkError(format!("failed to create HTTP client: {e}").into())
+            })?;
 
         Ok(Self { config, http })
     }
@@ -131,7 +133,7 @@ impl HooshClient {
         let part = reqwest::multipart::Part::bytes(wav_bytes)
             .file_name("audio.wav")
             .mime_str("audio/wav")
-            .map_err(|e| TarangError::NetworkError(format!("mime error: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("mime error: {e}").into()))?;
         form = form.part("audio", part);
 
         let mut req = self.http.post(&self.config.endpoint).multipart(form);
@@ -143,19 +145,18 @@ impl HooshClient {
         let response = req
             .send()
             .await
-            .map_err(|e| TarangError::NetworkError(format!("hoosh request failed: {e}")))?;
+            .map_err(|e| TarangError::NetworkError(format!("hoosh request failed: {e}").into()))?;
 
         if !response.status().is_success() {
-            return Err(TarangError::NetworkError(format!(
-                "hoosh returned status {}",
-                response.status()
-            )));
+            return Err(TarangError::NetworkError(
+                format!("hoosh returned status {}", response.status()).into(),
+            ));
         }
 
         response
             .json()
             .await
-            .map_err(|e| TarangError::NetworkError(format!("failed to parse response: {e}")))
+            .map_err(|e| TarangError::NetworkError(format!("failed to parse response: {e}").into()))
     }
 
     /// Split audio into time-based chunks, transcribe each, and merge results.
@@ -369,10 +370,13 @@ fn samples_to_pcm16(buf: &AudioBuffer) -> Result<Vec<u8>> {
             }
             Ok(pcm)
         }
-        _ => Err(TarangError::AiError(format!(
-            "unsupported sample format for WAV encoding: {:?}",
-            buf.sample_format
-        ))),
+        _ => Err(TarangError::AiError(
+            format!(
+                "unsupported sample format for WAV encoding: {:?}",
+                buf.sample_format
+            )
+            .into(),
+        )),
     }
 }
 
@@ -650,12 +654,12 @@ mod tests {
             sample_rate: 48000,
             channels: 1,
             duration_secs: 120.5,
-            language_hint: Some("es".to_string()),
+            language_hint: Some("es".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: TranscriptionRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.audio_codec, "Opus");
-        assert_eq!(parsed.language_hint, Some("es".to_string()));
+        assert_eq!(parsed.language_hint, Some("es".into()));
     }
 
     #[test]

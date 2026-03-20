@@ -45,9 +45,9 @@ fn codec_to_va_profile(codec: VideoCodec) -> Result<VAProfile::Type> {
     match codec {
         VideoCodec::H264 => Ok(VAProfile::VAProfileH264Main),
         VideoCodec::H265 => Ok(VAProfile::VAProfileHEVCMain),
-        _ => Err(TarangError::UnsupportedCodec(format!(
-            "VA-API encoding not supported for {codec}"
-        ))),
+        _ => Err(TarangError::UnsupportedCodec(
+            format!("VA-API encoding not supported for {codec}").into(),
+        )),
     }
 }
 
@@ -56,9 +56,9 @@ fn find_encode_entrypoint(
     display: &Display,
     profile: VAProfile::Type,
 ) -> Result<VAEntrypoint::Type> {
-    let entrypoints = display
-        .query_config_entrypoints(profile)
-        .map_err(|e| TarangError::HwAccelError(format!("failed to query entrypoints: {e:?}")))?;
+    let entrypoints = display.query_config_entrypoints(profile).map_err(|e| {
+        TarangError::HwAccelError(format!("failed to query entrypoints: {e:?}").into())
+    })?;
 
     // Prefer low-power (fixed-function) encoder, fall back to standard
     if entrypoints.contains(&VAEntrypoint::VAEntrypointEncSliceLP) {
@@ -66,9 +66,9 @@ fn find_encode_entrypoint(
     } else if entrypoints.contains(&VAEntrypoint::VAEntrypointEncSlice) {
         Ok(VAEntrypoint::VAEntrypointEncSlice)
     } else {
-        Err(TarangError::HwAccelError(format!(
-            "no encode entrypoint for VA profile {profile}"
-        )))
+        Err(TarangError::HwAccelError(
+            format!("no encode entrypoint for VA profile {profile}").into(),
+        ))
     }
 }
 
@@ -76,7 +76,7 @@ fn find_encode_entrypoint(
 fn open_display(device: &Option<String>) -> Result<Rc<Display>> {
     if let Some(path) = device {
         Display::open_drm_display(Path::new(path))
-            .map_err(|e| TarangError::HwAccelError(format!("failed to open {path}: {e:?}")))
+            .map_err(|e| TarangError::HwAccelError(format!("failed to open {path}: {e:?}").into()))
     } else {
         // Try render nodes 128..136
         for i in 128..136 {
@@ -86,7 +86,7 @@ fn open_display(device: &Option<String>) -> Result<Rc<Display>> {
             }
         }
         Err(TarangError::HwAccelError(
-            "no VA-API render node found".to_string(),
+            "no VA-API render node found".into(),
         ))
     }
 }
@@ -159,8 +159,7 @@ impl VaapiEncoder {
         // submission will be completed when cros-codecs version aligns with
         // our cros-libva version, or via manual VA-API buffer construction.
         Err(TarangError::HwAccelError(
-            "VA-API encode pipeline not yet fully wired — use openh264 for H.264 encoding"
-                .to_string(),
+            "VA-API encode pipeline not yet fully wired — use openh264 for H.264 encoding".into(),
         ))
     }
 
@@ -179,7 +178,7 @@ impl VaapiEncoder {
     pub fn driver_name(&self) -> String {
         self.display
             .query_vendor_string()
-            .unwrap_or_else(|_| "unknown".to_string())
+            .unwrap_or_else(|_| "unknown".into())
     }
 }
 

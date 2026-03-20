@@ -102,7 +102,7 @@ impl DecoderConfig {
             VideoCodec::Av1 => {
                 if !cfg!(feature = "dav1d") {
                     return Err(TarangError::UnsupportedCodec(
-                        "AV1 decoding requires the `dav1d` feature".to_string(),
+                        "AV1 decoding requires the `dav1d` feature".into(),
                     ));
                 }
                 DecoderBackend::Dav1d
@@ -110,7 +110,7 @@ impl DecoderConfig {
             VideoCodec::H264 => {
                 if !cfg!(feature = "openh264") {
                     return Err(TarangError::UnsupportedCodec(
-                        "H.264 decoding requires the `openh264` feature".to_string(),
+                        "H.264 decoding requires the `openh264` feature".into(),
                     ));
                 }
                 DecoderBackend::OpenH264
@@ -118,14 +118,14 @@ impl DecoderConfig {
             VideoCodec::Vp8 | VideoCodec::Vp9 => {
                 if !cfg!(feature = "vpx") {
                     return Err(TarangError::UnsupportedCodec(
-                        "VP8/VP9 decoding requires the `vpx` feature".to_string(),
+                        "VP8/VP9 decoding requires the `vpx` feature".into(),
                     ));
                 }
                 DecoderBackend::LibVpx
             }
             VideoCodec::H265 => {
                 return Err(TarangError::UnsupportedCodec(
-                    "H.265 not yet supported — no BSD-licensed decoder available".to_string(),
+                    "H.265 not yet supported — no BSD-licensed decoder available".into(),
                 ));
             }
             VideoCodec::Theora => DecoderBackend::Software,
@@ -223,7 +223,7 @@ impl VideoDecoder {
     /// Feed compressed data to the decoder.
     pub fn send_packet(&mut self, data: &[u8], timestamp: Duration) -> Result<()> {
         if data.is_empty() {
-            return Err(TarangError::DecodeError("empty packet".to_string()));
+            return Err(TarangError::DecodeError("empty packet".into()));
         }
 
         tracing::trace!(
@@ -260,9 +260,12 @@ impl VideoDecoder {
                 let h = if self.height > 0 { self.height } else { 240 };
                 const MAX_DIM: u32 = 8192;
                 if w > MAX_DIM || h > MAX_DIM {
-                    return Err(TarangError::DecodeError(format!(
-                        "stub decoder: dimensions {w}x{h} exceed maximum {MAX_DIM}x{MAX_DIM}"
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!(
+                            "stub decoder: dimensions {w}x{h} exceed maximum {MAX_DIM}x{MAX_DIM}"
+                        )
+                        .into(),
+                    ));
                 }
                 let size = crate::core::yuv420p_frame_size(w, h);
                 decoded.push(VideoFrame {
@@ -278,7 +281,7 @@ impl VideoDecoder {
         for frame in decoded {
             if self.pending_frames.len() >= 64 {
                 return Err(TarangError::DecodeError(
-                    "pending_frames limit exceeded (64)".to_string(),
+                    "pending_frames limit exceeded (64)".into(),
                 ));
             }
             if self.width == 0 {
@@ -324,7 +327,7 @@ impl VideoDecoder {
         }
 
         self.status = DecoderStatus::NeedsInput;
-        Err(TarangError::DecodeError("no frame available".to_string()))
+        Err(TarangError::DecodeError("no frame available".into()))
     }
 
     /// Flush the decoder (signal end of stream) and drain buffered frames.

@@ -53,7 +53,7 @@ impl FileDecoder {
                 &FormatOptions::default(),
                 &MetadataOptions::default(),
             )
-            .map_err(|e| TarangError::DemuxError(format!("failed to probe audio: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("failed to probe audio: {e}").into()))?;
 
         let format = probed.format;
 
@@ -62,28 +62,28 @@ impl FileDecoder {
             .tracks()
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or_else(|| TarangError::DemuxError("no audio track found".to_string()))?;
+            .ok_or_else(|| TarangError::DemuxError("no audio track found".into()))?;
 
         let track_id = track.id;
         let params = &track.codec_params;
 
         let codec = map_symphonia_codec(params.codec).ok_or_else(|| {
-            TarangError::UnsupportedCodec(format!("symphonia codec {:?}", params.codec))
+            TarangError::UnsupportedCodec(format!("symphonia codec {:?}", params.codec).into())
         })?;
 
         let sample_rate = params.sample_rate.unwrap_or(44100);
         if sample_rate == 0 {
             return Err(TarangError::DecodeError(
-                "codec reports sample rate 0".to_string(),
+                "codec reports sample rate 0".into(),
             ));
         }
         let channels = match params.channels {
             Some(c) => {
                 let count = c.count();
                 if count > u16::MAX as usize {
-                    return Err(TarangError::DecodeError(format!(
-                        "channel count {count} exceeds u16::MAX"
-                    )));
+                    return Err(TarangError::DecodeError(
+                        format!("channel count {count} exceeds u16::MAX").into(),
+                    ));
                 }
                 count as u16
             }
@@ -92,7 +92,9 @@ impl FileDecoder {
 
         let decoder = symphonia::default::get_codecs()
             .make(params, &DecoderOptions::default())
-            .map_err(|e| TarangError::DecodeError(format!("failed to create decoder: {e}")))?;
+            .map_err(|e| {
+                TarangError::DecodeError(format!("failed to create decoder: {e}").into())
+            })?;
 
         Ok(Self {
             format,
@@ -144,9 +146,9 @@ impl FileDecoder {
                     continue;
                 }
                 Err(e) => {
-                    return Err(TarangError::DemuxError(format!(
-                        "failed to read packet: {e}"
-                    )));
+                    return Err(TarangError::DemuxError(
+                        format!("failed to read packet: {e}").into(),
+                    ));
                 }
             };
 
@@ -166,7 +168,9 @@ impl FileDecoder {
                     continue;
                 }
                 Err(e) => {
-                    return Err(TarangError::DecodeError(format!("decode failed: {e}")));
+                    return Err(TarangError::DecodeError(
+                        format!("decode failed: {e}").into(),
+                    ));
                 }
             };
 
@@ -216,7 +220,7 @@ impl FileDecoder {
                     track_id: Some(self.track_id),
                 },
             )
-            .map_err(|e| TarangError::DemuxError(format!("seek failed: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek failed: {e}").into()))?;
 
         // Reset decoder state after seek
         self.decoder.reset();
@@ -248,10 +252,13 @@ impl FileDecoder {
                     all_data.extend_from_slice(floats);
 
                     if all_data.len() * std::mem::size_of::<f32>() > MAX_DECODED_BYTES {
-                        return Err(TarangError::DecodeError(format!(
-                            "decoded audio exceeds 512MB limit ({} bytes)",
-                            all_data.len() * std::mem::size_of::<f32>()
-                        )));
+                        return Err(TarangError::DecodeError(
+                            format!(
+                                "decoded audio exceeds 512MB limit ({} bytes)",
+                                all_data.len() * std::mem::size_of::<f32>()
+                            )
+                            .into(),
+                        ));
                     }
                 }
                 Err(TarangError::EndOfStream) => break,
@@ -260,7 +267,7 @@ impl FileDecoder {
         }
 
         if total_samples == 0 {
-            return Err(TarangError::DecodeError("no audio decoded".to_string()));
+            return Err(TarangError::DecodeError("no audio decoded".into()));
         }
 
         tracing::debug!(

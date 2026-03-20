@@ -138,69 +138,70 @@ impl<R: Read + Seek> OggDemuxer<R> {
 
     fn read_page(&mut self) -> Result<OggPage> {
         let mut header = [0u8; PAGE_HEADER_SIZE];
-        self.reader
-            .read_exact(&mut header)
-            .map_err(|e| TarangError::DemuxError(format!("failed to read OGG page header: {e}")))?;
+        self.reader.read_exact(&mut header).map_err(|e| {
+            TarangError::DemuxError(format!("failed to read OGG page header: {e}").into())
+        })?;
 
         // Validate capture pattern
         if &header[0..4] != b"OggS" {
             return Err(TarangError::DemuxError(
-                "invalid OGG page: bad capture pattern".to_string(),
+                "invalid OGG page: bad capture pattern".into(),
             ));
         }
 
         let version = header[4];
         if version != 0 {
-            return Err(TarangError::DemuxError(format!(
-                "unsupported OGG version: {version}"
-            )));
+            return Err(TarangError::DemuxError(
+                format!("unsupported OGG version: {version}").into(),
+            ));
         }
 
         let header_type = header[5];
         let granule_position = i64::from_le_bytes(
             header[6..14]
                 .try_into()
-                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".into()))?,
         );
         let serial_number = u32::from_le_bytes(
             header[14..18]
                 .try_into()
-                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".into()))?,
         );
         let page_sequence = u32::from_le_bytes(
             header[18..22]
                 .try_into()
-                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".into()))?,
         );
         // Extract stored checksum before zeroing it for verification
         let stored_crc = u32::from_le_bytes(
             header[22..26]
                 .try_into()
-                .map_err(|_| TarangError::DemuxError("bad OGG page header".to_string()))?,
+                .map_err(|_| TarangError::DemuxError("bad OGG page header".into()))?,
         );
         let num_segments = header[26];
 
         // Read segment table (reuse pre-allocated buffer)
         self.segment_buf.clear();
         self.segment_buf.resize(num_segments as usize, 0);
-        self.reader
-            .read_exact(&mut self.segment_buf)
-            .map_err(|e| TarangError::DemuxError(format!("failed to read segment table: {e}")))?;
+        self.reader.read_exact(&mut self.segment_buf).map_err(|e| {
+            TarangError::DemuxError(format!("failed to read segment table: {e}").into())
+        })?;
 
         // Read page body (sum of all segment sizes, reuse pre-allocated buffer)
         let body_size: usize = self.segment_buf.iter().map(|&s| s as usize).sum();
         // Max OGG page body is 255 segments * 255 bytes = 65025, but cap at 65535 for safety
         const MAX_OGG_PAGE_BODY: usize = 65535;
         if body_size > MAX_OGG_PAGE_BODY {
-            return Err(TarangError::DemuxError(format!(
-                "OGG page body size {body_size} exceeds maximum ({MAX_OGG_PAGE_BODY})"
-            )));
+            return Err(TarangError::DemuxError(
+                format!("OGG page body size {body_size} exceeds maximum ({MAX_OGG_PAGE_BODY})")
+                    .into(),
+            ));
         }
         self.body_buf.clear();
         self.body_buf.resize(body_size, 0);
-        self.reader
-            .read_exact(&mut self.body_buf)
-            .map_err(|e| TarangError::DemuxError(format!("failed to read page body: {e}")))?;
+        self.reader.read_exact(&mut self.body_buf).map_err(|e| {
+            TarangError::DemuxError(format!("failed to read page body: {e}").into())
+        })?;
 
         // Verify CRC-32: build the full page with checksum zeroed and compute
         {
@@ -216,9 +217,12 @@ impl<R: Read + Seek> OggDemuxer<R> {
             page.extend_from_slice(&self.body_buf);
             let computed = ogg_crc32(&page);
             if computed != stored_crc {
-                return Err(TarangError::DemuxError(format!(
-                    "OGG page CRC mismatch: expected {stored_crc:#010x}, got {computed:#010x}"
-                )));
+                return Err(TarangError::DemuxError(
+                    format!(
+                        "OGG page CRC mismatch: expected {stored_crc:#010x}, got {computed:#010x}"
+                    )
+                    .into(),
+                ));
             }
         }
 
@@ -267,17 +271,17 @@ impl<R: Read + Seek> OggDemuxer<R> {
             let sample_rate = u32::from_le_bytes(
                 packet[12..16]
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".into()))?,
             );
             let bitrate_max = i32::from_le_bytes(
                 packet[16..20]
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".into()))?,
             );
             let bitrate_nominal = i32::from_le_bytes(
                 packet[20..24]
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad Vorbis header".into()))?,
             );
 
             let bitrate = if bitrate_nominal > 0 {
@@ -306,12 +310,12 @@ impl<R: Read + Seek> OggDemuxer<R> {
             let pre_skip = u16::from_le_bytes(
                 packet[10..12]
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad Opus header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad Opus header".into()))?,
             ) as u32;
             let sample_rate = u32::from_le_bytes(
                 packet[12..16]
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad Opus header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad Opus header".into()))?,
             );
 
             return Ok(OggStream {
@@ -338,7 +342,7 @@ impl<R: Read + Seek> OggDemuxer<R> {
             let sr_bits = u32::from_be_bytes(
                 sr_bytes
                     .try_into()
-                    .map_err(|_| TarangError::DemuxError("bad FLAC OGG header".to_string()))?,
+                    .map_err(|_| TarangError::DemuxError("bad FLAC OGG header".into()))?,
             );
             let sample_rate = sr_bits >> 12;
             let channels = ((sr_bits >> 9) & 0x07) as u16 + 1;
@@ -355,7 +359,7 @@ impl<R: Read + Seek> OggDemuxer<R> {
         }
 
         Err(TarangError::UnsupportedCodec(
-            "unrecognized OGG codec".to_string(),
+            "unrecognized OGG codec".into(),
         ))
     }
 
@@ -365,19 +369,19 @@ impl<R: Read + Seek> OggDemuxer<R> {
         let end = self
             .reader
             .seek(std::io::SeekFrom::End(0))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         // Search backwards for "OggS" capture pattern in the last 65536 bytes
         let search_size = 65536u64.min(end);
         let search_start = end - search_size;
         self.reader
             .seek(std::io::SeekFrom::Start(search_start))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         let mut buf = vec![0u8; search_size as usize];
         self.reader
             .read_exact(&mut buf)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
 
         // Find last "OggS" in the buffer
         let mut last_oggs = None;
@@ -444,7 +448,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
         // Reset to start
         self.reader
             .seek(std::io::SeekFrom::Start(0))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         self.streams.clear();
         self.stream_indices.clear();
@@ -458,7 +462,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
                 if let Some(first_packet) = page.packets.first() {
                     if self.streams.len() >= 64 {
                         return Err(TarangError::DemuxError(
-                            "too many OGG streams: exceeds maximum (64)".to_string(),
+                            "too many OGG streams: exceeds maximum (64)".into(),
                         ));
                     }
                     match Self::identify_codec(first_packet) {
@@ -483,7 +487,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
 
         if self.streams.is_empty() {
             return Err(TarangError::DemuxError(
-                "no supported audio streams found in OGG".to_string(),
+                "no supported audio streams found in OGG".into(),
             ));
         }
 
@@ -524,7 +528,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
         // Seek back to start of data (after BOS pages) for packet reading
         self.reader
             .seek(std::io::SeekFrom::Start(0))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         Ok(ret)
     }
@@ -660,7 +664,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
 
         if sr == 0 {
             return Err(TarangError::DemuxError(
-                "cannot seek: sample rate is 0".to_string(),
+                "cannot seek: sample rate is 0".into(),
             ));
         }
 
@@ -669,7 +673,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
         let file_end = self
             .reader
             .seek(std::io::SeekFrom::End(0))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         let mut lo = file_start;
         let mut hi = file_end;
@@ -684,7 +688,7 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             let mid = lo + (hi - lo) / 2;
             self.reader
                 .seek(std::io::SeekFrom::Start(mid))
-                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
             // Scan forward to find next OGG page sync
             match self.find_next_page_start() {
@@ -715,14 +719,14 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
         // Linear scan from best_pos to find exact page
         self.reader
             .seek(std::io::SeekFrom::Start(best_pos))
-            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         let mut last_page_start = best_pos;
         loop {
             let pos = self
                 .reader
                 .stream_position()
-                .map_err(|e| TarangError::DemuxError(format!("position error: {e}")))?;
+                .map_err(|e| TarangError::DemuxError(format!("position error: {e}").into()))?;
 
             match self.read_page() {
                 Ok(page) => {
@@ -731,7 +735,9 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
                         if page_time >= target_seconds {
                             self.reader
                                 .seek(std::io::SeekFrom::Start(last_page_start))
-                                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}")))?;
+                                .map_err(|e| {
+                                    TarangError::DemuxError(format!("seek error: {e}").into())
+                                })?;
                             return Ok(());
                         }
                     }

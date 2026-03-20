@@ -20,9 +20,10 @@ fn extract_yuv420p(yuv: &impl YUVSource, timestamp: Duration) -> Result<VideoFra
 
     // Validate strides to prevent out-of-bounds access
     if y_stride < width as usize || u_stride < chroma_w || v_stride < chroma_w {
-        return Err(TarangError::DecodeError(format!(
-            "invalid strides: y={y_stride} u={u_stride} v={v_stride} for {width}x{height}"
-        )));
+        return Err(TarangError::DecodeError(
+            format!("invalid strides: y={y_stride} u={u_stride} v={v_stride} for {width}x{height}")
+                .into(),
+        ));
     }
 
     let y_size = width as usize * height as usize;
@@ -66,7 +67,7 @@ impl OpenH264Decoder {
         let api = openh264::OpenH264API::from_source();
         let config = openh264::decoder::DecoderConfig::new();
         let decoder = openh264::decoder::Decoder::with_api_config(api, config)
-            .map_err(|e| TarangError::DecodeError(format!("openh264 init failed: {e:?}")))?;
+            .map_err(|e| TarangError::DecodeError(format!("openh264 init failed: {e:?}").into()))?;
 
         Ok(Self {
             decoder,
@@ -79,7 +80,7 @@ impl OpenH264Decoder {
         let decoded = self
             .decoder
             .decode(data)
-            .map_err(|e| TarangError::DecodeError(format!("openh264 decode: {e:?}")))?;
+            .map_err(|e| TarangError::DecodeError(format!("openh264 decode: {e:?}").into()))?;
 
         let Some(yuv) = decoded else {
             return Ok(None);
@@ -94,7 +95,7 @@ impl OpenH264Decoder {
         let remaining = self
             .decoder
             .flush_remaining()
-            .map_err(|e| TarangError::DecodeError(format!("openh264 flush: {e:?}")))?;
+            .map_err(|e| TarangError::DecodeError(format!("openh264 flush: {e:?}").into()))?;
 
         let mut frames = Vec::new();
         for yuv in &remaining {

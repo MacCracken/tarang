@@ -101,18 +101,18 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         let mut first = [0u8; 1];
         self.reader
             .read_exact(&mut first)
-            .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}").into()))?;
 
         let b = first[0];
         if b == 0 {
-            return Err(TarangError::DemuxError("invalid VINT: zero".to_string()));
+            return Err(TarangError::DemuxError("invalid VINT: zero".into()));
         }
 
         let len = b.leading_zeros() as usize + 1;
         if len > 8 {
-            return Err(TarangError::DemuxError(format!(
-                "invalid VINT length: {len}"
-            )));
+            return Err(TarangError::DemuxError(
+                format!("invalid VINT length: {len}").into(),
+            ));
         }
 
         let mut value = (b as u64) & ((1u64 << (8 - len)) - 1);
@@ -121,7 +121,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             let mut next = [0u8; 1];
             self.reader
                 .read_exact(&mut next)
-                .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}")))?;
+                .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}").into()))?;
             value = (value << 8) | next[0] as u64;
         }
 
@@ -133,14 +133,14 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         let mut first = [0u8; 1];
         self.reader
             .read_exact(&mut first)
-            .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}").into()))?;
 
         let b = first[0];
         let len = b.leading_zeros() as usize + 1;
         if len > 4 || len == 0 {
-            return Err(TarangError::DemuxError(format!(
-                "invalid EBML ID length: {len} (byte=0x{b:02X})"
-            )));
+            return Err(TarangError::DemuxError(
+                format!("invalid EBML ID length: {len} (byte=0x{b:02X})").into(),
+            ));
         }
 
         let mut value = b as u32;
@@ -148,7 +148,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             let mut next = [0u8; 1];
             self.reader
                 .read_exact(&mut next)
-                .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}")))?;
+                .map_err(|e| TarangError::DemuxError(format!("EBML read error: {e}").into()))?;
             value = (value << 8) | next[0] as u32;
         }
 
@@ -167,7 +167,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             let mut b = [0u8; 1];
             self.reader
                 .read_exact(&mut b)
-                .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+                .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
             value = (value << 8) | b[0] as u64;
         }
         Ok(value)
@@ -180,19 +180,19 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 let mut buf = [0u8; 4];
                 self.reader
                     .read_exact(&mut buf)
-                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
                 Ok(f32::from_be_bytes(buf) as f64)
             }
             8 => {
                 let mut buf = [0u8; 8];
                 self.reader
                     .read_exact(&mut buf)
-                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
                 Ok(f64::from_be_bytes(buf))
             }
-            _ => Err(TarangError::DemuxError(format!(
-                "invalid float size: {size}"
-            ))),
+            _ => Err(TarangError::DemuxError(
+                format!("invalid float size: {size}").into(),
+            )),
         }
     }
 
@@ -205,20 +205,24 @@ impl<R: Read + Seek> MkvDemuxer<R> {
     /// Read a UTF-8 string of `size` bytes.
     fn read_string(&mut self, size: u64) -> Result<String> {
         if size > Self::MAX_STRING_SIZE {
-            return Err(TarangError::DemuxError(format!(
-                "string size {size} exceeds maximum ({})",
-                Self::MAX_STRING_SIZE
-            )));
+            return Err(TarangError::DemuxError(
+                format!(
+                    "string size {size} exceeds maximum ({})",
+                    Self::MAX_STRING_SIZE
+                )
+                .into(),
+            ));
         }
         let mut buf = vec![0u8; size as usize];
         self.reader
             .read_exact(&mut buf)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
         // Strip trailing nulls
         while buf.last() == Some(&0) {
             buf.pop();
         }
-        String::from_utf8(buf).map_err(|e| TarangError::DemuxError(format!("invalid UTF-8: {e}")))
+        String::from_utf8(buf)
+            .map_err(|e| TarangError::DemuxError(format!("invalid UTF-8: {e}").into()))
     }
 
     /// Parse the EBML header to identify MKV vs WebM.
@@ -226,7 +230,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         let (id, _) = self.read_element_id()?;
         if id != EBML_HEADER {
             return Err(TarangError::UnsupportedFormat(
-                "not a Matroska/WebM file: missing EBML header".to_string(),
+                "not a Matroska/WebM file: missing EBML header".into(),
             ));
         }
 
@@ -329,10 +333,9 @@ impl<R: Read + Seek> MkvDemuxer<R> {
 
         if track.number > 0 {
             if self.tracks.len() >= Self::MAX_TRACKS {
-                return Err(TarangError::DemuxError(format!(
-                    "too many tracks: exceeds maximum ({})",
-                    Self::MAX_TRACKS
-                )));
+                return Err(TarangError::DemuxError(
+                    format!("too many tracks: exceeds maximum ({})", Self::MAX_TRACKS).into(),
+                ));
             }
             self.tracks.push(track);
         }
@@ -436,7 +439,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
         let (seg_id, _) = self.read_element_id()?;
         if seg_id != SEGMENT {
             return Err(TarangError::UnsupportedFormat(
-                "missing Segment element".to_string(),
+                "missing Segment element".into(),
             ));
         }
         let (seg_size, _) = self.read_element_size()?;
@@ -483,9 +486,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
         }
 
         if !found_tracks {
-            return Err(TarangError::DemuxError(
-                "no Tracks element found".to_string(),
-            ));
+            return Err(TarangError::DemuxError("no Tracks element found".into()));
         }
 
         // Build track number -> stream index map for O(1) lookup
@@ -529,9 +530,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             .collect();
 
         if streams.is_empty() {
-            return Err(TarangError::DemuxError(
-                "no supported streams found".to_string(),
-            ));
+            return Err(TarangError::DemuxError("no supported streams found".into()));
         }
 
         let format = if self.is_webm {
@@ -604,10 +603,13 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
         // Validate cluster_offset against a reasonable bound
         const MAX_REASONABLE_OFFSET: u64 = u64::MAX / 2;
         if self.cluster_offset > MAX_REASONABLE_OFFSET {
-            return Err(TarangError::DemuxError(format!(
-                "cluster offset {} exceeds reasonable bound",
-                self.cluster_offset
-            )));
+            return Err(TarangError::DemuxError(
+                format!(
+                    "cluster offset {} exceeds reasonable bound",
+                    self.cluster_offset
+                )
+                .into(),
+            ));
         }
 
         // Simple seek: scan clusters from the beginning
@@ -670,22 +672,22 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         let mut tc_buf = [0u8; 2];
         self.reader
             .read_exact(&mut tc_buf)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
         let relative_tc = i16::from_be_bytes(tc_buf);
 
         // Flags
         let mut flags = [0u8; 1];
         self.reader
             .read_exact(&mut flags)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
         let is_keyframe = flags[0] & 0x80 != 0;
 
         // Header size: vint_len + 2 (timecode) + 1 (flags)
         let header_size = vint_len as u64 + 3;
         if size < header_size {
-            return Err(TarangError::DemuxError(format!(
-                "SimpleBlock size {size} smaller than header {header_size}"
-            )));
+            return Err(TarangError::DemuxError(
+                format!("SimpleBlock size {size} smaller than header {header_size}").into(),
+            ));
         }
         let data_size = size - header_size;
 
@@ -693,7 +695,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         self.packet_buf.resize(data_size as usize, 0);
         self.reader
             .read_exact(&mut self.packet_buf)
-            .map_err(|e| TarangError::DemuxError(format!("read error: {e}")))?;
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
         let data = Bytes::copy_from_slice(&self.packet_buf);
 
         // Absolute timecode (saturate to prevent overflow)
@@ -714,7 +716,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
 }
 
 fn io_err(e: std::io::Error) -> TarangError {
-    TarangError::DemuxError(format!("I/O error: {e}"))
+    TarangError::DemuxError(format!("I/O error: {e}").into())
 }
 
 #[cfg(test)]
