@@ -1538,3 +1538,72 @@ criteria = "safe-to-deploy"
 [[exemptions.zune-jpeg]]
 version = "0.5.13"
 criteria = "safe-to-deploy"
+
+# New deps from ai-hwaccel and libde265-rs (0.20.3)
+[[exemptions.ai-hwaccel]]
+version = "0.19.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.bindgen]]
+version = "0.69.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.const_format]]
+version = "0.2.35"
+criteria = "safe-to-deploy"
+
+[[exemptions.const_format_proc_macros]]
+version = "0.2.34"
+criteria = "safe-to-deploy"
+
+[[exemptions.curl]]
+version = "0.4.49"
+criteria = "safe-to-deploy"
+
+[[exemptions.curl-sys]]
+version = "0.4.86+curl-8.19.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.filetime]]
+version = "0.2.27"
+criteria = "safe-to-deploy"
+
+[[exemptions.libde265-rs]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.libde265-sys]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.libredox]]
+version = "0.1.14"
+criteria = "safe-to-deploy"
+
+[[exemptions.openssl-probe]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.openssl-sys]]
+version = "0.9.112"
+criteria = "safe-to-deploy"
+
+[[exemptions.plain]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.redox_syscall]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.tar]]
+version = "0.4.45"
+criteria = "safe-to-deploy"
+
+[[exemptions.tracing-serde]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.xattr]]
+version = "1.6.1"
+criteria = "safe-to-deploy"

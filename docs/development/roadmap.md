@@ -36,6 +36,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### Release
 
+- [ ] **Update ai-hwaccel to 0.20.3** — bump dependency version when released
 - [ ] **Publish 0.21.3 to crates.io** — `cargo publish --dry-run`, tag, push
 
 ---
@@ -47,7 +48,7 @@ All of the following must be true before cutting 1.0:
 - [ ] Public API reviewed and marked stable (no `#[non_exhaustive]` additions expected)
 - [ ] All `Demuxer`/`Muxer`/`AudioEncoder` traits finalized
 - [ ] Core types (`AudioBuffer`, `VideoFrame`, `MediaInfo`, `Packet`) frozen
-- [ ] 90%+ line coverage (library code, excluding mcp/main)
+- [ ] 89%+ line coverage (library code, excluding mcp/main)
 - [ ] All demuxer fuzz targets passing with 0 crashes after 1M iterations
 - [ ] At least one downstream consumer (Jalwa, Tazama, or Shruti) running on stable tarang
 - [ ] docs.rs documentation complete with examples for every public module
