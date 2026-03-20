@@ -16,7 +16,7 @@
 //! | FLAC | yes | yes | symphonia / pure Rust encoder |
 //! | Vorbis | yes | - | symphonia |
 //! | Opus | yes | yes | symphonia / libopus FFI (`opus-enc`) |
-//! | AAC | yes | yes | symphonia / fdk-aac FFI (`aac-enc`) |
+//! | AAC | yes | yes* | symphonia / fdk-aac FFI (`aac-enc`) |
 //! | ALAC | yes | - | symphonia |
 //! | PCM | yes | yes | pure Rust (16/24/32-bit) |
 //!
@@ -27,7 +27,15 @@
 //! | AV1 | dav1d | rav1e | `dav1d` / `rav1e` |
 //! | H.264 | openh264 | openh264 | `openh264` / `openh264-enc` |
 //! | VP8/VP9 | libvpx | libvpx | `vpx` / `vpx-enc` |
-//! | H.265 | - | VA-API | `vaapi` |
+//! | H.265 | VA-API hw only | VA-API | `vaapi` + `hwaccel` |
+//!
+//! *\* AAC encoding requires the `libfdk-aac` system library (LGPL-2.1).
+//! No pure-Rust AAC encoder exists yet. If linking fdk-aac is not possible,
+//! use Opus (`opus-enc`) or FLAC as alternatives.*
+//!
+//! *H.265 decode has no free software decoder. Use
+//! [`video::DecoderConfig::for_codec_auto()`] with the `hwaccel` feature
+//! to decode via VA-API hardware acceleration on supported GPUs.*
 //!
 //! ### Containers (pure Rust)
 //!

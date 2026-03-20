@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.20.3
+
+ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
+
+### P1 fixes
+
+#### VA-API encode pipeline (fully wired)
+- Complete H.264 encode via VA-API: surface creation, NV12 upload, SPS/PPS/slice parameter buffers, encode submission, bitstream readback
+- `VaapiEncoder::encode()` now produces real H.264 bitstream (was stub error)
+- YUV420p → NV12 conversion for VA-API surface upload
+- IDR-only encoding (P/B frames deferred to future release)
+- Patched cros-libva 0.0.13 for libva >= 1.23 compatibility (VP9 `seg_id_block_size` field)
+- `[patch.crates-io]` in Cargo.toml for local cros-libva fix
+
+#### H.265 decode path
+- H.265 decode now available via VA-API hardware acceleration (confirmed on AMD Renoir)
+- `DecoderConfig::for_codec_auto()` routes H.265 to VA-API when hardware supports it
+- Updated error message in `for_codec()` to guide users toward `hwaccel` feature
+- Documented H.265 hardware-only status in lib.rs codec table
+
+#### AAC encode documented
+- Documented fdk-aac FFI requirement in lib.rs codec table and encode_aac.rs module docs
+- Listed system package names (libfdk-aac-dev, fdk-aac-devel, fdk-aac)
+- Documented Opus and FLAC as pure-Rust alternatives
+
+#### rav1e/paste unblocked
+- rav1e 0.8 compiles and works; `paste` advisory (RUSTSEC-2024-0436) suppressed in deny.toml
+- Expanded deny.toml documentation explaining the advisory scope and removal criteria
+
+### ai-hwaccel integration
+- `hwaccel` feature flag with `ai-hwaccel` 0.19 dependency (Vulkan backend)
+- `HardwareReport` / `AcceleratorInfo`: unified GPU/NPU/TPU detection via `probe_hardware()`
+- `CodecCapabilities`: maps hardware detection + VA-API probing to tarang codec decode/encode matrix
+- `probe_codec_capabilities()`: combines feature flags, VA-API, and ai-hwaccel into one report
+- `recommend_decode_backend()` / `recommend_encode_backend()`: hardware-preferred backend selection
+- `DecoderConfig::for_codec_auto()`: runtime hardware-aware decoder config (VA-API → software fallback)
+- `supported_codecs_with_hw()`: includes VA-API hardware backends in codec listing
+- `tarang probe --hw` CLI: shows accelerators, codec capabilities, and recommended device
+- 13 new tests for capability matching, recommendation logic, and display formatting
+
 ## 0.19.3
 
 Single-crate restructure, crates.io publishing, comprehensive security hardening, supply-chain audit.

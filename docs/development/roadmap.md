@@ -10,12 +10,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### P1 — Must-fix before 0.20.3
 
-- [x] **`#[non_exhaustive]` on all public enums** — 16 enums across 7 files: `AudioCodec`, `VideoCodec`, `ContainerFormat`, `SampleFormat`, `PixelFormat`, `StreamInfo`, `TarangError`, `PipelineState`, `ContentType`, `SceneBoundaryType`, `ThumbnailFormat`, `WhisperModel`, `ChannelLayout`, `DecoderStatus`, `DecoderBackend`, `HwCodecDirection`
-- [x] **Unsafe audit pass** — All `unsafe` blocks now have `// SAFETY:` comments. Normalized inconsistent `Safety:` → `SAFETY:` across `sample.rs`, `pw.rs`, `vpx_dec.rs`. Documented 16 new blocks in `vpx_enc.rs`, 8 in `vpx_dec.rs`.
-- [ ] **Pure Rust AAC encode alternative** — currently FFI-only via `fdk-aac`. Evaluate pure-Rust options or document the FFI requirement clearly for downstream consumers who can't link C libraries.
-- [ ] **H.265 decode path** — no BSD-licensed decoder available today. Document the gap explicitly in lib.rs codec tables and evaluate VA-API decode as a hardware-only fallback.
-- [ ] **Unblock VA-API encode** — upstream `cros-libva` stalled since March 2025. Fork `cros-codecs` or use `[patch]` to unblock rather than waiting indefinitely.
-- [ ] **Unblock rav1e** — no release since Sept 2025. Pin `paste` workaround or vendor the fix to stop blocking AV1 encode in CI.
+(all P1 items resolved — see CHANGELOG 0.20.3)
 
 ### API stabilization
 
@@ -54,14 +49,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 - [ ] **Frame format conversion** — YUV420p ↔ RGB24 ↔ NV12 as explicit operations (currently scattered in thumbnail/encoder code)
 - [ ] **Scaling/resize** — bilinear/bicubic/Lanczos frame scaling as a standalone operation
 - [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available
-
-### ai-hwaccel integration
-
-- [x] **Optional `ai-hwaccel` dependency** — feature-gated (`hwaccel` feature) to query GPU/NPU/TPU capabilities at runtime via `AcceleratorRegistry`
-- [x] **Automatic backend selection** — `DecoderConfig::for_codec_auto()` queries `CodecCapabilities` for available hardware; picks fastest backend (VA-API → dav1d → openh264 fallback chain)
-- [x] **Hardware-aware transcoding** — `recommend_encode_backend()` suggests encode paths preferring VA-API over software; `supported_codecs_with_hw()` includes hardware backends
-- [x] **`tarang probe --hw`** — surface hardware acceleration capabilities alongside media info
-- [x] **Capability matching** — `CodecCapabilities` maps ai-hwaccel detection + VA-API probing to tarang codec features; `probe_codec_capabilities()` builds unified decode/encode matrix
 
 ### AGNOS ecosystem integration
 

@@ -1,7 +1,13 @@
 //! AAC encoder via fdk-aac FFI
 //!
 //! Wraps the `fdk-aac` crate to encode F32 audio into AAC packets.
-//! Requires the `aac-enc` feature and libfdk-aac system library.
+//! Requires the `aac-enc` feature and the `libfdk-aac` system library
+//! (LGPL-2.1). No pure-Rust AAC encoder is available yet.
+//!
+//! **System dependency**: install `libfdk-aac-dev` (Debian/Ubuntu),
+//! `fdk-aac-devel` (Fedora), or `fdk-aac` (Arch) before enabling this
+//! feature. If linking fdk-aac is not possible, use Opus (`opus-enc`)
+//! or FLAC encoding as alternatives — both are pure Rust.
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 

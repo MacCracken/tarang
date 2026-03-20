@@ -1,6 +1,6 @@
 [package]
 name = "tarang"
-version = "0.19.3"
+version = "0.20.3"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0"
@@ -89,3 +89,8 @@ harness = false
 [[bench]]
 name = "ai"
 harness = false
+
+# Patch cros-libva for libva >= 1.23 compatibility (VP9 struct fields added upstream)
+# Remove when cros-libva > 0.0.13 is released
+[patch.crates-io]
+cros-libva = { path = "patches/cros-libva" }

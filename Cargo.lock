@@ -678,8 +678,6 @@ dependencies = [
 [[package]]
 name = "cros-libva"
 version = "0.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0d5dfcdd9b868cc52eb2b5f5b8dea053314b205073ab9f13fa118c479d3a161"
 dependencies = [
  "bindgen 0.70.1",
  "bitflags 2.11.0",
@@ -1412,9 +1410,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "ivf"
@@ -2878,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "tarang"
-version = "0.19.3"
+version = "0.20.3"
 dependencies = [
  "ai-hwaccel",
  "anyhow",

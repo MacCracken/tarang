@@ -127,7 +127,10 @@ impl DecoderConfig {
             }
             VideoCodec::H265 => {
                 return Err(TarangError::UnsupportedCodec(
-                    "H.265 not yet supported — no BSD-licensed decoder available".into(),
+                    "H.265 software decode not available — no free decoder exists. \
+                     Use DecoderConfig::for_codec_auto() with the `hwaccel` feature \
+                     to decode via VA-API hardware acceleration."
+                        .into(),
                 ));
             }
             VideoCodec::Theora => DecoderBackend::Software,
