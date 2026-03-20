@@ -9,7 +9,7 @@ homepage = "https://github.com/MacCracken/tarang"
 repository = "https://github.com/MacCracken/tarang"
 readme = "README.md"
 keywords = ["media", "audio", "video", "codec", "demux"]
-categories = ["multimedia", "multimedia::audio", "multimedia::video"]
+categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedia::encoding"]
 
 [features]
 default = []
