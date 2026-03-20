@@ -57,10 +57,10 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### ai-hwaccel integration
 
-- [ ] **Optional `ai-hwaccel` dependency** — feature-gated (`hwaccel` feature) to query GPU/NPU/TPU capabilities at runtime via `AcceleratorRegistry`
+- [x] **Optional `ai-hwaccel` dependency** — feature-gated (`hwaccel` feature) to query GPU/NPU/TPU capabilities at runtime via `AcceleratorRegistry`
 - [ ] **Automatic backend selection** — `VideoDecoder::new_auto()` queries ai-hwaccel for available hardware; picks fastest backend (VA-API → dav1d → openh264 fallback chain)
 - [ ] **Hardware-aware transcoding** — use detected accelerators to distribute encode work across available GPUs
-- [ ] **`tarang probe --hw`** — surface hardware acceleration capabilities alongside media info
+- [x] **`tarang probe --hw`** — surface hardware acceleration capabilities alongside media info
 - [ ] **Capability matching** — map ai-hwaccel's `AcceleratorProfile` to tarang codec features (e.g., NVIDIA → VA-API H.264, Intel → QSV, Apple → VideoToolbox)
 
 ### AGNOS ecosystem integration

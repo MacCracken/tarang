@@ -107,6 +107,7 @@
 //! | `pipewire` | PipeWire audio output |
 //! | `opus-enc` | Opus encoding via libopus |
 //! | `aac-enc` | AAC encoding via fdk-aac |
+//! | `hwaccel` | Hardware accelerator detection via ai-hwaccel |
 //!
 //! Default features: none. Audio decoding (symphonia) and all container
 //! demuxing/muxing are always available.
@@ -143,3 +144,7 @@ pub mod video;
 
 /// AI-powered media analysis: fingerprinting, scene detection, thumbnails, transcription.
 pub mod ai;
+
+/// Hardware accelerator detection via ai-hwaccel (GPU, NPU, TPU).
+#[cfg(feature = "hwaccel")]
+pub mod hwaccel;

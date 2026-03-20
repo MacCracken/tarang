@@ -30,8 +30,12 @@ struct Cli {
 enum Commands {
     /// Probe a media file and display info
     Probe {
-        /// Path to media file
-        path: String,
+        /// Path to media file (omit with --hw to probe hardware only)
+        path: Option<String>,
+
+        /// Show hardware acceleration capabilities instead of media info
+        #[arg(long)]
+        hw: bool,
     },
     /// Analyze media content with AI classification
     Analyze {
@@ -53,13 +57,50 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Probe { path } => cmd_probe(&path)?,
+        Commands::Probe { path, hw } => {
+            if hw {
+                cmd_probe_hw();
+            } else {
+                let path = path.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("path is required (or use --hw to probe hardware)")
+                })?;
+                cmd_probe(path)?;
+            }
+        }
         Commands::Analyze { path } => cmd_analyze(&path)?,
         Commands::Codecs => cmd_codecs(),
         Commands::Mcp => mcp::cmd_mcp().await?,
     }
 
     Ok(())
+}
+
+fn cmd_probe_hw() {
+    #[cfg(feature = "hwaccel")]
+    {
+        let report = tarang::hwaccel::probe_hardware();
+        print!("{report}");
+
+        #[cfg(feature = "vaapi")]
+        if let Some(vaapi) = tarang::video::probe_vaapi() {
+            println!("\nVA-API ({}, {}):", vaapi.driver_name, vaapi.render_node);
+            for cap in &vaapi.capabilities {
+                println!("  {} {} ({})", cap.codec, cap.direction, cap.profile);
+            }
+        }
+
+        if let Some(best) = report.best_accelerator() {
+            println!("\nRecommended accelerator: {best}");
+        } else {
+            println!("\nNo dedicated accelerators — CPU-only mode");
+        }
+    }
+
+    #[cfg(not(feature = "hwaccel"))]
+    {
+        eprintln!("Hardware detection requires the `hwaccel` feature.");
+        eprintln!("Rebuild with: cargo build --features hwaccel");
+    }
 }
 
 fn cmd_probe(path: &str) -> Result<()> {
@@ -92,6 +133,9 @@ fn cmd_probe(path: &str) -> Result<()> {
                     i,
                     language.as_deref().unwrap_or("unknown")
                 );
+            }
+            _ => {
+                println!("  [{i}] Unknown stream");
             }
         }
     }

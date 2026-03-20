@@ -13,7 +13,7 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "hwaccel"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]
@@ -22,6 +22,8 @@ rav1e = ["dep:rav1e"]
 openh264 = ["dep:openh264"]
 openh264-enc = ["dep:openh264"]
 vaapi = ["dep:cros-libva"]
+# Hardware detection
+hwaccel = ["dep:ai-hwaccel"]
 # Audio
 pipewire = ["dep:pipewire"]
 opus-enc = ["dep:opus"]
@@ -66,6 +68,7 @@ env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
 rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
 cros-libva = { version = "0.0.13", optional = true }
+ai-hwaccel = { version = "0.19", optional = true, default-features = false, features = ["vulkan"] }
 
 [dev-dependencies]
 tempfile = "3"
