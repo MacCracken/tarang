@@ -2,7 +2,16 @@
 
 ## 0.20.3
 
-ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
+ai-hwaccel integration, hardware-aware codec selection, P1 fixes, pre-v1.0 hardening.
+
+### Pre-v1.0 hardening (P0)
+- **`num_samples` → `num_frames` rename** — `AudioBuffer.num_samples` renamed to `num_frames` across entire codebase (24 files); fixes long-standing naming ambiguity that caused bugs
+- **`cargo-semver-checks` in CI** — new CI job enforces SemVer compliance on every push
+- **Coverage threshold raised** — CI enforces 89%+ line coverage (was 80%); codecov project target 90%
+- **Doc examples for all public modules** — added `rust,ignore` examples to `video::convert`, `video::scale`, `ai::diarize`, `ai::acoustid`, `ai::scene`, `ai::thumbnail`
+- **VA-API `unwrap()` fixes** — `.pop().unwrap()` in vaapi_dec.rs and vaapi_enc.rs replaced with `.ok_or_else()` error handling
+- **LOW security items documented** — `docs/development/security-audit-low.md` enumerates all 6 LOW findings with accept/fix decisions
+- **CI fixes** — cros-libva patch works on all libva versions (`..Default::default()`), doc link warnings fixed, cargo-vet exemptions for 17 new deps, semver-checks uses default features only
 
 ### H.265/HEVC software decoding
 - `LibDe265Decoder` — software H.265 decode via libde265 (`h265-decode` feature)

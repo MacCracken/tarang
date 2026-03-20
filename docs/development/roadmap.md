@@ -8,15 +8,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## 0.21.3 — Pre-v1.0 hardening
 
-### P0 — Must-fix for v1.0
-
-- [ ] **`num_samples` → `num_frames` rename** — field name is misleading and has caused bugs; breaking change allowed pre-1.0
-- [ ] **`cargo-semver-checks` in CI** — v1.0 gate: enforce SemVer compliance on every PR
-- [ ] **Coverage threshold 90%+** — raise CI from 80% to 90%; add tests for convert, scale, effects, loudness, diarize, acoustid
-- [ ] **Doc examples for all public modules** — v1.0 gate: `audio::effects`, `audio::loudness`, `video::convert`, `video::scale`, `ai::diarize`, `ai::acoustid`
-- [ ] **Fix VA-API `unwrap()` calls** — `vaapi_dec.rs` and `vaapi_enc.rs` `.pop().unwrap()` → proper error handling
-- [ ] **Document LOW security items** — enumerate the 6 LOW severity findings with accept/fix decisions
-
 ### P1 — Should-fix (quality)
 
 - [ ] **VA-API surface pooling** — reuse pre-allocated surfaces instead of per-frame GPU allocation (encode + decode)
