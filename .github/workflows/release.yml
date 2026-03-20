@@ -13,16 +13,32 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   build:
-    name: Build (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
     needs: [ci]
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            arch: amd64
+            os: ubuntu-latest
+            name: linux-amd64
+            archive: tar.gz
           - target: aarch64-unknown-linux-gnu
-            arch: arm64
+            os: ubuntu-latest
+            name: linux-arm64
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-amd64
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-amd64
+            archive: zip
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -31,31 +47,58 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - name: Install system dependencies
+
+      # Linux system deps
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
-      - name: Install cross-compilation deps (arm64)
-        if: matrix.arch == 'arm64'
+
+      - name: Install cross-compilation deps (Linux arm64)
+        if: matrix.name == 'linux-arm64'
         run: |
           sudo apt-get install -y gcc-aarch64-linux-gnu
           mkdir -p .cargo
           echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
-      - name: Build release
+
+      # macOS — build with default features only (no VA-API, no PipeWire, no system FFI codecs)
+      # Windows — same: default features only
+      - name: Build release (Linux)
+        if: runner.os == 'Linux'
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package
+
+      - name: Build release (macOS/Windows — default features)
+        if: runner.os != 'Linux'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
-          ARCHIVE="tarang-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+          ARCHIVE="tarang-${VERSION}-${{ matrix.name }}.tar.gz"
           tar czf "${ARCHIVE}" -C target/${{ matrix.target }}/release tarang
-          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256" || shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+
+      - name: Package (zip — Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $VERSION = (Get-Content VERSION).Trim()
+          $ARCHIVE = "tarang-${VERSION}-${{ matrix.name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/tarang.exe" -DestinationPath $ARCHIVE
+          $hash = (Get-FileHash $ARCHIVE -Algorithm SHA256).Hash.ToLower()
+          "$hash  $ARCHIVE" | Out-File -Encoding ASCII "${ARCHIVE}.sha256"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tarang-${{ matrix.arch }}
+          name: tarang-${{ matrix.name }}
           path: |
             tarang-*.tar.gz
+            tarang-*.zip
             tarang-*.sha256
 
   publish:
@@ -103,5 +146,6 @@ jobs:
         with:
           files: |
             tarang-*.tar.gz
+            tarang-*.zip
             tarang-*.sha256
           generate_release_notes: true

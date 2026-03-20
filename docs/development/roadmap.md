@@ -18,6 +18,14 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 - [ ] **`Muxer` trait video support** — add `write_video_packet()` to trait with default error impl
 - [ ] **NV12 conversion paths** — add NV12→YUV420p and NV12→RGB24 to `video::convert`
 
+### Cross-platform (Phases 1-3 for v1.0)
+
+- [ ] **`portable` feature flag** — all codecs except platform-specific hw accel (vaapi, pipewire excluded)
+- [ ] **macOS CI with Homebrew codecs** — install dav1d, libvpx, opus, fdk-aac; test with `portable` features
+- [ ] **macOS release builds with FFI codecs** — Homebrew deps in release workflow
+- [ ] **`cpal` audio output** — cross-platform audio playback (CoreAudio, WASAPI, ALSA) via `cpal` crate
+- [ ] **Windows CI with vendored codecs** — openh264, rav1e, hwaccel; test on windows-latest
+
 ### P2 — Polish
 
 - [ ] **Rename `AudioDecoder` → `AudioCodecInfo`** — vestigial type that isn't a decoder
@@ -62,8 +70,8 @@ Longer-term items that don't block any release.
 
 ### Platform support
 
-- [ ] **macOS CoreAudio output** — alternative to PipeWire for macOS
-- [ ] **Windows WASAPI output** — alternative to PipeWire for Windows
+- [ ] **macOS VideoToolbox** — hardware H.264/H.265 encode/decode via VTCompressionSession/VTDecompressionSession (Phase 4a)
+- [ ] **Windows Media Foundation** — hardware H.264/H.265 encode/decode via MFT (Phase 4b)
 - [ ] **Android MediaCodec** — hardware decode/encode via Android NDK
 - [ ] **iOS AVFoundation** — hardware decode/encode via Apple frameworks
 - [ ] **WASM target** — browser-based media processing with Web Audio API
