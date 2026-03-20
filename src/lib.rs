@@ -34,7 +34,7 @@
 //! use Opus (`opus-enc`) or FLAC as alternatives.*
 //!
 //! *H.265 decode has no free software decoder. Use
-//! [`video::DecoderConfig::for_codec_auto()`] with the `hwaccel` feature
+//! `DecoderConfig::for_codec_auto()` (with the `hwaccel` feature)
 //! to decode via VA-API hardware acceleration on supported GPUs.*
 //!
 //! ### Containers (pure Rust)

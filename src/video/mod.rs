@@ -107,7 +107,7 @@ impl std::fmt::Display for DecoderBackend {
 /// Video decoder configuration.
 ///
 /// Use [`DecoderConfig::for_codec`] for software-only or
-/// [`DecoderConfig::for_codec_auto`] (with the `hwaccel` feature) for
+/// `for_codec_auto()` (with the `hwaccel` feature) for
 /// hardware-aware backend selection.
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {

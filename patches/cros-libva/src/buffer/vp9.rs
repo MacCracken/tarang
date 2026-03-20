@@ -434,9 +434,8 @@ impl EncPictureParameterBufferVP9 {
             skip_frame_flag,
             number_skip_frames,
             skip_frames_size,
-            seg_id_block_size: 0,
-            va_reserved8: Default::default(),
             va_reserved: Default::default(),
+            ..Default::default()
         }))
     }
 

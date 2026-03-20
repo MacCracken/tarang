@@ -280,7 +280,7 @@ impl MediaInfo {
 /// N frames, `data` contains `[L0, R0, L1, R1, ..., LN, RN]` as F32.
 #[derive(Debug, Clone)]
 pub struct AudioBuffer {
-    /// Raw sample data as bytes (interpret as F32 via [`crate::audio::sample::bytes_to_f32`]).
+    /// Raw sample data as bytes (interpret as interleaved F32).
     pub data: Bytes,
     /// Sample format (typically F32 after decoding).
     pub sample_format: SampleFormat,

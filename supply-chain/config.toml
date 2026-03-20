@@ -4,6 +4,14 @@
 [cargo-vet]
 version = "0.10"
 
+# Local patch of cros-libva matches crates.io version
+[policy.cros-libva]
+audit-as-crates-io = true
+
+# tarang is the root crate, not from crates.io
+[policy.tarang]
+audit-as-crates-io = false
+
 [imports.mozilla]
 url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
