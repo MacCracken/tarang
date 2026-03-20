@@ -931,7 +931,17 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
 
     fn finalize(&mut self) -> Result<()> {
         // Patch mdat box size
-        let mdat_size = (8 + self.mdat_data_size) as u32;
+        let mdat_total = 8u64.saturating_add(self.mdat_data_size);
+        if mdat_total > u32::MAX as u64 {
+            return Err(TarangError::MuxError(
+                format!(
+                    "mdat size {} exceeds u32::MAX — file too large for standard MP4 mdat box",
+                    mdat_total
+                )
+                .into(),
+            ));
+        }
+        let mdat_size = mdat_total as u32;
         let current_pos = self.writer.stream_position().map_err(io_err)?;
         self.writer
             .seek(std::io::SeekFrom::Start(self.mdat_offset))

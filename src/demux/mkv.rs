@@ -119,6 +119,19 @@ impl<R: Read + Seek> MkvDemuxer<R> {
         }
     }
 
+    /// Skip `size` bytes forward safely, validating the value fits in i64.
+    fn skip_bytes(&mut self, size: u64) -> Result<()> {
+        if size > i64::MAX as u64 {
+            return Err(TarangError::DemuxError(
+                format!("element size {size} exceeds seekable range").into(),
+            ));
+        }
+        self.reader
+            .seek(SeekFrom::Current(size as i64))
+            .map_err(io_err)?;
+        Ok(())
+    }
+
     /// Read a variable-length EBML integer (VINT).
     /// Returns (value, bytes_consumed).
     fn read_vint(&mut self) -> Result<(u64, usize)> {
@@ -269,9 +282,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 let doc = self.read_string(esize)?;
                 self.is_webm = doc == "webm";
             } else {
-                self.reader
-                    .seek(SeekFrom::Current(esize as i64))
-                    .map_err(io_err)?;
+                self.skip_bytes(esize)?;
             }
         }
 
@@ -294,9 +305,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                     self.duration_timecode = self.read_float(esize)?;
                 }
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -314,9 +323,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             if eid == TRACK_ENTRY {
                 self.parse_track_entry(esize)?;
             } else {
-                self.reader
-                    .seek(SeekFrom::Current(esize as i64))
-                    .map_err(io_err)?;
+                self.skip_bytes(esize)?;
             }
         }
         Ok(())
@@ -350,9 +357,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 AUDIO => self.parse_audio_settings(esize, &mut track)?,
                 VIDEO => self.parse_video_settings(esize, &mut track)?,
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -380,9 +385,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 CHANNELS => track.channels = self.read_uint(esize)?,
                 BIT_DEPTH => track.bit_depth = self.read_uint(esize)?,
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -400,9 +403,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 PIXEL_WIDTH => track.width = self.read_uint(esize)?,
                 PIXEL_HEIGHT => track.height = self.read_uint(esize)?,
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -454,9 +455,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             if eid == EDITION_ENTRY {
                 self.parse_edition_entry(esize)?;
             } else {
-                self.reader
-                    .seek(SeekFrom::Current(esize as i64))
-                    .map_err(io_err)?;
+                self.skip_bytes(esize)?;
             }
         }
         Ok(())
@@ -478,9 +477,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             if eid == CHAPTER_ATOM {
                 self.parse_chapter_atom(esize)?;
             } else {
-                self.reader
-                    .seek(SeekFrom::Current(esize as i64))
-                    .map_err(io_err)?;
+                self.skip_bytes(esize)?;
             }
         }
         Ok(())
@@ -520,16 +517,12 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                         if did == CHAPTER_STRING {
                             title = Some(self.read_string(dsize)?);
                         } else {
-                            self.reader
-                                .seek(SeekFrom::Current(dsize as i64))
-                                .map_err(io_err)?;
+                            self.skip_bytes(dsize)?;
                         }
                     }
                 }
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -616,9 +609,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                     break;
                 }
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -735,9 +726,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                     return self.parse_simple_block(esize);
                 }
                 _ => {
-                    self.reader
-                        .seek(SeekFrom::Current(esize as i64))
-                        .map_err(io_err)?;
+                    self.skip_bytes(esize)?;
                 }
             }
         }
@@ -796,9 +785,7 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                 continue;
             }
 
-            self.reader
-                .seek(SeekFrom::Current(esize as i64))
-                .map_err(io_err)?;
+            self.skip_bytes(esize)?;
         }
 
         Ok(())
@@ -834,6 +821,15 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             ));
         }
         let data_size = size - header_size;
+
+        // Cap SimpleBlock data to prevent OOM on malformed files
+        const MAX_BLOCK_SIZE: u64 = 64 * 1024 * 1024; // 64 MB
+        if data_size > MAX_BLOCK_SIZE {
+            return Err(TarangError::DemuxError(
+                format!("SimpleBlock data size {data_size} exceeds {MAX_BLOCK_SIZE} byte limit")
+                    .into(),
+            ));
+        }
 
         self.packet_buf.clear();
         self.packet_buf.resize(data_size as usize, 0);

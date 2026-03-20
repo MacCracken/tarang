@@ -10,7 +10,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ### AI features
 
-- [ ] **Offline transcription** — bundle a small Whisper model (tiny/base) for local inference without hoosh dependency
+- [ ] **Offline transcription** — deferred to hoosh crate (separate project); tarang consumes via existing `HooshClient` HTTP API
 
 ### Release prep
 

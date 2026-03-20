@@ -19,6 +19,12 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - Migrated ~40 `Pipeline` misuses: muxer state errors → `MuxError`, encoder errors → `EncodeError`, validation errors → `ConfigError`
 - `Pipeline` reduced from catch-all to genuine pipeline state issues only
 
+### Security audit (pre-release)
+- **MKV SimpleBlock size cap**: 64MB limit prevents OOM on malformed files (was uncapped)
+- **MKV seek overflow guard**: `skip_bytes()` helper validates `esize <= i64::MAX` before seeking (12 sites fixed)
+- **MP4 mdat size overflow check**: `finalize()` rejects mdat > 4GB instead of silently truncating to u32
+- 0 HIGH, 3 MEDIUM (all fixed), 6 LOW (documented)
+
 ### AI features
 - **Speaker diarization**: `ai::diarize` module — energy-based VAD + spectral clustering for who-spoke-when segmentation; `diarize()` returns `Vec<SpeakerSegment>` with timing and speaker IDs; 8 tests
 - **AcoustID fingerprinting**: `ai::acoustid` module — Chromaprint-compatible compressed fingerprints for music identification; `compute_acoustid()` returns base64-encoded fingerprint string; 7 tests
