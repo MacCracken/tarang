@@ -127,12 +127,12 @@ jobs:
         run: cargo llvm-cov --lcov --output-path lcov.info
       - name: Coverage summary
         run: cargo llvm-cov --summary-only | tail -5
-      - name: Verify minimum coverage (80%)
+      - name: Verify minimum coverage (90%)
         run: |
           COVERAGE=$(cargo llvm-cov --summary-only 2>&1 | grep "^TOTAL" | awk '{print $10}' | sed 's/%//')
           echo "Line coverage: ${COVERAGE}%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "ERROR: Coverage ${COVERAGE}% is below 80% threshold"
+          if (( $(echo "$COVERAGE < 90" | bc -l) )); then
+            echo "ERROR: Coverage ${COVERAGE}% is below 90% threshold"
             exit 1
           fi
       - name: Upload coverage
@@ -197,6 +197,23 @@ jobs:
         run: cargo check
       - name: Test (default features)
         run: cargo test
+
+  semver:
+    name: SemVer Check
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks
+      - name: Check SemVer compliance
+        run: cargo semver-checks check-release
 
   build:
     name: Build Release

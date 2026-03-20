@@ -2,6 +2,12 @@
 //!
 //! Resizes video frames using the `image` crate for RGB24 data.
 //! YUV420p frames are converted to RGB24, resized, then converted back.
+//!
+//! ```rust,ignore
+//! use tarang::video::scale::{scale_frame, ScaleFilter};
+//!
+//! let scaled = scale_frame(&frame, 1280, 720, ScaleFilter::Lanczos3).unwrap();
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;

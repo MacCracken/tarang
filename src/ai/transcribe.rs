@@ -168,7 +168,7 @@ impl HooshClient {
     ) -> Result<TranscriptionResult> {
         let chunk_secs = self.config.chunk_duration_secs.max(1.0);
         let chunk_samples = (audio.sample_rate as f64 * chunk_secs) as usize;
-        let total_samples = audio.num_samples;
+        let total_samples = audio.num_frames;
         let channels = audio.channels as usize;
         let bps = audio.sample_format.bytes_per_sample();
         let frame_bytes = channels * bps;
@@ -195,7 +195,7 @@ impl HooshClient {
                 sample_format: audio.sample_format,
                 channels: audio.channels,
                 sample_rate: audio.sample_rate,
-                num_samples: n,
+                num_frames: n,
                 timestamp: Duration::from_secs_f64(
                     offset_samples as f64 / audio.sample_rate as f64,
                 ),
@@ -247,7 +247,7 @@ impl HooshClient {
 pub fn prepare_audio_for_transcription(buf: &AudioBuffer) -> AudioBuffer {
     // Downmix to mono if needed
     if buf.channels > 1 {
-        let sample_count = buf.num_samples;
+        let sample_count = buf.num_frames;
         let channels = buf.channels as usize;
         let bytes_per_sample = buf.sample_format.bytes_per_sample();
         let mut mono_data = Vec::with_capacity(sample_count * bytes_per_sample);
@@ -289,7 +289,7 @@ pub fn prepare_audio_for_transcription(buf: &AudioBuffer) -> AudioBuffer {
             sample_format: buf.sample_format,
             channels: 1,
             sample_rate: buf.sample_rate,
-            num_samples: sample_count,
+            num_frames: sample_count,
             timestamp: buf.timestamp,
         }
     } else {
@@ -386,8 +386,8 @@ mod tests {
     use super::*;
     use bytes::Bytes;
 
-    fn make_f32_buffer(channels: u16, sample_rate: u32, num_samples: usize) -> AudioBuffer {
-        let total_values = num_samples * channels as usize;
+    fn make_f32_buffer(channels: u16, sample_rate: u32, num_frames: usize) -> AudioBuffer {
+        let total_values = num_frames * channels as usize;
         let mut data = Vec::with_capacity(total_values * 4);
         for i in 0..total_values {
             let t = i as f32 / sample_rate as f32;
@@ -399,7 +399,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(buf.channels, 2);
         let mono = prepare_audio_for_transcription(&buf);
         assert_eq!(mono.channels, 1);
-        assert_eq!(mono.num_samples, 1024);
+        assert_eq!(mono.num_frames, 1024);
     }
 
     #[test]
@@ -480,7 +480,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 3,
+            num_frames: 3,
             timestamp: Duration::ZERO,
         };
 
@@ -504,7 +504,7 @@ mod tests {
             sample_format: SampleFormat::I16,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 2,
+            num_frames: 2,
             timestamp: Duration::ZERO,
         };
         let pcm = samples_to_pcm16(&buf).unwrap();
@@ -552,7 +552,7 @@ mod tests {
             sample_format: SampleFormat::I32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 3,
+            num_frames: 3,
             timestamp: Duration::ZERO,
         };
 
@@ -573,7 +573,7 @@ mod tests {
             sample_format: SampleFormat::F64,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 8,
+            num_frames: 8,
             timestamp: Duration::ZERO,
         };
         assert!(samples_to_pcm16(&buf).is_err());
@@ -596,9 +596,9 @@ mod tests {
 
     #[test]
     fn prepare_i16_stereo_takes_first_channel() {
-        let num_samples = 100;
-        let mut data = Vec::with_capacity(num_samples * 2 * 2);
-        for i in 0..num_samples {
+        let num_frames = 100;
+        let mut data = Vec::with_capacity(num_frames * 2 * 2);
+        for i in 0..num_frames {
             // Left channel: ascending
             let left = (i as i16) * 100;
             // Right channel: descending
@@ -611,7 +611,7 @@ mod tests {
             sample_format: SampleFormat::I16,
             channels: 2,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
         let mono = prepare_audio_for_transcription(&buf);
@@ -623,10 +623,10 @@ mod tests {
 
     #[test]
     fn prepare_multichannel_f32_averages() {
-        let num_samples = 10;
+        let num_frames = 10;
         let channels = 4u16;
-        let mut data = Vec::with_capacity(num_samples * channels as usize * 4);
-        for _ in 0..num_samples {
+        let mut data = Vec::with_capacity(num_frames * channels as usize * 4);
+        for _ in 0..num_frames {
             // All channels = 0.4, so average should be 0.4
             for _ in 0..channels {
                 data.extend_from_slice(&(0.4f32).to_le_bytes());
@@ -637,7 +637,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
         let mono = prepare_audio_for_transcription(&buf);
@@ -709,7 +709,7 @@ mod tests {
                 sample_format: buf.sample_format,
                 channels: buf.channels,
                 sample_rate: buf.sample_rate,
-                num_samples: n,
+                num_frames: n,
                 timestamp: Duration::from_secs_f64(offset as f64 / sample_rate as f64),
             };
 

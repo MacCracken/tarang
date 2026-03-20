@@ -2,6 +2,16 @@
 //!
 //! Detects speech segments and assigns speaker labels based on
 //! spectral similarity. Uses energy-based VAD and MFCC-like features.
+//!
+//! ```rust,ignore
+//! use tarang::ai::diarize::{diarize, DiarizeConfig};
+//!
+//! let config = DiarizeConfig::default();
+//! let segments = diarize(&audio_buffer, &config).unwrap();
+//! for seg in &segments {
+//!     println!("Speaker {}: {:?}–{:?}", seg.speaker_id, seg.start, seg.end);
+//! }
+//! ```
 
 use crate::core::{AudioBuffer, Result};
 use rustfft::FftPlanner;
@@ -312,9 +322,9 @@ mod tests {
     use bytes::Bytes;
 
     fn make_sine_buffer(freq: f32, duration_secs: f32, sample_rate: u32) -> AudioBuffer {
-        let num_samples = (sample_rate as f32 * duration_secs) as usize;
-        let mut data = Vec::with_capacity(num_samples * 4);
-        for i in 0..num_samples {
+        let num_frames = (sample_rate as f32 * duration_secs) as usize;
+        let mut data = Vec::with_capacity(num_frames * 4);
+        for i in 0..num_frames {
             let t = i as f32 / sample_rate as f32;
             let sample = (t * freq * std::f32::consts::TAU).sin() * 0.5;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -324,20 +334,20 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
 
     fn make_silence_buffer(duration_secs: f32, sample_rate: u32) -> AudioBuffer {
-        let num_samples = (sample_rate as f32 * duration_secs) as usize;
-        let data = vec![0u8; num_samples * 4]; // F32 zeros
+        let num_frames = (sample_rate as f32 * duration_secs) as usize;
+        let data = vec![0u8; num_frames * 4]; // F32 zeros
         AudioBuffer {
             data: Bytes::from(data),
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
@@ -406,7 +416,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 0,
+            num_frames: 0,
             timestamp: Duration::ZERO,
         };
         let config = DiarizeConfig::default();

@@ -4,8 +4,8 @@ use std::time::Duration;
 use tarang::audio::{self, AudioEncoder, EncoderConfig};
 use tarang::core::{AudioBuffer, AudioCodec, SampleFormat};
 
-fn make_sine_f32(sample_rate: u32, channels: u16, num_samples: usize) -> AudioBuffer {
-    let total = num_samples * channels as usize;
+fn make_sine_f32(sample_rate: u32, channels: u16, num_frames: usize) -> AudioBuffer {
+    let total = num_frames * channels as usize;
     let mut data = Vec::with_capacity(total * 4);
     for i in 0..total {
         let t = i as f32 / sample_rate as f32;
@@ -17,7 +17,7 @@ fn make_sine_f32(sample_rate: u32, channels: u16, num_samples: usize) -> AudioBu
         sample_format: SampleFormat::F32,
         channels,
         sample_rate,
-        num_samples,
+        num_frames,
         timestamp: Duration::ZERO,
     }
 }

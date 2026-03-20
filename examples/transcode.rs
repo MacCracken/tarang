@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     let audio = decoder.decode_all()?;
     println!(
         "  {} frames, {}Hz, {}ch",
-        audio.num_samples, audio.sample_rate, audio.channels
+        audio.num_frames, audio.sample_rate, audio.channels
     );
 
     // Resample to 44100 if needed

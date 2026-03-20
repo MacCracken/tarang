@@ -75,7 +75,7 @@ mod tests {
             sample_format: format,
             channels,
             sample_rate: 16000,
-            num_samples: 0, // not used by extract_mono_f32
+            num_frames: 0, // not used by extract_mono_f32
             timestamp: Duration::ZERO,
         }
     }

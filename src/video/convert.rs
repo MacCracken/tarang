@@ -1,6 +1,13 @@
 //! Pixel format conversion for video frames
 //!
 //! Centralizes YUV420p, NV12, and RGB24 conversions using BT.601 coefficients.
+//!
+//! ```rust,ignore
+//! use tarang::video::convert::convert_pixel_format;
+//! use tarang::core::PixelFormat;
+//!
+//! let rgb_frame = convert_pixel_format(&yuv_frame, PixelFormat::Rgb24).unwrap();
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;

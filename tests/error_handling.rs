@@ -171,7 +171,7 @@ fn resample_same_rate_passthrough() {
     let buf = make_audio_buffer(44100, 2, 1000);
     let result = tarang::audio::resample(&buf, 44100).unwrap();
     assert_eq!(result.sample_rate, 44100);
-    assert_eq!(result.num_samples, 1000);
+    assert_eq!(result.num_frames, 1000);
     // Data should be identical (Bytes clone is zero-copy)
     assert_eq!(result.data, buf.data);
 }
@@ -183,7 +183,7 @@ fn resample_empty_buffer() {
         sample_format: SampleFormat::F32,
         channels: 1,
         sample_rate: 44100,
-        num_samples: 0,
+        num_frames: 0,
         timestamp: Duration::ZERO,
     };
     let result = tarang::audio::resample(&buf, 48000);
@@ -197,7 +197,7 @@ fn mix_zero_channels() {
         sample_format: SampleFormat::F32,
         channels: 0,
         sample_rate: 44100,
-        num_samples: 100,
+        num_frames: 100,
         timestamp: Duration::ZERO,
     };
     let result = tarang::audio::mix_channels(&buf, tarang::audio::ChannelLayout::Mono);
@@ -209,7 +209,7 @@ fn mix_mono_to_mono_passthrough() {
     let buf = make_audio_buffer(44100, 1, 1000);
     let result = tarang::audio::mix_channels(&buf, tarang::audio::ChannelLayout::Mono).unwrap();
     assert_eq!(result.channels, 1);
-    assert_eq!(result.num_samples, 1000);
+    assert_eq!(result.num_frames, 1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +223,7 @@ fn fingerprint_empty_buffer() {
         sample_format: SampleFormat::F32,
         channels: 1,
         sample_rate: 44100,
-        num_samples: 0,
+        num_frames: 0,
         timestamp: Duration::ZERO,
     };
     let fp = tarang::ai::compute_fingerprint(&buf, &Default::default()).unwrap();
@@ -308,7 +308,7 @@ fn wav_demux_to_decode_pipeline() {
     let decoded = decoder.decode_all().unwrap();
     assert_eq!(decoded.channels, 2);
     assert_eq!(decoded.sample_rate, 44100);
-    assert!(decoded.num_samples > 0);
+    assert!(decoded.num_frames > 0);
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn decode_resample_mix_pipeline() {
     // Resample 48k → 16k
     let resampled = tarang::audio::resample(&decoded, 16000).unwrap();
     assert_eq!(resampled.sample_rate, 16000);
-    assert!(resampled.num_samples < decoded.num_samples);
+    assert!(resampled.num_frames < decoded.num_frames);
 
     // Mix stereo → mono
     let mono = tarang::audio::mix_channels(&resampled, tarang::audio::ChannelLayout::Mono).unwrap();
@@ -334,8 +334,8 @@ fn decode_resample_mix_pipeline() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn make_audio_buffer(sample_rate: u32, channels: u16, num_samples: usize) -> AudioBuffer {
-    let total = num_samples * channels as usize;
+fn make_audio_buffer(sample_rate: u32, channels: u16, num_frames: usize) -> AudioBuffer {
+    let total = num_frames * channels as usize;
     let mut data = Vec::with_capacity(total * 4);
     for i in 0..total {
         let t = i as f32 / sample_rate as f32;
@@ -347,7 +347,7 @@ fn make_audio_buffer(sample_rate: u32, channels: u16, num_samples: usize) -> Aud
         sample_format: SampleFormat::F32,
         channels,
         sample_rate,
-        num_samples,
+        num_frames,
         timestamp: Duration::ZERO,
     }
 }

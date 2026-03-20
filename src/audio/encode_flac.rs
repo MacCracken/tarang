@@ -679,7 +679,7 @@ impl AudioEncoder for FlacEncoder {
             ));
         }
         let float_samples = bytes_to_f32(&buf.data);
-        let num_frames = buf.num_samples;
+        let num_frames = buf.num_frames;
         let ch = self.channels as usize;
 
         // Convert F32 to integer samples

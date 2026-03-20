@@ -94,7 +94,7 @@ pub fn apply_gain(buf: &AudioBuffer, gain_db: f32) -> Result<AudioBuffer> {
         sample_format: buf.sample_format,
         channels: buf.channels,
         sample_rate: buf.sample_rate,
-        num_samples: buf.num_samples,
+        num_frames: buf.num_frames,
         timestamp: buf.timestamp,
     })
 }

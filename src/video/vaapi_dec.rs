@@ -195,7 +195,9 @@ impl VaapiDecoder {
                 )
             })?;
 
-        let surface = surfaces.pop().unwrap();
+        let surface = surfaces.pop().ok_or_else(|| {
+            TarangError::HwAccelError("VA-API returned no decode surfaces".into())
+        })?;
 
         // Submit slice data
         let slice_data = BufferType::SliceData(data.to_vec());

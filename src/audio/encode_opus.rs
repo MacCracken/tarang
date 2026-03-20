@@ -69,7 +69,7 @@ impl AudioEncoder for OpusEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
         let float_samples = bytes_to_f32(&buf.data);
         let ch = self.channels as usize;
-        let num_frames = buf.num_samples;
+        let num_frames = buf.num_frames;
         let samples_per_frame = self.frame_size * ch;
 
         let mut packets = Vec::new();

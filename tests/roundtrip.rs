@@ -146,7 +146,7 @@ fn wav_mux_decode_pipeline_roundtrip() {
 
     assert_eq!(decoded.channels, 2);
     assert_eq!(decoded.sample_rate, 44100);
-    assert!(decoded.num_samples > 0);
+    assert!(decoded.num_frames > 0);
 }
 
 // ---------------------------------------------------------------------------

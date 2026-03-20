@@ -4,6 +4,15 @@
 //! inter-frame luminance histogram differences. Supports hard cuts
 //! (chi-squared histogram distance) and gradual transitions
 //! (rolling standard deviation of frame differences).
+//!
+//! ```rust,ignore
+//! use tarang::ai::scene::{SceneDetector, SceneDetectionConfig};
+//!
+//! let mut detector = SceneDetector::new(SceneDetectionConfig::default());
+//! // Feed frames from a decoder:
+//! // detector.feed_frame(&frame, timestamp);
+//! let boundaries = detector.finish();
+//! ```
 
 use crate::core::VideoFrame;
 use std::collections::VecDeque;

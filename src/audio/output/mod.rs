@@ -89,7 +89,7 @@ impl AudioOutput for NullOutput {
         if self.config.is_none() {
             return Err(TarangError::Pipeline("output not opened".into()));
         }
-        self.samples_written += buf.num_samples as u64;
+        self.samples_written += buf.num_frames as u64;
         Ok(())
     }
 
@@ -114,14 +114,14 @@ mod tests {
     use bytes::Bytes;
     use std::time::Duration;
 
-    fn make_buffer(num_samples: usize, channels: u16, sample_rate: u32) -> AudioBuffer {
-        let data = vec![0.5f32; num_samples * channels as usize];
+    fn make_buffer(num_frames: usize, channels: u16, sample_rate: u32) -> AudioBuffer {
+        let data = vec![0.5f32; num_frames * channels as usize];
         AudioBuffer {
             data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&data)),
             sample_format: SampleFormat::F32,
             channels,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }

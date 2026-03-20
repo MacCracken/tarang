@@ -426,7 +426,9 @@ impl VaapiEncoder {
                 )
             })?;
 
-        let enc_surface = enc_surfaces.pop().unwrap();
+        let enc_surface = enc_surfaces.pop().ok_or_else(|| {
+            TarangError::HwAccelError("VA-API returned no encode surfaces".into())
+        })?;
 
         // Upload NV12 to the new surface
         let mut enc_image = Image::create_from(

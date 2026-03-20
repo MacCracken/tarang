@@ -14,7 +14,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     if target_rate == 0 {
         return Err(TarangError::ConfigError("target sample rate is 0".into()));
     }
-    if buf.sample_rate == 0 || buf.channels == 0 || buf.num_samples == 0 {
+    if buf.sample_rate == 0 || buf.channels == 0 || buf.num_frames == 0 {
         return Err(TarangError::ConfigError("invalid source buffer".into()));
     }
 
@@ -25,7 +25,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         });
     }
@@ -33,7 +33,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
     let src = bytes_to_f32(&buf.data);
     let ch = buf.channels as usize;
     // Derive frame count from actual data length to handle callers that
-    // set num_samples to total interleaved samples rather than frames.
+    // set num_frames to total interleaved samples rather than frames.
     let src_frames = src.len() / ch.max(1);
 
     let ratio = target_rate as f64 / buf.sample_rate as f64;
@@ -122,7 +122,7 @@ pub fn resample(buf: &AudioBuffer, target_rate: u32) -> Result<AudioBuffer> {
         sample_format: SampleFormat::F32,
         channels: buf.channels,
         sample_rate: target_rate,
-        num_samples: dst_frames,
+        num_frames: dst_frames,
         timestamp: buf.timestamp,
     })
 }
@@ -137,7 +137,7 @@ pub fn resample_sinc(
     if target_rate == 0 {
         return Err(TarangError::ConfigError("target sample rate is 0".into()));
     }
-    if buf.sample_rate == 0 || buf.channels == 0 || buf.num_samples == 0 {
+    if buf.sample_rate == 0 || buf.channels == 0 || buf.num_frames == 0 {
         return Err(TarangError::ConfigError("invalid source buffer".into()));
     }
     if window_size == 0 || window_size > 1024 {
@@ -151,7 +151,7 @@ pub fn resample_sinc(
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         });
     }
@@ -248,7 +248,7 @@ pub fn resample_sinc(
         sample_format: SampleFormat::F32,
         channels: buf.channels,
         sample_rate: target_rate,
-        num_samples: dst_frames,
+        num_frames: dst_frames,
         timestamp: buf.timestamp,
     })
 }
@@ -284,7 +284,7 @@ mod tests {
         let samples = make_sine(440.0, 44100, 1000, 2);
         let buf = make_buffer(&samples, 2, 44100);
         let out = resample(&buf, 44100).unwrap();
-        assert_eq!(out.num_samples, 1000);
+        assert_eq!(out.num_frames, 1000);
         assert_eq!(out.sample_rate, 44100);
     }
 
@@ -296,7 +296,7 @@ mod tests {
 
         assert_eq!(out.sample_rate, 48000);
         // 4410 * (48000/44100) ≈ 4800
-        assert!((out.num_samples as i64 - 4800).abs() <= 1);
+        assert!((out.num_frames as i64 - 4800).abs() <= 1);
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
         let out = resample(&buf, 44100).unwrap();
 
         assert_eq!(out.sample_rate, 44100);
-        assert!((out.num_samples as i64 - 4410).abs() <= 1);
+        assert!((out.num_frames as i64 - 4410).abs() <= 1);
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(out.channels, 2);
         assert_eq!(out.sample_rate, 48000);
         // Data should have correct size: frames * channels * 4 bytes
-        assert_eq!(out.data.len(), out.num_samples * 2 * 4);
+        assert_eq!(out.data.len(), out.num_frames * 2 * 4);
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 0,
             sample_rate: 0,
-            num_samples: 0,
+            num_frames: 0,
             timestamp: std::time::Duration::ZERO,
         };
         assert!(resample(&buf, 44100).is_err());
@@ -400,7 +400,7 @@ mod tests {
         let buf = make_buffer(&samples, 1, 8000);
         let out = resample(&buf, 48000).unwrap();
         assert_eq!(out.sample_rate, 48000);
-        assert!((out.num_samples as f64 / 4800.0 - 1.0).abs() < 0.01);
+        assert!((out.num_frames as f64 / 4800.0 - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
         let out = resample(&buf, 44100).unwrap();
         // Same-rate resample must be bit-exact (Bytes clone, no interpolation).
         assert_eq!(out.data, buf.data);
-        assert_eq!(out.num_samples, buf.num_samples);
+        assert_eq!(out.num_frames, buf.num_frames);
     }
 
     #[test]
@@ -474,9 +474,9 @@ mod tests {
         // Frame count ≈ 24x
         let expected = (n as f64 * 24.0).round() as usize;
         assert!(
-            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            (out.num_frames as i64 - expected as i64).abs() <= 1,
             "expected ~{expected} frames, got {}",
-            out.num_samples
+            out.num_frames
         );
 
         // No NaN / Inf
@@ -490,7 +490,7 @@ mod tests {
         let dst_energy: f64 = dst.iter().map(|s| (*s as f64).powi(2)).sum();
         // Normalise to per-second energy (energy * rate / num_frames cancels to sum/frames * rate)
         let src_power = src_energy / n as f64;
-        let dst_power = dst_energy / out.num_samples as f64;
+        let dst_power = dst_energy / out.num_frames as f64;
         let rel = (src_power - dst_power).abs() / src_power;
         assert!(
             rel < 0.10,
@@ -508,9 +508,9 @@ mod tests {
 
         let expected = (n as f64 / 24.0).round() as usize;
         assert!(
-            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            (out.num_frames as i64 - expected as i64).abs() <= 1,
             "expected ~{expected} frames, got {}",
-            out.num_samples
+            out.num_frames
         );
 
         let dst = bytes_to_f32(&out.data);
@@ -520,7 +520,7 @@ mod tests {
 
         let src_power: f64 = samples.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / n as f64;
         let dst_power: f64 =
-            dst.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / out.num_samples as f64;
+            dst.iter().map(|s| (*s as f64).powi(2)).sum::<f64>() / out.num_frames as f64;
         let rel = (src_power - dst_power).abs() / src_power;
         assert!(
             rel < 0.10,
@@ -535,16 +535,16 @@ mod tests {
         let out = resample(&buf, 48000).unwrap();
         // Should not panic and produce at least 1 sample.
         assert!(
-            out.num_samples >= 1,
+            out.num_frames >= 1,
             "expected at least 1 output sample, got {}",
-            out.num_samples
+            out.num_frames
         );
         // Rough expectation: target_rate / source_rate = 6
         let expected = (48000.0_f64 / 8000.0_f64).round() as usize;
         assert!(
-            (out.num_samples as i64 - expected as i64).abs() <= 1,
+            (out.num_frames as i64 - expected as i64).abs() <= 1,
             "expected ~{expected} samples, got {}",
-            out.num_samples
+            out.num_frames
         );
     }
 
@@ -560,13 +560,13 @@ mod tests {
         let out_sinc = resample_sinc(&buf, 48000, 32).unwrap();
 
         // Analytically perfect 440 Hz at 48000 Hz
-        let ref_samples = make_sine(440.0, 48000, out_linear.num_samples, 1);
+        let ref_samples = make_sine(440.0, 48000, out_linear.num_frames, 1);
 
         let lin_data = bytes_to_f32(&out_linear.data);
         let sinc_data = bytes_to_f32(&out_sinc.data);
 
         let snr_linear = compute_snr(&ref_samples, lin_data);
-        let snr_sinc = compute_snr(&make_sine(440.0, 48000, out_sinc.num_samples, 1), sinc_data);
+        let snr_sinc = compute_snr(&make_sine(440.0, 48000, out_sinc.num_frames, 1), sinc_data);
 
         assert!(
             snr_sinc > snr_linear,
@@ -642,28 +642,28 @@ mod tests {
     }
 
     /// Regression: shruti benchmark found that stereo buffers with
-    /// num_samples set to total interleaved count (not frames) caused
+    /// num_frames set to total interleaved count (not frames) caused
     /// index-out-of-bounds panic in the stereo fast path.
     #[test]
-    fn resample_stereo_interleaved_num_samples() {
-        // Simulate a buffer where num_samples = total samples (not frames)
+    fn resample_stereo_interleaved_num_frames() {
+        // Simulate a buffer where num_frames = total samples (not frames)
         let samples = vec![0.5f32; 200]; // 100 frames stereo
         let buf = AudioBuffer {
             data: Bytes::copy_from_slice(crate::audio::sample::f32_to_bytes(&samples)),
             sample_format: SampleFormat::F32,
             channels: 2,
             sample_rate: 44100,
-            num_samples: 200, // BUG: should be 100 frames, but set to 200 total samples
+            num_frames: 200, // BUG: should be 100 frames, but set to 200 total samples
             timestamp: Duration::ZERO,
         };
         // This must not panic — should derive frame count from data length
         let out = resample(&buf, 48000).unwrap();
         assert_eq!(out.channels, 2);
         assert_eq!(out.sample_rate, 48000);
-        assert!(out.num_samples > 0);
+        assert!(out.num_frames > 0);
     }
 
-    /// Regression: ensure correct stereo resample with properly-set num_samples.
+    /// Regression: ensure correct stereo resample with properly-set num_frames.
     #[test]
     fn resample_stereo_downsample() {
         let samples = make_sine(440.0, 48000, 4800, 2);
@@ -671,6 +671,6 @@ mod tests {
         let out = resample(&buf, 16000).unwrap();
         assert_eq!(out.channels, 2);
         assert_eq!(out.sample_rate, 16000);
-        assert_eq!(out.data.len(), out.num_samples * 2 * 4);
+        assert_eq!(out.data.len(), out.num_frames * 2 * 4);
     }
 }

@@ -4,6 +4,14 @@
 //! identification service. Uses the same Chromaprint-style algorithm
 //! as the existing fingerprint module but outputs in AcoustID's
 //! compressed format.
+//!
+//! ```rust,ignore
+//! use tarang::ai::acoustid::compute_acoustid;
+//!
+//! let result = compute_acoustid(&audio_buffer).unwrap();
+//! println!("Fingerprint: {}", result.fingerprint);
+//! println!("Duration: {:.1}s", result.duration);
+//! ```
 
 use crate::core::{AudioBuffer, Result, TarangError};
 
@@ -89,9 +97,9 @@ mod tests {
     use std::time::Duration;
 
     fn make_sine_buffer(freq: f32, duration_secs: f32, sample_rate: u32) -> AudioBuffer {
-        let num_samples = (sample_rate as f32 * duration_secs) as usize;
-        let mut data = Vec::with_capacity(num_samples * 4);
-        for i in 0..num_samples {
+        let num_frames = (sample_rate as f32 * duration_secs) as usize;
+        let mut data = Vec::with_capacity(num_frames * 4);
+        for i in 0..num_frames {
             let t = i as f32 / sample_rate as f32;
             let sample = (t * freq * std::f32::consts::TAU).sin() * 0.5;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -101,7 +109,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
@@ -113,7 +121,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 0,
+            num_frames: 0,
             timestamp: Duration::ZERO,
         };
         assert!(compute_acoustid(&buf).is_err());
@@ -128,7 +136,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 100,
+            num_frames: 100,
             timestamp: Duration::ZERO,
         };
         assert!(compute_acoustid(&buf).is_err());

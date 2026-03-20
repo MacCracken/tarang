@@ -97,7 +97,7 @@ impl AudioEffect for Gain {
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         })
     }
@@ -163,7 +163,7 @@ impl AudioEffect for HighPassFilter {
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         })
     }
@@ -215,7 +215,7 @@ impl AudioEffect for Compressor {
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         })
     }

@@ -6,15 +6,37 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
-## Pre-v1 (0.20–0.x)
+## 0.21.3 — Pre-v1.0 hardening
 
-### AI features
+### P0 — Must-fix for v1.0
 
-- [ ] **Offline transcription** — deferred to hoosh crate (separate project); tarang consumes via existing `HooshClient` HTTP API
+- [ ] **`num_samples` → `num_frames` rename** — field name is misleading and has caused bugs; breaking change allowed pre-1.0
+- [ ] **`cargo-semver-checks` in CI** — v1.0 gate: enforce SemVer compliance on every PR
+- [ ] **Coverage threshold 90%+** — raise CI from 80% to 90%; add tests for convert, scale, effects, loudness, diarize, acoustid
+- [ ] **Doc examples for all public modules** — v1.0 gate: `audio::effects`, `audio::loudness`, `video::convert`, `video::scale`, `ai::diarize`, `ai::acoustid`
+- [ ] **Fix VA-API `unwrap()` calls** — `vaapi_dec.rs` and `vaapi_enc.rs` `.pop().unwrap()` → proper error handling
+- [ ] **Document LOW security items** — enumerate the 6 LOW severity findings with accept/fix decisions
 
-### Release prep
+### P1 — Should-fix (quality)
 
-- [ ] **Publish 0.20.3 to crates.io** — verify `cargo publish --dry-run` passes; tag and push
+- [ ] **VA-API surface pooling** — reuse pre-allocated surfaces instead of per-frame GPU allocation (encode + decode)
+- [ ] **Video convert chroma pre-allocation** — hoist `cr_r`/`cr_g`/`cr_b` Vecs out of per-row loop (~1600 allocs/frame eliminated)
+- [ ] **`extract_mono_f32` fast path** — use `bytes_to_f32()` + stride for F32 mono instead of per-byte assembly
+- [ ] **Direct YUV scaling** — scale Y/U/V planes independently, skip YUV→RGB→scale→RGB→YUV roundtrip
+- [ ] **Effects chain in-place processing** — `AudioEffect::process` takes `AudioBuffer` by value, remove clone storm
+- [ ] **`Muxer` trait video support** — add `write_video_packet()` to trait with default error impl
+- [ ] **NV12 conversion paths** — add NV12→YUV420p and NV12→RGB24 to `video::convert`
+
+### P2 — Polish
+
+- [ ] **Rename `AudioDecoder` → `AudioCodecInfo`** — vestigial type that isn't a decoder
+- [ ] **Verify downstream consumers** — CI job that builds Jalwa/Tazama/Shruti against current tarang
+- [ ] **Refresh `cargo-vet` trust entries** — audit for new deps since last review
+- [ ] **Remove `cros-libva` patch** — check if > 0.0.13 released, remove `patches/` if so
+
+### Release
+
+- [ ] **Publish 0.21.3 to crates.io** — `cargo publish --dry-run`, tag, push
 
 ---
 
@@ -25,7 +47,7 @@ All of the following must be true before cutting 1.0:
 - [ ] Public API reviewed and marked stable (no `#[non_exhaustive]` additions expected)
 - [ ] All `Demuxer`/`Muxer`/`AudioEncoder` traits finalized
 - [ ] Core types (`AudioBuffer`, `VideoFrame`, `MediaInfo`, `Packet`) frozen
-- [ ] 95%+ line coverage
+- [ ] 90%+ line coverage (library code, excluding mcp/main)
 - [ ] All demuxer fuzz targets passing with 0 crashes after 1M iterations
 - [ ] At least one downstream consumer (Jalwa, Tazama, or Shruti) running on stable tarang
 - [ ] docs.rs documentation complete with examples for every public module
@@ -63,11 +85,11 @@ Longer-term items that don't block any release.
 - [ ] **Plugin system** — dynamic loading of codec/effect plugins at runtime
 - [ ] **C FFI bindings** — `tarang.h` for C/C++ consumers
 - [ ] **Python bindings** — PyO3 package for Python-based media analysis
+- [ ] **Offline transcription** — hoosh crate provides inference; tarang consumes via `HooshClient`
 
 ### Performance
 
 - [ ] **SIMD audio processing** — explicit SIMD for resample, mix, fingerprint inner loops (portable_simd or manual intrinsics)
-- [ ] **Memory pool** — reusable frame/packet buffers to eliminate per-frame allocation
 - [ ] **Zero-copy demux** — `mmap` + `Bytes::from_static` for reading packets without copying from kernel
 - [ ] **Lazy metadata parsing** — parse only requested atoms/elements in MP4/MKV instead of full traversal
 

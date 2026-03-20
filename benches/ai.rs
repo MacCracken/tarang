@@ -7,9 +7,9 @@ use tarang::core::{
     SampleFormat, StreamInfo, VideoCodec, VideoFrame, VideoStreamInfo,
 };
 
-fn make_sine_f32(sample_rate: u32, num_samples: usize) -> AudioBuffer {
-    let mut data = Vec::with_capacity(num_samples * 4);
-    for i in 0..num_samples {
+fn make_sine_f32(sample_rate: u32, num_frames: usize) -> AudioBuffer {
+    let mut data = Vec::with_capacity(num_frames * 4);
+    for i in 0..num_frames {
         let t = i as f32 / sample_rate as f32;
         let s = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
         data.extend_from_slice(&s.to_le_bytes());
@@ -19,7 +19,7 @@ fn make_sine_f32(sample_rate: u32, num_samples: usize) -> AudioBuffer {
         sample_format: SampleFormat::F32,
         channels: 1,
         sample_rate,
-        num_samples,
+        num_frames,
         timestamp: Duration::ZERO,
     }
 }

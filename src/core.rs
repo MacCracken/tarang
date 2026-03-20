@@ -289,7 +289,7 @@ pub struct AudioBuffer {
     /// Sample rate in Hz.
     pub sample_rate: u32,
     /// Number of audio frames (each frame has `channels` samples).
-    pub num_samples: usize,
+    pub num_frames: usize,
     /// Presentation timestamp of the first sample.
     pub timestamp: Duration,
 }
@@ -350,7 +350,7 @@ impl AudioBuffer {
             sample_format: target,
             channels: self.channels,
             sample_rate: self.sample_rate,
-            num_samples: self.num_samples,
+            num_frames: self.num_frames,
             timestamp: self.timestamp,
         })
     }
@@ -680,10 +680,10 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 2,
             sample_rate: 44100,
-            num_samples: 512,
+            num_frames: 512,
             timestamp: Duration::from_millis(500),
         };
-        assert_eq!(buf.num_samples, 512);
+        assert_eq!(buf.num_frames, 512);
         assert_eq!(buf.channels, 2);
         assert_eq!(buf.data.len(), 4096);
     }

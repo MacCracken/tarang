@@ -201,7 +201,7 @@ impl FileDecoder {
                 sample_format: SampleFormat::F32,
                 channels: num_channels as u16,
                 sample_rate: sr,
-                num_samples: num_frames,
+                num_frames,
                 timestamp,
             });
         }
@@ -246,7 +246,7 @@ impl FileDecoder {
                 Ok(buf) => {
                     sr = buf.sample_rate;
                     ch = buf.channels;
-                    total_samples += buf.num_samples;
+                    total_samples += buf.num_frames;
                     // buf.data is f32 samples as bytes
                     let floats: &[f32] = bytemuck_bytes_to_f32(&buf.data);
                     all_data.extend_from_slice(floats);
@@ -281,7 +281,7 @@ impl FileDecoder {
             sample_format: SampleFormat::F32,
             channels: ch,
             sample_rate: sr,
-            num_samples: total_samples,
+            num_frames: total_samples,
             timestamp: Duration::ZERO,
         })
     }
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(buf.sample_format, SampleFormat::F32);
         assert_eq!(buf.sample_rate, 44100);
         assert_eq!(buf.channels, 2);
-        assert!(buf.num_samples > 0);
+        assert!(buf.num_frames > 0);
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
         let buf = decoder.decode_all().unwrap();
         assert_eq!(buf.sample_rate, 44100);
         assert_eq!(buf.channels, 2);
-        assert_eq!(buf.num_samples, 4410);
+        assert_eq!(buf.num_frames, 4410);
         // 4410 samples * 2 channels * 4 bytes per f32
         assert_eq!(buf.data.len(), 4410 * 2 * 4);
     }
@@ -370,7 +370,7 @@ mod tests {
         let buf = decoder.decode_all().unwrap();
         assert_eq!(buf.channels, 1);
         assert_eq!(buf.sample_rate, 48000);
-        assert_eq!(buf.num_samples, 1000);
+        assert_eq!(buf.num_frames, 1000);
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
         let cursor = Cursor::new(wav);
         let mut decoder = FileDecoder::open(Box::new(cursor), Some("wav")).unwrap();
         let buf = decoder.decode_all().unwrap();
-        assert_eq!(buf.num_samples, 8820);
+        assert_eq!(buf.num_frames, 8820);
         assert_eq!(buf.channels, 1);
         assert_eq!(buf.sample_format, SampleFormat::F32);
     }
@@ -607,8 +607,8 @@ mod tests {
             SampleFormat::F32,
             "sample format should be F32"
         );
-        assert_eq!(buf.num_samples, 4410, "num_samples mismatch");
-        // Verify data length: num_samples * channels * sizeof(f32)
+        assert_eq!(buf.num_frames, 4410, "num_frames mismatch");
+        // Verify data length: num_frames * channels * sizeof(f32)
         assert_eq!(buf.data.len(), 4410 * 2 * 4, "data byte length mismatch");
         // Timestamp of the complete buffer should be zero (starts from beginning)
         assert_eq!(buf.timestamp, Duration::ZERO);

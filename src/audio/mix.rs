@@ -27,17 +27,17 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
             sample_format: buf.sample_format,
             channels: buf.channels,
             sample_rate: buf.sample_rate,
-            num_samples: buf.num_samples,
+            num_frames: buf.num_frames,
             timestamp: buf.timestamp,
         });
     }
-    if src_ch == 0 || buf.num_samples == 0 {
+    if src_ch == 0 || buf.num_frames == 0 {
         return Err(TarangError::ConfigError("invalid source buffer".into()));
     }
 
     let src = bytes_to_f32(&buf.data);
     // Derive frame count from actual data length to handle callers that
-    // set num_samples to total interleaved samples rather than frames.
+    // set num_frames to total interleaved samples rather than frames.
     let frames = src.len() / src_ch.max(1);
     if frames == 0 {
         return Err(TarangError::ConfigError("source buffer has no frames".into()));
@@ -149,7 +149,7 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
         sample_format: SampleFormat::F32,
         channels: target_ch as u16,
         sample_rate: buf.sample_rate,
-        num_samples: frames,
+        num_frames: frames,
         timestamp: buf.timestamp,
     })
 }
@@ -170,7 +170,7 @@ mod tests {
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
 
         assert_eq!(out.channels, 1);
-        assert_eq!(out.num_samples, 3);
+        assert_eq!(out.num_frames, 3);
         let dst = bytes_to_f32(&out.data);
         for &s in dst {
             assert!((s - 0.5).abs() < 1e-6);
@@ -184,7 +184,7 @@ mod tests {
         let out = mix_channels(&buf, ChannelLayout::Stereo).unwrap();
 
         assert_eq!(out.channels, 2);
-        assert_eq!(out.num_samples, 3);
+        assert_eq!(out.num_frames, 3);
         let dst = bytes_to_f32(&out.data);
         for &s in dst {
             assert!((s - 0.75).abs() < 1e-6);
@@ -210,7 +210,7 @@ mod tests {
         let out = mix_channels(&buf, ChannelLayout::Stereo).unwrap();
 
         assert_eq!(out.channels, 2);
-        assert_eq!(out.num_samples, 1);
+        assert_eq!(out.num_frames, 1);
         let dst = bytes_to_f32(&out.data);
         // L = FL + 0.707*FC + 0.707*SL = 1.0 + 0.707 + 0.354 ≈ 2.061
         let expected_l = 1.0 + k * 1.0 + k * 0.5;
@@ -236,7 +236,7 @@ mod tests {
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
 
         assert_eq!(out.channels, 1);
-        assert_eq!(out.num_samples, 1);
+        assert_eq!(out.num_frames, 1);
         let dst = bytes_to_f32(&out.data);
         assert!(dst[0].abs() > 0.5, "5.1 downmix to mono should have signal");
     }
@@ -267,7 +267,7 @@ mod tests {
         let samples = vec![0.5f32; frames * 2];
         let buf = make_buffer(&samples, 2, 44100);
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
-        assert_eq!(out.num_samples, frames);
+        assert_eq!(out.num_frames, frames);
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 0,
             sample_rate: 44100,
-            num_samples: 0,
+            num_frames: 0,
             timestamp: Duration::ZERO,
         };
         assert!(mix_channels(&buf, ChannelLayout::Mono).is_err());
@@ -335,7 +335,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 2,
             sample_rate: 44100,
-            num_samples: 1,
+            num_frames: 1,
             timestamp: Duration::from_millis(500),
         };
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
@@ -347,7 +347,7 @@ mod tests {
         let samples = vec![0.8f32, 0.2];
         let buf = make_buffer(&samples, 2, 44100);
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
-        assert_eq!(out.num_samples, 1);
+        assert_eq!(out.num_frames, 1);
         let dst = bytes_to_f32(&out.data);
         assert!((dst[0] - 0.5).abs() < 1e-6);
     }
@@ -355,42 +355,42 @@ mod tests {
     #[test]
     fn test_mix_bounds_validation() {
         // Create a buffer that claims more samples than data actually present.
-        // The data has only 2 f32 samples (8 bytes) but num_samples says 100 frames of stereo.
+        // The data has only 2 f32 samples (8 bytes) but num_frames says 100 frames of stereo.
         // With the fix, frame count is derived from data length (1 frame), so this now works.
         let buf = AudioBuffer {
             data: Bytes::copy_from_slice(f32_to_bytes(&[1.0f32, -1.0])),
             sample_format: SampleFormat::F32,
             channels: 2,
             sample_rate: 44100,
-            num_samples: 100, // claims 100 frames but data only has 1 frame
+            num_frames: 100, // claims 100 frames but data only has 1 frame
             timestamp: Duration::ZERO,
         };
         let result = mix_channels(&buf, ChannelLayout::Mono);
         // Now derives frame count from data (1 frame), should succeed
         assert!(result.is_ok(), "mix should derive frames from data length");
         let out = result.unwrap();
-        assert_eq!(out.num_samples, 1);
+        assert_eq!(out.num_frames, 1);
     }
 
     /// Regression: shruti benchmark found that stereo→mono with
-    /// num_samples set to total interleaved count (not frames) caused
+    /// num_frames set to total interleaved count (not frames) caused
     /// "source buffer too small" validation error.
     #[test]
-    fn mix_stereo_to_mono_interleaved_num_samples() {
-        // Simulate a buffer where num_samples = total samples (not frames)
+    fn mix_stereo_to_mono_interleaved_num_frames() {
+        // Simulate a buffer where num_frames = total samples (not frames)
         let samples = vec![0.8f32, 0.2, 0.6, 0.4]; // 2 frames stereo
         let buf = AudioBuffer {
             data: Bytes::copy_from_slice(f32_to_bytes(&samples)),
             sample_format: SampleFormat::F32,
             channels: 2,
             sample_rate: 44100,
-            num_samples: 4, // BUG: should be 2 frames, but set to 4 total samples
+            num_frames: 4, // BUG: should be 2 frames, but set to 4 total samples
             timestamp: Duration::ZERO,
         };
         // This must not error — should derive frame count from data length
         let out = mix_channels(&buf, ChannelLayout::Mono).unwrap();
         assert_eq!(out.channels, 1);
-        assert_eq!(out.num_samples, 2);
+        assert_eq!(out.num_frames, 2);
         let dst = bytes_to_f32(&out.data);
         assert!((dst[0] - 0.5).abs() < 1e-6); // (0.8 + 0.2) / 2
         assert!((dst[1] - 0.5).abs() < 1e-6); // (0.6 + 0.4) / 2

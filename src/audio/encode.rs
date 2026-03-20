@@ -125,13 +125,13 @@ impl AudioEncoder for PcmEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
         let samples = bytes_to_f32(&buf.data);
         let expected = buf
-            .num_samples
+            .num_frames
             .checked_mul(self.channels as usize)
             .ok_or_else(|| {
                 TarangError::Pipeline(
                     format!(
                         "overflow computing expected samples: {} * {}",
-                        buf.num_samples, self.channels
+                        buf.num_frames, self.channels
                     )
                     .into(),
                 )

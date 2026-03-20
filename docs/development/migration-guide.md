@@ -1,5 +1,33 @@
 # Migration Guide
 
+## 0.20.3 → next
+
+### Breaking changes
+
+**`AudioBuffer::num_samples` renamed to `num_frames`**
+
+The `num_samples` field on `AudioBuffer` has been renamed to `num_frames` to correctly reflect its semantics. This field counts the number of audio frames (where each frame contains one sample per channel), not individual samples.
+
+```rust
+// Before
+let buf = AudioBuffer {
+    data, sample_format, channels, sample_rate,
+    num_samples: 1024,
+    timestamp,
+};
+let n = buf.num_samples;
+
+// After
+let buf = AudioBuffer {
+    data, sample_format, channels, sample_rate,
+    num_frames: 1024,
+    timestamp,
+};
+let n = buf.num_frames;
+```
+
+Search-and-replace `num_samples` to `num_frames` in code that constructs or reads `AudioBuffer`. Be careful not to rename local variables or other structs that use `num_samples` in a different context (e.g., symphonia APIs, WAV/MP4 sample counts).
+
 ## 0.19.3 → 0.20.3
 
 ### Breaking changes

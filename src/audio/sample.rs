@@ -72,7 +72,7 @@ pub(crate) fn make_test_buffer(
         sample_format: crate::core::SampleFormat::F32,
         channels,
         sample_rate,
-        num_samples: samples.len() / channels as usize,
+        num_frames: samples.len() / channels as usize,
         timestamp: std::time::Duration::ZERO,
     }
 }

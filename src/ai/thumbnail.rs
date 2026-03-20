@@ -2,6 +2,13 @@
 //!
 //! Selects representative video frames based on visual variance and
 //! scene boundaries, then encodes them as JPEG or PNG thumbnails.
+//!
+//! ```rust,ignore
+//! use tarang::ai::thumbnail::{generate_thumbnails, ThumbnailConfig};
+//!
+//! let config = ThumbnailConfig::default();
+//! let thumbs = generate_thumbnails(&frames, &boundaries, &config).unwrap();
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use image::codecs::jpeg::JpegEncoder;

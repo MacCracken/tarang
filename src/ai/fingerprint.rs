@@ -241,9 +241,9 @@ mod tests {
     use std::time::Duration;
 
     fn make_sine_buffer(freq: f32, duration_secs: f32, sample_rate: u32) -> AudioBuffer {
-        let num_samples = (sample_rate as f32 * duration_secs) as usize;
-        let mut data = Vec::with_capacity(num_samples * 4);
-        for i in 0..num_samples {
+        let num_frames = (sample_rate as f32 * duration_secs) as usize;
+        let mut data = Vec::with_capacity(num_frames * 4);
+        for i in 0..num_frames {
             let t = i as f32 / sample_rate as f32;
             let sample = (t * freq * std::f32::consts::TAU).sin() * 0.5;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -253,16 +253,16 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
 
     fn make_noise_buffer(duration_secs: f32, sample_rate: u32, seed: u32) -> AudioBuffer {
-        let num_samples = (sample_rate as f32 * duration_secs) as usize;
-        let mut data = Vec::with_capacity(num_samples * 4);
+        let num_frames = (sample_rate as f32 * duration_secs) as usize;
+        let mut data = Vec::with_capacity(num_frames * 4);
         let mut state = seed;
-        for _ in 0..num_samples {
+        for _ in 0..num_frames {
             // Simple LCG pseudo-random
             state = state.wrapping_mul(1103515245).wrapping_add(12345);
             let sample = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
@@ -273,7 +273,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         }
     }
@@ -314,9 +314,9 @@ mod tests {
         let config = FingerprintConfig::default();
         let loud = make_sine_buffer(440.0, 2.0, 16000);
         // Quiet version: same frequency, lower amplitude
-        let num_samples = 32000;
-        let mut data = Vec::with_capacity(num_samples * 4);
-        for i in 0..num_samples {
+        let num_frames = 32000;
+        let mut data = Vec::with_capacity(num_frames * 4);
+        for i in 0..num_frames {
             let t = i as f32 / 16000.0;
             let sample = (t * 440.0 * std::f32::consts::TAU).sin() * 0.1;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -326,7 +326,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
 
@@ -345,7 +345,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 100,
+            num_frames: 100,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();
@@ -372,9 +372,9 @@ mod tests {
 
     #[test]
     fn i16_input_works() {
-        let num_samples = 8000;
-        let mut data = Vec::with_capacity(num_samples * 2);
-        for i in 0..num_samples {
+        let num_frames = 8000;
+        let mut data = Vec::with_capacity(num_frames * 2);
+        for i in 0..num_frames {
             let t = i as f32 / 16000.0;
             let sample = ((t * 440.0 * std::f32::consts::TAU).sin() * 16000.0) as i16;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -384,7 +384,7 @@ mod tests {
             sample_format: SampleFormat::I16,
             channels: 1,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();
@@ -399,7 +399,7 @@ mod tests {
             sample_format: SampleFormat::F64,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 125,
+            num_frames: 125,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();
@@ -422,10 +422,10 @@ mod tests {
 
     #[test]
     fn stereo_f32_input() {
-        let num_samples = 8000;
+        let num_frames = 8000;
         let channels = 2u16;
-        let mut data = Vec::with_capacity(num_samples * channels as usize * 4);
-        for i in 0..num_samples {
+        let mut data = Vec::with_capacity(num_frames * channels as usize * 4);
+        for i in 0..num_frames {
             let t = i as f32 / 16000.0;
             let sample = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
             // Write same sample to both channels
@@ -437,7 +437,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();
@@ -466,10 +466,10 @@ mod tests {
 
     #[test]
     fn stereo_i16_input() {
-        let num_samples = 8000;
+        let num_frames = 8000;
         let channels = 2u16;
-        let mut data = Vec::with_capacity(num_samples * channels as usize * 2);
-        for i in 0..num_samples {
+        let mut data = Vec::with_capacity(num_frames * channels as usize * 2);
+        for i in 0..num_frames {
             let t = i as f32 / 16000.0;
             let sample = ((t * 440.0 * std::f32::consts::TAU).sin() * 16000.0) as i16;
             data.extend_from_slice(&sample.to_le_bytes());
@@ -480,7 +480,7 @@ mod tests {
             sample_format: SampleFormat::I16,
             channels,
             sample_rate: 16000,
-            num_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();
@@ -496,7 +496,7 @@ mod tests {
             sample_format: SampleFormat::F32,
             channels: 1,
             sample_rate: 16000,
-            num_samples: 0,
+            num_frames: 0,
             timestamp: Duration::ZERO,
         };
         let config = FingerprintConfig::default();

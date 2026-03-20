@@ -78,7 +78,7 @@ impl FdkAacDecoder {
             ));
         }
 
-        let num_samples = frame_size / channels as usize;
+        let num_frames = frame_size / channels as usize;
 
         // Convert i16 PCM to f32
         let mut f32_data = Vec::with_capacity(frame_size);
@@ -93,7 +93,7 @@ impl FdkAacDecoder {
             sample_format: SampleFormat::F32,
             channels,
             sample_rate,
-            num_samples,
+            num_frames,
             timestamp,
         })
     }

@@ -60,7 +60,7 @@ impl AacEncoder {
 impl AudioEncoder for AacEncoder {
     fn encode(&mut self, buf: &AudioBuffer) -> Result<Vec<Vec<u8>>> {
         let float_samples = bytes_to_f32(&buf.data);
-        let total = buf.num_samples * self.channels as usize;
+        let total = buf.num_frames * self.channels as usize;
 
         // fdk-aac expects interleaved i16
         self.buf_i16.clear();
