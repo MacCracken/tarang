@@ -13,7 +13,7 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "pipewire", "opus-enc", "aac-enc"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]

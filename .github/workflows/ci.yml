@@ -28,7 +28,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -78,7 +78,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev nasm
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
       - name: Run tests
         run: cargo test
       - name: Run tests with codec features
@@ -94,7 +94,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev
       - name: Build docs (warnings as errors)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
       - name: Verify required files exist
@@ -120,7 +120,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev nasm
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov
       - name: Generate coverage
@@ -153,7 +153,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev
       - name: Build release binary
         run: cargo build --release
       - name: Upload binary
