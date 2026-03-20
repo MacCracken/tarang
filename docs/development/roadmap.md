@@ -8,10 +8,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### Demuxer/muxer hardening
-
-(all done — fuzz targets created, 1 crash found and fixed)
-
 ### Audio pipeline
 
 - [ ] **Streaming decode API** — frame-by-frame decode without `decode_all()` loading entire file; callback or async stream interface
