@@ -8,24 +8,14 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### P1 — Must-fix before 0.20.3
-
-(all P1 items resolved — see CHANGELOG 0.20.3)
-
 ### API stabilization
 
-- [x] **Review public API surface** — doc comments on all public structs/fields (`AudioStreamInfo`, `VideoStreamInfo`, `AudioBuffer`, `VideoFrame`, `MediaAnalysis`, `TranscriptionRequest/Result/Segment`, `EncoderConfig`, `MuxConfig`, `DecoderConfig`)
 - [ ] **Consistent error types** — evaluate whether `TarangError` variants cover all failure modes cleanly; consider module-specific error enums that convert into `TarangError`
-- [x] **Trait stability** — `Demuxer`, `Muxer`, `AudioEncoder`, `AudioOutput` traits documented with contracts, state machines, and error semantics
-- [x] **Builder patterns** — `EncoderConfig::builder()` added; `FingerprintConfig`/`SceneDetectionConfig` already have `Default`
 
 ### Codec gaps
 
-- [ ] **AAC decoding via fdk-aac** — symphonia handles AAC but fdk-aac may offer better quality for some profiles; evaluate as optional backend
 - [ ] **HEVC/H.265 software decoding** — VA-API hardware decode works (0.20.3); still no pure-Rust or BSD-licensed software decoder
-- [ ] **WebM muxer improvements** — ensure Opus-in-WebM and VP9-in-WebM roundtrip correctly; add DASH segmentation support
-- [ ] **Subtitle stream support** — parse subtitle tracks from MKV/MP4; expose as `StreamInfo::Subtitle` with text extraction
-- [x] **ID3/Vorbis comment metadata** — `MediaInfo.metadata: HashMap<String, String>` populated from symphonia's tag parser (title, artist, album, genre, tracknumber, date, composer, album_artist, comment)
+- [ ] **DASH segmentation** — fMP4/WebM segment generation for adaptive streaming (WebM muxer now supports VP9+Opus)
 
 ### Demuxer/muxer hardening
 
@@ -49,10 +39,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 - [ ] **Frame format conversion** — YUV420p ↔ RGB24 ↔ NV12 as explicit operations (currently scattered in thumbnail/encoder code)
 - [ ] **Scaling/resize** — bilinear/bicubic/Lanczos frame scaling as a standalone operation
 - [ ] **Hardware decode via VA-API** — wire dav1d fallback to VA-API for H.264/HEVC when hardware available
-
-### AGNOS ecosystem integration
-
-(all done — Jalwa, Tazama, Shruti integrated)
 
 ### AI features
 

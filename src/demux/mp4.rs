@@ -15,6 +15,14 @@ use uuid::Uuid;
 
 use super::{Demuxer, Packet};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mp4TrackType {
+    Audio,
+    Video,
+    Subtitle,
+    Other,
+}
+
 /// A parsed ISOBMFF box header
 #[derive(Debug)]
 struct BoxHeader {
@@ -258,7 +266,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             time_to_sample: Vec::new(),
         };
 
-        let mut is_audio = false;
+        let mut track_type = Mp4TrackType::Other;
 
         // We need to manually iterate since we can't borrow self mutably in the closure
         // while also borrowing track. So we collect box positions first.
@@ -268,15 +276,22 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
         // First pass: find mdia to check handler type and get track info
-        self.parse_trak_children(trak_end, &mut track, &mut is_audio)?;
+        self.parse_trak_children(trak_end, &mut track, &mut track_type)?;
 
-        if is_audio {
+        if track_type == Mp4TrackType::Audio {
             if track.sample_rate == 0 {
                 return Err(TarangError::DemuxError(
                     "audio track has sample_rate of 0".into(),
                 ));
             }
             self.tracks.push(track);
+        }
+
+        if track_type == Mp4TrackType::Subtitle {
+            // Add subtitle stream without detailed parsing (no sample tables needed)
+            if let Some(ref mut info) = self.info {
+                info.streams.push(StreamInfo::Subtitle { language: None });
+            }
         }
 
         Ok(())
@@ -286,7 +301,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         &mut self,
         end: u64,
         track: &mut Mp4Track,
-        is_audio: &mut bool,
+        track_type: &mut Mp4TrackType,
     ) -> Result<()> {
         while self
             .reader
@@ -302,7 +317,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
             match &child.box_type {
                 b"tkhd" => self.parse_tkhd(&child, track)?,
-                b"mdia" => self.parse_mdia_children(child_end.min(end), track, is_audio)?,
+                b"mdia" => self.parse_mdia_children(child_end.min(end), track, track_type)?,
                 _ => {}
             }
 
@@ -349,7 +364,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         &mut self,
         end: u64,
         track: &mut Mp4Track,
-        is_audio: &mut bool,
+        track_type: &mut Mp4TrackType,
     ) -> Result<()> {
         while self
             .reader
@@ -366,10 +381,10 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             match &child.box_type {
                 b"mdhd" => self.parse_mdhd(&child, track)?,
                 b"hdlr" => {
-                    *is_audio = self.parse_hdlr(&child)?;
+                    *track_type = self.parse_hdlr(&child)?;
                 }
                 b"minf" => {
-                    if *is_audio {
+                    if *track_type == Mp4TrackType::Audio {
                         self.parse_minf_children(child_end.min(end), track)?;
                     }
                 }
@@ -427,8 +442,8 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         Ok(())
     }
 
-    /// Parse hdlr box to determine if this is an audio track.
-    fn parse_hdlr(&mut self, header: &BoxHeader) -> Result<bool> {
+    /// Parse hdlr box to determine the track type.
+    fn parse_hdlr(&mut self, header: &BoxHeader) -> Result<Mp4TrackType> {
         self.reader
             .seek(SeekFrom::Start(header.data_offset))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
@@ -439,7 +454,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             .read_exact(&mut buf)
             .map_err(|e| TarangError::DemuxError(format!("failed to read hdlr: {e}").into()))?;
 
-        Ok(&buf[8..12] == b"soun")
+        let handler = &buf[8..12];
+        Ok(match handler {
+            b"soun" => Mp4TrackType::Audio,
+            b"vide" => Mp4TrackType::Video,
+            b"sbtl" | b"text" | b"subt" => Mp4TrackType::Subtitle,
+            _ => Mp4TrackType::Other,
+        })
     }
 
     fn parse_minf_children(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {

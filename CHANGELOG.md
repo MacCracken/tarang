@@ -29,6 +29,29 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
 - rav1e 0.8 compiles and works; `paste` advisory (RUSTSEC-2024-0436) suppressed in deny.toml
 - Expanded deny.toml documentation explaining the advisory scope and removal criteria
 
+### Codec gaps
+
+#### AAC decoding via fdk-aac
+- `FdkAacDecoder` — optional fdk-aac-backed AAC decoder (`aac-dec` feature)
+- Supports raw AAC (MP4) and ADTS transport formats
+- `configure()` for AudioSpecificConfig from MP4 esds box
+- `decode()` returns F32 AudioBuffer with auto-detected sample rate/channels
+- 4 new tests
+
+#### Subtitle stream parsing
+- MKV demuxer: parses subtitle tracks (TrackType 0x11), extracts language from EBML
+- MP4 demuxer: detects subtitle handler types (`sbtl`, `text`, `subt`)
+- Both emit `StreamInfo::Subtitle { language }` in probe results
+- Refactored MP4 `parse_hdlr()` to return `Mp4TrackType` enum (Audio/Video/Subtitle/Other)
+
+#### WebM muxer improvements
+- `MkvMuxer::new_webm()` — audio+video muxing for WebM (Opus + VP9/VP8/AV1)
+- `write_video_packet()` — write video frames to track 2
+- Video track header: codec ID, PixelWidth, PixelHeight in EBML
+- Full codec ID mapping: V_VP8, V_VP9, V_AV1, V_MPEG4/ISO/AVC, V_MPEGH/ISO/HEVC
+- `VideoMuxConfig` — video track configuration struct
+- 2 new tests: WebM A/V roundtrip, error on video packet without video track
+
 ### API stabilization
 - Doc comments on all public struct fields: `AudioStreamInfo`, `VideoStreamInfo`, `AudioBuffer`, `VideoFrame`, `DecoderConfig`, `EncoderConfig`, `MuxConfig`
 - Doc comments on AI types: `MediaAnalysis` (score ranges), `TranscriptionRequest/Result/Segment` (units, ranges)

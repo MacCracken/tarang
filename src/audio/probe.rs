@@ -23,12 +23,14 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
         .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}").into()))?;
 
     let mut format = probed.format;
-    let metadata_log = probed.metadata;
+    let mut metadata_log = probed.metadata;
 
     // Extract metadata tags from both the probe metadata log and the format reader
     let mut tags = HashMap::new();
-    if let Some(rev) = metadata_log.current() {
-        extract_tags(rev, &mut tags);
+    if let Some(meta) = metadata_log.get() {
+        if let Some(rev) = meta.current() {
+            extract_tags(rev, &mut tags);
+        }
     }
     if let Some(rev) = format.metadata().current() {
         extract_tags(rev, &mut tags);

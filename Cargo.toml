@@ -13,7 +13,7 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "hwaccel"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "aac-dec", "hwaccel"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]
@@ -28,6 +28,7 @@ hwaccel = ["dep:ai-hwaccel"]
 pipewire = ["dep:pipewire"]
 opus-enc = ["dep:opus"]
 aac-enc = ["dep:fdk-aac"]
+aac-dec = ["dep:fdk-aac"]
 
 [dependencies]
 # Core

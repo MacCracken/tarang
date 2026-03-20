@@ -41,6 +41,17 @@ pub struct MuxConfig {
     pub bits_per_sample: u16,
 }
 
+/// Video track configuration for MKV/WebM muxing.
+#[derive(Debug, Clone)]
+pub struct VideoMuxConfig {
+    /// Video codec.
+    pub codec: crate::core::VideoCodec,
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+}
+
 // ---- WAV Muxer ----
 
 /// WAV container muxer — writes PCM data into a RIFF/WAVE file
@@ -694,10 +705,11 @@ fn write_sub_box(buf: &mut Vec<u8>, box_type: &[u8; 4], data: &[u8]) {
 /// MKV/WebM container muxer — writes EBML-encoded Matroska files.
 ///
 /// Supports writing audio and video streams. Uses a simple
-/// "header + clusters" layout.
+/// "header + clusters" layout. For WebM, use `new_webm()`.
 pub struct MkvMuxer<W: Write> {
     writer: W,
     config: MuxConfig,
+    video_config: Option<VideoMuxConfig>,
     is_webm: bool,
     timecode_scale: u64,
     cluster_timecode: u64,
@@ -707,10 +719,12 @@ pub struct MkvMuxer<W: Write> {
 }
 
 impl<W: Write> MkvMuxer<W> {
+    /// Create a new MKV muxer for audio-only streams.
     pub fn new(writer: W, config: MuxConfig, webm: bool) -> Self {
         Self {
             writer,
             config,
+            video_config: None,
             is_webm: webm,
             timecode_scale: 1_000_000, // 1ms
             cluster_timecode: 0,
@@ -718,6 +732,52 @@ impl<W: Write> MkvMuxer<W> {
             header_written: false,
             total_packets: 0,
         }
+    }
+
+    /// Create a new WebM muxer for audio+video streams (Opus/VP9).
+    pub fn new_webm(writer: W, audio: MuxConfig, video: VideoMuxConfig) -> Self {
+        Self {
+            writer,
+            config: audio,
+            video_config: Some(video),
+            is_webm: true,
+            timecode_scale: 1_000_000,
+            cluster_timecode: 0,
+            packets_in_cluster: 0,
+            header_written: false,
+            total_packets: 0,
+        }
+    }
+
+    /// Write a video packet (track 2). Must be called after `write_header()`.
+    pub fn write_video_packet(&mut self, data: &[u8]) -> Result<()> {
+        use crate::demux::ebml;
+
+        if !self.header_written {
+            return Err(TarangError::Pipeline("header not written".into()));
+        }
+        if self.video_config.is_none() {
+            return Err(TarangError::Pipeline(
+                "no video track configured — use new_webm()".into(),
+            ));
+        }
+
+        // Write SimpleBlock for track 2 (video)
+        let mut block = Vec::new();
+        ebml::write_vint(&mut block, 2); // track number 2
+        block.extend_from_slice(&0i16.to_be_bytes()); // relative timecode
+        block.push(0x80); // flags: keyframe
+        block.extend_from_slice(data);
+
+        let mut block_buf = Vec::new();
+        ebml::write_id(&mut block_buf, 0xA3); // SimpleBlock
+        ebml::write_vint(&mut block_buf, block.len() as u64);
+        block_buf.extend_from_slice(&block);
+        self.writer.write_all(&block_buf).map_err(io_err)?;
+
+        self.packets_in_cluster += 1;
+        self.total_packets += 1;
+        Ok(())
     }
 }
 
@@ -778,6 +838,32 @@ impl<W: Write> Muxer for MkvMuxer<W> {
         ebml::write_master(&mut track_entry, 0xE1, &audio);
 
         ebml::write_master(&mut tracks, 0xAE, &track_entry);
+
+        // Video track (track 2) if configured
+        if let Some(ref video) = self.video_config {
+            let mut vtrack = Vec::new();
+            ebml::write_uint(&mut vtrack, 0xD7, 2); // TrackNumber
+            ebml::write_uint(&mut vtrack, 0x73C5, 2); // TrackUID
+            ebml::write_uint(&mut vtrack, 0x83, 1); // TrackType = video
+
+            let vid_codec_id = match video.codec {
+                crate::core::VideoCodec::Vp8 => "V_VP8",
+                crate::core::VideoCodec::Vp9 => "V_VP9",
+                crate::core::VideoCodec::Av1 => "V_AV1",
+                crate::core::VideoCodec::H264 => "V_MPEG4/ISO/AVC",
+                crate::core::VideoCodec::H265 => "V_MPEGH/ISO/HEVC",
+                _ => "V_UNCOMPRESSED",
+            };
+            ebml::write_string(&mut vtrack, 0x86, vid_codec_id);
+
+            let mut video_elem = Vec::new();
+            ebml::write_uint(&mut video_elem, 0xB0, video.width as u64); // PixelWidth
+            ebml::write_uint(&mut video_elem, 0xBA, video.height as u64); // PixelHeight
+            ebml::write_master(&mut vtrack, 0xE0, &video_elem); // Video element
+
+            ebml::write_master(&mut tracks, 0xAE, &vtrack);
+        }
+
         let mut tracks_buf = Vec::new();
         ebml::write_master(&mut tracks_buf, 0x1654AE6B, &tracks);
         self.writer.write_all(&tracks_buf).map_err(io_err)?;
@@ -1428,5 +1514,56 @@ mod tests {
         let info = demuxer.probe().unwrap();
 
         assert_eq!(info.format, crate::core::ContainerFormat::WebM);
+    }
+
+    #[test]
+    fn webm_muxer_with_video_track() {
+        let mut buf = Cursor::new(Vec::new());
+        let audio = MuxConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 0,
+        };
+        let video = VideoMuxConfig {
+            codec: crate::core::VideoCodec::Vp9,
+            width: 1920,
+            height: 1080,
+        };
+
+        let mut mux = MkvMuxer::new_webm(&mut buf, audio, video);
+        mux.write_header().unwrap();
+
+        // Write an audio packet (track 1)
+        mux.write_packet(&[0xAA; 100]).unwrap();
+        // Write a video packet (track 2)
+        mux.write_video_packet(&[0xBB; 500]).unwrap();
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        // Should start with EBML header
+        assert_eq!(&data[0..4], &[0x1A, 0x45, 0xDF, 0xA3]);
+        // Should contain "webm" DocType
+        assert!(data.windows(4).any(|w| w == b"webm"));
+        // Should contain VP9 codec ID
+        assert!(data.windows(5).any(|w| w == b"V_VP9"));
+        // Should contain Opus codec ID
+        assert!(data.windows(6).any(|w| w == b"A_OPUS"));
+    }
+
+    #[test]
+    fn webm_video_packet_without_config_errors() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 0,
+        };
+        let mut mux = MkvMuxer::new(&mut buf, config, true);
+        mux.write_header().unwrap();
+
+        // Writing video to an audio-only muxer should error
+        assert!(mux.write_video_packet(&[0x00; 100]).is_err());
     }
 }

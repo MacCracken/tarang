@@ -4,6 +4,8 @@
 //! Supports MP3, FLAC, WAV, OGG Vorbis, AAC, ALAC, and PCM.
 
 mod decode;
+#[cfg(feature = "aac-dec")]
+pub mod decode_aac;
 mod encode;
 #[cfg(feature = "aac-enc")]
 mod encode_aac;
@@ -17,6 +19,8 @@ mod resample;
 mod sample;
 
 pub use decode::FileDecoder;
+#[cfg(feature = "aac-dec")]
+pub use decode_aac::FdkAacDecoder;
 pub use encode::{AudioEncoder, EncoderConfig, PcmEncoder, create_encoder};
 #[cfg(feature = "aac-enc")]
 pub use encode_aac::AacEncoder;

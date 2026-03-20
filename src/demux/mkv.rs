@@ -37,10 +37,12 @@ const CLUSTER: u32 = 0x1F43_B675;
 const TIMECODE: u32 = 0xE7;
 const SIMPLE_BLOCK: u32 = 0xA3;
 const DOC_TYPE: u32 = 0x4282;
+const LANGUAGE: u32 = 0x22B59C;
 
 /// Track type values
 const TRACK_TYPE_VIDEO: u64 = 1;
 const TRACK_TYPE_AUDIO: u64 = 2;
+const TRACK_TYPE_SUBTITLE: u64 = 0x11;
 
 /// Parsed MKV track
 #[derive(Debug, Clone)]
@@ -55,6 +57,8 @@ struct MkvTrack {
     // Video fields
     width: u64,
     height: u64,
+    // Subtitle/general fields
+    language: Option<String>,
 }
 
 /// MKV/WebM demuxer
@@ -311,6 +315,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
             bit_depth: 0,
             width: 0,
             height: 0,
+            language: None,
         };
 
         while self.reader.stream_position().map_err(io_err)? < end {
@@ -321,6 +326,7 @@ impl<R: Read + Seek> MkvDemuxer<R> {
                 TRACK_NUMBER => track.number = self.read_uint(esize)?,
                 TRACK_TYPE => track.track_type = self.read_uint(esize)?,
                 CODEC_ID => track.codec_id = self.read_string(esize)?,
+                LANGUAGE => track.language = Some(self.read_string(esize)?),
                 AUDIO => self.parse_audio_settings(esize, &mut track)?,
                 VIDEO => self.parse_video_settings(esize, &mut track)?,
                 _ => {
@@ -524,6 +530,11 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                         bitrate: None,
                         duration,
                     }))
+                }
+                TRACK_TYPE_SUBTITLE => {
+                    Some(StreamInfo::Subtitle {
+                        language: t.language.clone(),
+                    })
                 }
                 _ => None,
             })
