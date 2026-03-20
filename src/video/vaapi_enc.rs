@@ -10,15 +10,32 @@
 
 use crate::core::{Result, TarangError, VideoCodec, VideoFrame};
 use cros_libva::{
-    BufferType, Config, Display, EncPictureParameter, EncSequenceParameter,
-    EncSliceParameter, Image, MappedCodedBuffer, Picture, UsageHint, VAEntrypoint,
-    VAProfile, VA_INVALID_ID, VA_INVALID_SURFACE,
+    BufferType,
+    Config,
+    Display,
+    EncPictureParameter,
     // H.264 parameter types (re-exported from buffer::h264)
-    EncPictureParameterBufferH264, EncSequenceParameterBufferH264,
-    EncSliceParameterBufferH264, H264EncPicFields, H264EncSeqFields, H264VuiFields, PictureH264,
+    EncPictureParameterBufferH264,
+    EncSequenceParameter,
+    EncSequenceParameterBufferH264,
+    EncSliceParameter,
+    EncSliceParameterBufferH264,
+    H264EncPicFields,
+    H264EncSeqFields,
+    H264VuiFields,
+    Image,
+    MappedCodedBuffer,
+    Picture,
+    PictureH264,
     Surface,
+    UsageHint,
+    VA_INVALID_ID,
+    VA_INVALID_SURFACE,
     // Misc
-    VAConfigAttrib, VAConfigAttribType,
+    VAConfigAttrib,
+    VAConfigAttribType,
+    VAEntrypoint,
+    VAProfile,
 };
 use std::path::Path;
 use std::rc::Rc;
@@ -189,9 +206,7 @@ impl VaapiEncoder {
         display
             .get_config_attributes(profile, entrypoint, &mut attrs)
             .map_err(|e| {
-                TarangError::HwAccelError(
-                    format!("failed to get config attributes: {e:?}").into(),
-                )
+                TarangError::HwAccelError(format!("failed to get config attributes: {e:?}").into())
             })?;
 
         let va_config = display
@@ -309,29 +324,29 @@ impl VaapiEncoder {
 
         let sps_buf = BufferType::EncSequenceParameter(EncSequenceParameter::H264(
             EncSequenceParameterBufferH264::new(
-                0,                      // seq_parameter_set_id
-                41,                     // level_idc (4.1 — supports 1080p30)
-                30,                     // intra_period
-                30,                     // intra_idr_period
-                1,                      // ip_period
-                self.bitrate_bps,       // bits_per_second
-                1,                      // max_num_ref_frames
-                w_mbs,                  // picture_width_in_mbs
-                h_mbs,                  // picture_height_in_mbs
+                0,                // seq_parameter_set_id
+                41,               // level_idc (4.1 — supports 1080p30)
+                30,               // intra_period
+                30,               // intra_idr_period
+                1,                // ip_period
+                self.bitrate_bps, // bits_per_second
+                1,                // max_num_ref_frames
+                w_mbs,            // picture_width_in_mbs
+                h_mbs,            // picture_height_in_mbs
                 &seq_fields,
-                0,                      // bit_depth_luma_minus8
-                0,                      // bit_depth_chroma_minus8
-                0,                      // num_ref_frames_in_pic_order_cnt_cycle
-                0,                      // offset_for_non_ref_pic
-                0,                      // offset_for_top_to_bottom_field
-                [0; 256],               // offset_for_ref_frame
-                None,                   // frame_crop
+                0,        // bit_depth_luma_minus8
+                0,        // bit_depth_chroma_minus8
+                0,        // num_ref_frames_in_pic_order_cnt_cycle
+                0,        // offset_for_non_ref_pic
+                0,        // offset_for_top_to_bottom_field
+                [0; 256], // offset_for_ref_frame
+                None,     // frame_crop
                 Some(H264VuiFields::new(1, 1, 0, 0, 0, 1, 0, 0)),
-                255,                    // aspect_ratio_idc (extended SAR)
-                1,                      // sar_width
-                1,                      // sar_height
-                self.frame_rate_den,    // num_units_in_tick
-                time_scale,             // time_scale
+                255,                 // aspect_ratio_idc (extended SAR)
+                1,                   // sar_width
+                1,                   // sar_height
+                self.frame_rate_den, // num_units_in_tick
+                time_scale,          // time_scale
             ),
         ));
 
@@ -361,40 +376,40 @@ impl VaapiEncoder {
         let num_mbs = w_mbs as u32 * h_mbs as u32;
         let slice_buf = BufferType::EncSliceParameter(EncSliceParameter::H264(
             EncSliceParameterBufferH264::new(
-                0,                // macroblock_address
-                num_mbs,          // num_macroblocks
-                VA_INVALID_ID,    // macroblock_info
-                2,                // slice_type = I
-                0,                // pic_parameter_set_id
-                1,                // idr_pic_id
-                0,                // pic_order_cnt_lsb
-                0,                // delta_pic_order_cnt_bottom
-                [0, 0],           // delta_pic_order_cnt
-                1,                // direct_spatial_mv_pred_flag
-                0,                // num_ref_idx_active_override_flag
-                0,                // num_ref_idx_l0_active_minus1
-                0,                // num_ref_idx_l1_active_minus1
+                0,             // macroblock_address
+                num_mbs,       // num_macroblocks
+                VA_INVALID_ID, // macroblock_info
+                2,             // slice_type = I
+                0,             // pic_parameter_set_id
+                1,             // idr_pic_id
+                0,             // pic_order_cnt_lsb
+                0,             // delta_pic_order_cnt_bottom
+                [0, 0],        // delta_pic_order_cnt
+                1,             // direct_spatial_mv_pred_flag
+                0,             // num_ref_idx_active_override_flag
+                0,             // num_ref_idx_l0_active_minus1
+                0,             // num_ref_idx_l1_active_minus1
                 ref_list_0,
                 ref_list_1,
-                0,                // luma_log2_weight_denom
-                0,                // chroma_log2_weight_denom
-                0,                // luma_weight_l0_flag
-                [0; 32],          // luma_weight_l0
-                [0; 32],          // luma_offset_l0
-                0,                // chroma_weight_l0_flag
-                [[0; 2]; 32],     // chroma_weight_l0
-                [[0; 2]; 32],     // chroma_offset_l0
-                0,                // luma_weight_l1_flag
-                [0; 32],          // luma_weight_l1
-                [0; 32],          // luma_offset_l1
-                0,                // chroma_weight_l1_flag
-                [[0; 2]; 32],     // chroma_weight_l1
-                [[0; 2]; 32],     // chroma_offset_l1
-                0,                // cabac_init_idc
-                0,                // slice_qp_delta
-                0,                // disable_deblocking_filter_idc
-                2,                // slice_alpha_c0_offset_div2
-                2,                // slice_beta_offset_div2
+                0,            // luma_log2_weight_denom
+                0,            // chroma_log2_weight_denom
+                0,            // luma_weight_l0_flag
+                [0; 32],      // luma_weight_l0
+                [0; 32],      // luma_offset_l0
+                0,            // chroma_weight_l0_flag
+                [[0; 2]; 32], // chroma_weight_l0
+                [[0; 2]; 32], // chroma_offset_l0
+                0,            // luma_weight_l1_flag
+                [0; 32],      // luma_weight_l1
+                [0; 32],      // luma_offset_l1
+                0,            // chroma_weight_l1_flag
+                [[0; 2]; 32], // chroma_weight_l1
+                [[0; 2]; 32], // chroma_offset_l1
+                0,            // cabac_init_idc
+                0,            // slice_qp_delta
+                0,            // disable_deblocking_filter_idc
+                2,            // slice_alpha_c0_offset_div2
+                2,            // slice_beta_offset_div2
             ),
         ));
 
@@ -421,9 +436,7 @@ impl VaapiEncoder {
                 vec![()],
             )
             .map_err(|e| {
-                TarangError::HwAccelError(
-                    format!("failed to create encode surface: {e:?}").into(),
-                )
+                TarangError::HwAccelError(format!("failed to create encode surface: {e:?}").into())
             })?;
 
         let enc_surface = enc_surfaces.pop().ok_or_else(|| {
@@ -470,7 +483,15 @@ impl VaapiEncoder {
                 PictureH264::new(enc_surface_id, 0, 0, 0, 0),
                 ref_frames2,
                 coded_buffer.id(),
-                0, 0, 0, frame_num, 26, 0, 0, 0, 0,
+                0,
+                0,
+                0,
+                frame_num,
+                26,
+                0,
+                0,
+                0,
+                0,
                 &pic_fields,
             ),
         ));
@@ -478,11 +499,7 @@ impl VaapiEncoder {
             TarangError::HwAccelError(format!("failed to create PPS buffer: {e:?}").into())
         })?;
 
-        let mut picture = Picture::new(
-            self.frames_encoded,
-            Rc::clone(&self.context),
-            enc_surface,
-        );
+        let mut picture = Picture::new(self.frames_encoded, Rc::clone(&self.context), enc_surface);
         picture.add_buffer(sps);
         picture.add_buffer(pps2);
         picture.add_buffer(slice);
@@ -493,9 +510,9 @@ impl VaapiEncoder {
         let picture = picture.render().map_err(|e| {
             TarangError::HwAccelError(format!("vaRenderPicture failed: {e:?}").into())
         })?;
-        let picture = picture.end().map_err(|e| {
-            TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into())
-        })?;
+        let picture = picture
+            .end()
+            .map_err(|e| TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into()))?;
         let _picture = picture.sync().map_err(|(e, _)| {
             TarangError::HwAccelError(format!("vaSyncSurface failed: {e:?}").into())
         })?;
@@ -671,7 +688,10 @@ mod tests {
         };
 
         let bitstream = encoder.encode(&frame).unwrap();
-        assert!(!bitstream.is_empty(), "encoded bitstream should not be empty");
+        assert!(
+            !bitstream.is_empty(),
+            "encoded bitstream should not be empty"
+        );
         assert_eq!(encoder.frames_encoded(), 1);
         println!("Encoded frame: {} bytes", bitstream.len());
     }
@@ -701,9 +721,9 @@ mod tests {
     fn yuv420p_to_nv12_2x2() {
         // Smallest valid YUV420p: 2x2
         let yuv = vec![
-            1, 2, 3, 4, // Y (2x2)
-            10,  // U (1x1)
-            20,  // V (1x1)
+            1, 2, 3, 4,  // Y (2x2)
+            10, // U (1x1)
+            20, // V (1x1)
         ];
         let nv12 = yuv420p_to_nv12(&yuv, 2, 2);
         assert_eq!(nv12.len(), 6); // Y=4 + UV=2

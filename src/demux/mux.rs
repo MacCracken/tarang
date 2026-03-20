@@ -467,7 +467,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             buf.extend_from_slice(&v.to_be_bytes());
         }
         buf.extend_from_slice(&[0u8; 24]); // pre_defined
-        let next_id = if self.video_config.is_some() { 3u32 } else { 2u32 };
+        let next_id = if self.video_config.is_some() {
+            3u32
+        } else {
+            2u32
+        };
         buf.extend_from_slice(&next_id.to_be_bytes()); // next_track_id
         buf
     }
@@ -703,11 +707,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     // ---- Video track support ----
 
-    fn build_video_trak(
-        &self,
-        mdat_offset: u64,
-        video: &VideoMuxConfig,
-    ) -> Result<Vec<u8>> {
+    fn build_video_trak(&self, mdat_offset: u64, video: &VideoMuxConfig) -> Result<Vec<u8>> {
         let mut trak = Vec::new();
 
         let tkhd = self.build_video_tkhd(video);
@@ -741,16 +741,12 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             buf.extend_from_slice(&v.to_be_bytes());
         }
         // width and height as 16.16 fixed-point
-        buf.extend_from_slice(&((video.width as u32) << 16).to_be_bytes());
-        buf.extend_from_slice(&((video.height as u32) << 16).to_be_bytes());
+        buf.extend_from_slice(&(video.width << 16).to_be_bytes());
+        buf.extend_from_slice(&(video.height << 16).to_be_bytes());
         buf
     }
 
-    fn build_video_mdia(
-        &self,
-        mdat_offset: u64,
-        video: &VideoMuxConfig,
-    ) -> Result<Vec<u8>> {
+    fn build_video_mdia(&self, mdat_offset: u64, video: &VideoMuxConfig) -> Result<Vec<u8>> {
         let mut mdia = Vec::new();
 
         // mdhd — use 90kHz timescale (standard for video)
@@ -807,11 +803,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         Ok(mdia)
     }
 
-    fn build_video_stbl(
-        &self,
-        mdat_offset: u64,
-        video: &VideoMuxConfig,
-    ) -> Result<Vec<u8>> {
+    fn build_video_stbl(&self, mdat_offset: u64, video: &VideoMuxConfig) -> Result<Vec<u8>> {
         let mut stbl = Vec::new();
 
         // stsd — video sample description
@@ -1066,7 +1058,11 @@ impl<W: Write> FragmentedMp4Muxer<W> {
             mvhd.extend_from_slice(&v.to_be_bytes());
         }
         mvhd.extend_from_slice(&[0u8; 24]);
-        let next_id = if self.video_config.is_some() { 3u32 } else { 2u32 };
+        let next_id = if self.video_config.is_some() {
+            3u32
+        } else {
+            2u32
+        };
         mvhd.extend_from_slice(&next_id.to_be_bytes());
         write_sub_box(&mut moov, b"mvhd", &mvhd);
 
@@ -1123,8 +1119,7 @@ impl<W: Write> FragmentedMp4Muxer<W> {
             return Ok(0);
         }
 
-        let total_samples =
-            self.fragment_audio_sizes.len() + self.fragment_video_sizes.len();
+        let total_samples = self.fragment_audio_sizes.len() + self.fragment_video_sizes.len();
 
         // Build moof
         let mut moof = Vec::new();

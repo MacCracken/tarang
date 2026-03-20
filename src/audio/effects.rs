@@ -11,8 +11,7 @@
 //! // let output = chain.process(&input_buffer).unwrap();
 //! ```
 
-use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
-use bytes::Bytes;
+use crate::core::{AudioBuffer, Result};
 
 /// Trait for audio effects that process buffers.
 pub trait AudioEffect: Send {
@@ -75,7 +74,7 @@ impl Default for EffectChain {
 pub struct Gain {
     /// Linear gain multiplier (computed from dB).
     multiplier: f32,
-    db: f32,
+    _db: f32,
 }
 
 impl Gain {
@@ -83,7 +82,7 @@ impl Gain {
     pub fn new(db: f32) -> Self {
         Self {
             multiplier: 10.0f32.powf(db / 20.0),
-            db,
+            _db: db,
         }
     }
 }
@@ -175,7 +174,7 @@ impl AudioEffect for HighPassFilter {
 
 /// Simple dynamic range compressor.
 pub struct Compressor {
-    threshold_db: f32,
+    _threshold_db: f32,
     ratio: f32,
     /// Linear threshold.
     threshold_lin: f32,
@@ -186,7 +185,7 @@ impl Compressor {
     /// compression applies. `ratio` is the compression ratio (e.g. 4.0 = 4:1).
     pub fn new(threshold_db: f32, ratio: f32) -> Self {
         Self {
-            threshold_db,
+            _threshold_db: threshold_db,
             ratio: ratio.max(1.0),
             threshold_lin: 10.0f32.powf(threshold_db / 20.0),
         }

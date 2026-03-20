@@ -14,7 +14,6 @@
 //! ```
 
 use crate::core::{AudioBuffer, Result, TarangError};
-use bytes::Bytes;
 
 /// Loudness measurement results.
 #[derive(Debug, Clone, Copy)]
@@ -45,7 +44,7 @@ pub fn measure_loudness(buf: &AudioBuffer) -> LoudnessMetrics {
         };
     }
 
-    let frames = samples.len() / ch;
+    let _frames = samples.len() / ch;
     let mut sum_sq = 0.0f64;
     let mut peak: f32 = 0.0;
 
@@ -61,11 +60,7 @@ pub fn measure_loudness(buf: &AudioBuffer) -> LoudnessMetrics {
     let rms = mean_sq.sqrt();
 
     // RMS in dBFS
-    let rms_db = if rms > 0.0 {
-        20.0 * rms.log10()
-    } else {
-        -70.0
-    };
+    let rms_db = if rms > 0.0 { 20.0 * rms.log10() } else { -70.0 };
 
     // Simplified LUFS: RMS-based with -0.691 dB offset (BS.1770 constant)
     let integrated_lufs = rms_db - 0.691;
@@ -161,9 +156,7 @@ mod tests {
     fn normalize_to_target() {
         // Create a quiet signal
         let samples: Vec<f32> = (0..44100)
-            .map(|i| {
-                0.1 * (i as f32 / 44100.0 * 440.0 * 2.0 * std::f32::consts::PI).sin()
-            })
+            .map(|i| 0.1 * (i as f32 / 44100.0 * 440.0 * 2.0 * std::f32::consts::PI).sin())
             .collect();
         let buf = make_test_buffer(&samples, 1, 44100);
         let before = measure_loudness(&buf);

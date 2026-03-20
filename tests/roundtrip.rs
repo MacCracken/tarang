@@ -4,7 +4,6 @@
 //! for each supported container format.
 
 use std::io::Cursor;
-use std::time::Duration;
 use tarang::core::{AudioCodec, ContainerFormat, TarangError};
 use tarang::demux::{Demuxer, MuxConfig, Muxer, OggDemuxer, OggMuxer, WavDemuxer, WavMuxer};
 

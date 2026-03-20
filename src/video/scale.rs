@@ -13,7 +13,7 @@ use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;
 use image::{ImageBuffer, RgbImage};
 
-use super::convert::{yuv420p_to_rgb24, rgb24_to_yuv420p};
+use super::convert::{rgb24_to_yuv420p, yuv420p_to_rgb24};
 
 /// Scaling filter algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,10 +78,10 @@ fn scale_rgb24(
     height: u32,
     filter: ScaleFilter,
 ) -> Result<VideoFrame> {
-    let src_img: RgbImage =
-        ImageBuffer::from_raw(frame.width, frame.height, frame.data.to_vec()).ok_or_else(|| {
-            TarangError::ImageError("failed to create image buffer from RGB24 data".into())
-        })?;
+    let src_img: RgbImage = ImageBuffer::from_raw(frame.width, frame.height, frame.data.to_vec())
+        .ok_or_else(|| {
+        TarangError::ImageError("failed to create image buffer from RGB24 data".into())
+    })?;
 
     let resized = image::imageops::resize(&src_img, width, height, filter.to_image_filter());
 

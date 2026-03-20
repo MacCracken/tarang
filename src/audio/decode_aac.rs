@@ -57,14 +57,15 @@ impl FdkAacDecoder {
     /// from the stream info.
     pub fn decode(&mut self, data: &[u8], timestamp: Duration) -> Result<AudioBuffer> {
         // Fill the decoder's internal bitstream buffer
-        let _consumed = self.decoder.fill(data).map_err(|e| {
-            TarangError::DecodeError(format!("FDK-AAC fill failed: {e}").into())
-        })?;
+        let _consumed = self
+            .decoder
+            .fill(data)
+            .map_err(|e| TarangError::DecodeError(format!("FDK-AAC fill failed: {e}").into()))?;
 
         // Decode one frame
-        self.decoder.decode_frame(&mut self.pcm_buf).map_err(|e| {
-            TarangError::DecodeError(format!("FDK-AAC decode failed: {e}").into())
-        })?;
+        self.decoder
+            .decode_frame(&mut self.pcm_buf)
+            .map_err(|e| TarangError::DecodeError(format!("FDK-AAC decode failed: {e}").into()))?;
 
         // Get stream info
         let info = self.decoder.stream_info();

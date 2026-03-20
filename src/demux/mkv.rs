@@ -654,11 +654,9 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
                         duration,
                     }))
                 }
-                TRACK_TYPE_SUBTITLE => {
-                    Some(StreamInfo::Subtitle {
-                        language: t.language.clone(),
-                    })
-                }
+                TRACK_TYPE_SUBTITLE => Some(StreamInfo::Subtitle {
+                    language: t.language.clone(),
+                }),
                 _ => None,
             })
             .collect();

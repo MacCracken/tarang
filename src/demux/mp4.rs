@@ -182,7 +182,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         } else {
             self.reader
-                .seek(SeekFrom::Start(header.data_offset.saturating_add(header.data_size)))
+                .seek(SeekFrom::Start(
+                    header.data_offset.saturating_add(header.data_size),
+                ))
                 .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         }
         Ok(())
@@ -420,27 +422,24 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         for _ in 0..entry_count {
             let (segment_duration, media_time) = if version == 1 {
                 let mut d = [0u8; 8];
-                self.reader.read_exact(&mut d).map_err(|e| {
-                    TarangError::DemuxError(format!("read error: {e}").into())
-                })?;
+                self.reader
+                    .read_exact(&mut d)
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
                 let mut m = [0u8; 8];
-                self.reader.read_exact(&mut m).map_err(|e| {
-                    TarangError::DemuxError(format!("read error: {e}").into())
-                })?;
+                self.reader
+                    .read_exact(&mut m)
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
                 (u64::from_be_bytes(d), i64::from_be_bytes(m))
             } else {
                 let mut d = [0u8; 4];
-                self.reader.read_exact(&mut d).map_err(|e| {
-                    TarangError::DemuxError(format!("read error: {e}").into())
-                })?;
+                self.reader
+                    .read_exact(&mut d)
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
                 let mut m = [0u8; 4];
-                self.reader.read_exact(&mut m).map_err(|e| {
-                    TarangError::DemuxError(format!("read error: {e}").into())
-                })?;
-                (
-                    u32::from_be_bytes(d) as u64,
-                    i32::from_be_bytes(m) as i64,
-                )
+                self.reader
+                    .read_exact(&mut m)
+                    .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
+                (u32::from_be_bytes(d) as u64, i32::from_be_bytes(m) as i64)
             };
 
             let mut rate_buf = [0u8; 4];
@@ -998,9 +997,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.reader
             .seek(SeekFrom::Start(header.data_offset))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
-        while self.reader.stream_position().map_err(|e| {
-            TarangError::DemuxError(format!("position error: {e}").into())
-        })? < moof_end
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}").into()))?
+            < moof_end
         {
             let child = match self.read_box_header() {
                 Ok(h) => h,
@@ -1025,9 +1026,11 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
         let mut default_sample_size: u32 = 0;
         let mut data_offset: Option<i32> = None;
-        while self.reader.stream_position().map_err(|e| {
-            TarangError::DemuxError(format!("position error: {e}").into())
-        })? < traf_end
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}").into()))?
+            < traf_end
         {
             let child = match self.read_box_header() {
                 Ok(h) => h,
@@ -1036,18 +1039,18 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             let child_end = child.data_offset.saturating_add(child.data_size);
             match &child.box_type {
                 b"tfhd" => {
-                    self.reader.seek(SeekFrom::Start(child.data_offset)).map_err(|e| {
-                        TarangError::DemuxError(format!("seek error: {e}").into())
-                    })?;
+                    self.reader
+                        .seek(SeekFrom::Start(child.data_offset))
+                        .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
                     let mut buf = [0u8; 4];
                     self.reader.read_exact(&mut buf).map_err(|e| {
                         TarangError::DemuxError(format!("failed to read tfhd: {e}").into())
                     })?;
                     let flags = u32::from_be_bytes([0, buf[1], buf[2], buf[3]]);
                     // track_id
-                    self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
-                        TarangError::DemuxError(format!("seek error: {e}").into())
-                    })?;
+                    self.reader
+                        .seek(SeekFrom::Current(4))
+                        .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
                     if flags & 0x01 != 0 {
                         self.reader.seek(SeekFrom::Current(8)).map_err(|e| {
                             TarangError::DemuxError(format!("seek error: {e}").into())
@@ -1066,15 +1069,17 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                     if flags & 0x10 != 0 {
                         let mut sz = [0u8; 4];
                         self.reader.read_exact(&mut sz).map_err(|e| {
-                            TarangError::DemuxError(format!("failed to read tfhd default_sample_size: {e}").into())
+                            TarangError::DemuxError(
+                                format!("failed to read tfhd default_sample_size: {e}").into(),
+                            )
                         })?;
                         default_sample_size = u32::from_be_bytes(sz);
                     }
                 }
                 b"trun" => {
-                    self.reader.seek(SeekFrom::Start(child.data_offset)).map_err(|e| {
-                        TarangError::DemuxError(format!("seek error: {e}").into())
-                    })?;
+                    self.reader
+                        .seek(SeekFrom::Start(child.data_offset))
+                        .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
                     let mut buf = [0u8; 4];
                     self.reader.read_exact(&mut buf).map_err(|e| {
                         TarangError::DemuxError(format!("failed to read trun: {e}").into())
@@ -1082,13 +1087,17 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                     let flags = u32::from_be_bytes([0, buf[1], buf[2], buf[3]]);
                     let mut sc = [0u8; 4];
                     self.reader.read_exact(&mut sc).map_err(|e| {
-                        TarangError::DemuxError(format!("failed to read trun sample_count: {e}").into())
+                        TarangError::DemuxError(
+                            format!("failed to read trun sample_count: {e}").into(),
+                        )
                     })?;
                     let sample_count = u32::from_be_bytes(sc);
                     if flags & 0x01 != 0 {
                         let mut doff = [0u8; 4];
                         self.reader.read_exact(&mut doff).map_err(|e| {
-                            TarangError::DemuxError(format!("failed to read trun data_offset: {e}").into())
+                            TarangError::DemuxError(
+                                format!("failed to read trun data_offset: {e}").into(),
+                            )
                         })?;
                         data_offset = Some(i32::from_be_bytes(doff));
                     }
@@ -1116,7 +1125,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                         let size = if has_size {
                             let mut sz = [0u8; 4];
                             self.reader.read_exact(&mut sz).map_err(|e| {
-                                TarangError::DemuxError(format!("failed to read trun sample_size: {e}").into())
+                                TarangError::DemuxError(
+                                    format!("failed to read trun sample_size: {e}").into(),
+                                )
                             })?;
                             u32::from_be_bytes(sz)
                         } else {
@@ -1325,13 +1336,9 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             }
             self.packet_buf.clear();
             self.packet_buf.resize(size as usize, 0);
-            self.reader
-                .read_exact(&mut self.packet_buf)
-                .map_err(|e| {
-                    TarangError::DemuxError(
-                        format!("failed to read fragment sample: {e}").into(),
-                    )
-                })?;
+            self.reader.read_exact(&mut self.packet_buf).map_err(|e| {
+                TarangError::DemuxError(format!("failed to read fragment sample: {e}").into())
+            })?;
             let data = Bytes::copy_from_slice(&self.packet_buf);
 
             return Ok(Packet {
@@ -1351,16 +1358,13 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         let track_idx = playback.track_index;
         let sample_idx = playback.current_sample;
 
-        let track = self
-            .tracks
-            .get(track_idx)
-            .ok_or_else(|| {
-                if self.is_fragmented {
-                    TarangError::EndOfStream
-                } else {
-                    TarangError::Pipeline("invalid track index".into())
-                }
-            })?;
+        let track = self.tracks.get(track_idx).ok_or_else(|| {
+            if self.is_fragmented {
+                TarangError::EndOfStream
+            } else {
+                TarangError::Pipeline("invalid track index".into())
+            }
+        })?;
 
         let total = track.total_samples();
         if sample_idx >= total {
@@ -3138,10 +3142,9 @@ mod tests {
         let mdat_data_start = buf.len() + 8; // after mdat header
         // Patch trun data_offset: relative to moof_box_start
         let data_offset_val = (mdat_data_start as i64 - moof_box_start as i64) as i32;
-        buf[data_offset_pos..data_offset_pos + 4]
-            .copy_from_slice(&data_offset_val.to_be_bytes());
+        buf[data_offset_pos..data_offset_pos + 4].copy_from_slice(&data_offset_val.to_be_bytes());
 
-        let total_data = num_samples * sample_size;
+        let _total_data = num_samples * sample_size;
         let mdat_start = write_box_header(&mut buf, b"mdat");
         // Fill each sample with a distinct byte
         for i in 0..num_samples {
@@ -3212,7 +3215,7 @@ mod tests {
         patch_box_size(&mut buf, moov_start);
 
         // Helper: append a moof+mdat pair with N samples
-        let mut append_fragment = |buf: &mut Vec<u8>, seq: u32, n_samples: u32, fill: u8| {
+        let append_fragment = |buf: &mut Vec<u8>, seq: u32, n_samples: u32, fill: u8| {
             let moof_box_start = buf.len();
             let moof_hdr = write_box_header(buf, b"moof");
 

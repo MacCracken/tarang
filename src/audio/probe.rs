@@ -27,10 +27,10 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
 
     // Extract metadata tags from both the probe metadata log and the format reader
     let mut tags = HashMap::new();
-    if let Some(meta) = metadata_log.get() {
-        if let Some(rev) = meta.current() {
-            extract_tags(rev, &mut tags);
-        }
+    if let Some(meta) = metadata_log.get()
+        && let Some(rev) = meta.current()
+    {
+        extract_tags(rev, &mut tags);
     }
     if let Some(rev) = format.metadata().current() {
         extract_tags(rev, &mut tags);
@@ -112,10 +112,7 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
 }
 
 /// Extract metadata tags from a symphonia metadata revision into a HashMap.
-fn extract_tags(
-    rev: &symphonia::core::meta::MetadataRevision,
-    tags: &mut HashMap<String, String>,
-) {
+fn extract_tags(rev: &symphonia::core::meta::MetadataRevision, tags: &mut HashMap<String, String>) {
     use symphonia::core::meta::StandardTagKey;
 
     for tag in rev.tags() {

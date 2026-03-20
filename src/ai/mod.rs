@@ -13,11 +13,11 @@ pub mod thumbnail;
 pub mod transcribe;
 pub mod video_utils;
 
+pub use acoustid::{AcoustIdFingerprint, compute_acoustid};
 pub use daimon::{
     ContentDescription, DaimonClient, DaimonConfig, HooshLlmClient, HooshLlmConfig, RagResult,
     SimilarMedia,
 };
-pub use acoustid::{AcoustIdFingerprint, compute_acoustid};
 pub use diarize::{DiarizeConfig, SpeakerSegment, diarize};
 pub use fingerprint::{
     AudioFingerprint, FingerprintConfig, compute_fingerprint, fingerprint_match,

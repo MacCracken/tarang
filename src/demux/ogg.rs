@@ -18,6 +18,7 @@ use super::{Demuxer, Packet};
 /// OGG page header type flags
 const HEADER_TYPE_CONTINUATION: u8 = 0x01;
 const HEADER_TYPE_BOS: u8 = 0x02;
+#[allow(dead_code)] // Used in tests
 const HEADER_TYPE_EOS: u8 = 0x04;
 
 /// OGG page header size (fixed portion before segment table)
@@ -546,21 +547,16 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             // Detect new logical streams mid-file (OGG chaining)
             if page.header_type & HEADER_TYPE_BOS != 0
                 && !self.streams.contains_key(&serial)
+                && let Some(first_packet) = page.packets.first()
+                && self.streams.len() < 64
             {
-                if let Some(first_packet) = page.packets.first() {
-                    if self.streams.len() < 64 {
-                        match Self::identify_codec(first_packet) {
-                            Ok(stream) => {
-                                self.stream_indices.push(serial);
-                                self.streams.insert(serial, stream);
-                            }
-                            Err(_) => {
-                                tracing::debug!(
-                                    serial,
-                                    "skipping unrecognized chained OGG stream"
-                                );
-                            }
-                        }
+                match Self::identify_codec(first_packet) {
+                    Ok(stream) => {
+                        self.stream_indices.push(serial);
+                        self.streams.insert(serial, stream);
+                    }
+                    Err(_) => {
+                        tracing::debug!(serial, "skipping unrecognized chained OGG stream");
                     }
                 }
             }
@@ -1798,14 +1794,7 @@ mod tests {
 
         // --- Stream 1: EOS ---
         let data1_eos = vec![0x43u8; 64];
-        write_ogg_page(
-            &mut buf,
-            HEADER_TYPE_EOS,
-            88200,
-            serial1,
-            2,
-            &[&data1_eos],
-        );
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 88200, serial1, 2, &[&data1_eos]);
 
         // --- Stream 2: BOS (chained, appears mid-file) ---
         let mut vorbis_id2 = Vec::new();
@@ -1823,14 +1812,7 @@ mod tests {
 
         // --- Stream 2: data page + EOS ---
         let data2 = vec![0x44u8; 96];
-        write_ogg_page(
-            &mut buf,
-            HEADER_TYPE_EOS,
-            48000,
-            serial2,
-            1,
-            &[&data2],
-        );
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 48000, serial2, 1, &[&data2]);
 
         let cursor = Cursor::new(buf);
         let mut demuxer = OggDemuxer::new(cursor);
@@ -1901,14 +1883,7 @@ mod tests {
 
         // Stream 1: data + EOS
         let data1 = vec![0x42u8; 64];
-        write_ogg_page(
-            &mut buf,
-            HEADER_TYPE_EOS,
-            44100,
-            serial1,
-            1,
-            &[&data1],
-        );
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 44100, serial1, 1, &[&data1]);
 
         // --- Stream 2: Opus BOS (chained) ---
         let mut opus_head = Vec::new();
@@ -1923,14 +1898,7 @@ mod tests {
 
         // Stream 2: data + EOS
         let data2 = vec![0xFCu8; 64];
-        write_ogg_page(
-            &mut buf,
-            HEADER_TYPE_EOS,
-            48000,
-            serial2,
-            1,
-            &[&data2],
-        );
+        write_ogg_page(&mut buf, HEADER_TYPE_EOS, 48000, serial2, 1, &[&data2]);
 
         let cursor = Cursor::new(buf);
         let mut demuxer = OggDemuxer::new(cursor);

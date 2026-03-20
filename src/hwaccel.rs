@@ -22,8 +22,8 @@
 //! # }
 //! ```
 
-use ai_hwaccel::{AcceleratorFamily, AcceleratorProfile, AcceleratorRegistry, AcceleratorType};
 use crate::core::VideoCodec;
+use ai_hwaccel::{AcceleratorFamily, AcceleratorProfile, AcceleratorRegistry, AcceleratorType};
 use std::fmt;
 
 /// Summary of a single detected accelerator, tailored for tarang's needs.

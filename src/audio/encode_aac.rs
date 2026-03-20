@@ -73,10 +73,9 @@ impl AudioEncoder for AacEncoder {
         let mut packets = Vec::new();
 
         // fdk-aac encodes in chunks of its internal frame size
-        let info = self
-            .encoder
-            .info()
-            .map_err(|e| TarangError::EncodeError(format!("AAC encoder info error: {e:?}").into()))?;
+        let info = self.encoder.info().map_err(|e| {
+            TarangError::EncodeError(format!("AAC encoder info error: {e:?}").into())
+        })?;
         let frame_size = info.frameLength as usize * self.channels as usize;
 
         let mut offset = 0;

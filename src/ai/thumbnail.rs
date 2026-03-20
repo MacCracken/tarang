@@ -325,7 +325,8 @@ pub fn content_score(frame: &VideoFrame) -> f32 {
             // Gaussian-like center weight
             let dx = col as f64 - cx;
             let dy = row as f64 - cy;
-            let weight = (-0.5 * (dx * dx / (sigma_x * sigma_x) + dy * dy / (sigma_y * sigma_y))).exp();
+            let weight =
+                (-0.5 * (dx * dx / (sigma_x * sigma_x) + dy * dy / (sigma_y * sigma_y))).exp();
             center_weighted_sum += mag as f64 * weight;
             center_weight_total += weight;
         }
@@ -800,7 +801,10 @@ mod tests {
     fn content_score_solid_black_is_low() {
         let frame = make_solid_yuv_frame(64, 64, 0);
         let score = content_score(&frame);
-        assert!(score < 0.05, "solid black score should be very low, got {score}");
+        assert!(
+            score < 0.05,
+            "solid black score should be very low, got {score}"
+        );
     }
 
     #[test]
@@ -842,8 +846,17 @@ mod tests {
         let cb_score = gen_cb.candidates[0].1;
 
         // Variance score is raw variance (typically hundreds+), content score is 0..1 range
-        assert!(var_score > 1.0, "variance score should be large, got {var_score}");
-        assert!(cb_score < 2.0, "content score should be in small range, got {cb_score}");
-        assert!((var_score - cb_score).abs() > 0.01, "scores should differ between strategies");
+        assert!(
+            var_score > 1.0,
+            "variance score should be large, got {var_score}"
+        );
+        assert!(
+            cb_score < 2.0,
+            "content score should be in small range, got {cb_score}"
+        );
+        assert!(
+            (var_score - cb_score).abs() > 0.01,
+            "scores should differ between strategies"
+        );
     }
 }

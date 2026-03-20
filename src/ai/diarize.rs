@@ -197,10 +197,7 @@ fn compute_spectral_features(samples: &[f32], sample_rate: u32) -> Vec<f64> {
 
     // Hann window
     let window: Vec<f32> = (0..fft_size)
-        .map(|i| {
-            0.5 * (1.0
-                - (2.0 * std::f32::consts::PI * i as f32 / fft_size as f32).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / fft_size as f32).cos()))
         .collect();
 
     let half = fft_size / 2;
@@ -220,17 +217,15 @@ fn compute_spectral_features(samples: &[f32], sample_rate: u32) -> Vec<f64> {
         fft.process(&mut fft_buf);
 
         // Map bins to bands (log-spaced from ~100Hz to ~4000Hz)
-        for i in 0..half {
+        for (i, bin) in fft_buf.iter().enumerate().take(half) {
             let freq = i as f64 * freq_per_bin;
             if !(100.0..=4000.0).contains(&freq) {
                 continue;
             }
-            // Log-scale band assignment
             let log_pos = ((freq / 100.0).ln()) / (4000.0 / 100.0_f64).ln();
             let band = (log_pos * NUM_FEATURE_BANDS as f64) as usize;
             let band = band.min(NUM_FEATURE_BANDS - 1);
-            let mag = (fft_buf[i].re * fft_buf[i].re + fft_buf[i].im * fft_buf[i].im).sqrt()
-                as f64;
+            let mag = (bin.re * bin.re + bin.im * bin.im).sqrt() as f64;
             band_accum[band] += mag;
         }
         num_frames += 1;
@@ -365,7 +360,10 @@ mod tests {
         let buf = make_sine_buffer(440.0, 2.0, 16000);
         let config = DiarizeConfig::default();
         let segments = diarize(&buf, &config).unwrap();
-        assert!(!segments.is_empty(), "a tone should produce at least one segment");
+        assert!(
+            !segments.is_empty(),
+            "a tone should produce at least one segment"
+        );
         // All segments should be the same speaker
         let speaker_ids: Vec<u32> = segments.iter().map(|s| s.speaker_id).collect();
         assert!(

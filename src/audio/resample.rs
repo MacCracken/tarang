@@ -4,7 +4,6 @@
 //! Operates on interleaved F32 buffers.
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
-use bytes::Bytes;
 
 /// Resample an audio buffer to a target sample rate.
 ///
@@ -270,13 +269,14 @@ fn hann_window(x: f64, half_width: f64) -> f64 {
     }
 }
 
-use super::sample::{bytes_to_f32, f32_to_bytes, f32_vec_into_bytes};
+use super::sample::{bytes_to_f32, f32_vec_into_bytes};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::audio::sample::{make_test_buffer as make_buffer, make_test_sine as make_sine};
+    use bytes::Bytes;
     use std::time::Duration;
 
     #[test]

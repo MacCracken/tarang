@@ -19,11 +19,11 @@
 //! then feed compressed packets via [`decode`](VaapiDecoder::decode).
 
 use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
-use cros_libva::{
-    BufferType, Config, Display, Image, Picture, Surface, UsageHint, VAConfigAttrib,
-    VAConfigAttribType, VAEntrypoint, VAProfile, VA_FOURCC_NV12, VA_RT_FORMAT_YUV420,
-};
 use bytes::Bytes;
+use cros_libva::{
+    BufferType, Config, Display, Picture, Surface, UsageHint, VA_FOURCC_NV12, VA_RT_FORMAT_YUV420,
+    VAConfigAttrib, VAConfigAttribType, VAEntrypoint, VAProfile,
+};
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -107,9 +107,7 @@ impl VaapiDecoder {
         display
             .get_config_attributes(profile, entrypoint, &mut attrs)
             .map_err(|e| {
-                TarangError::HwAccelError(
-                    format!("failed to get config attributes: {e:?}").into(),
-                )
+                TarangError::HwAccelError(format!("failed to get config attributes: {e:?}").into())
             })?;
 
         let config = display
@@ -141,15 +139,13 @@ impl VaapiDecoder {
             })?;
 
         // Cache NV12 image format
-        let image_fmts = display.query_image_formats().map_err(|e| {
-            TarangError::HwAccelError(format!("query image formats: {e:?}").into())
-        })?;
+        let image_fmts = display
+            .query_image_formats()
+            .map_err(|e| TarangError::HwAccelError(format!("query image formats: {e:?}").into()))?;
         let nv12_fmt = image_fmts
             .into_iter()
             .find(|f| f.fourcc == VA_FOURCC_NV12)
-            .ok_or_else(|| {
-                TarangError::HwAccelError("NV12 image format not available".into())
-            })?;
+            .ok_or_else(|| TarangError::HwAccelError("NV12 image format not available".into()))?;
 
         Ok(Self {
             display,
@@ -190,9 +186,7 @@ impl VaapiDecoder {
                 vec![()],
             )
             .map_err(|e| {
-                TarangError::HwAccelError(
-                    format!("failed to create decode surface: {e:?}").into(),
-                )
+                TarangError::HwAccelError(format!("failed to create decode surface: {e:?}").into())
             })?;
 
         let surface = surfaces.pop().ok_or_else(|| {
@@ -205,11 +199,7 @@ impl VaapiDecoder {
             TarangError::HwAccelError(format!("failed to create slice buffer: {e:?}").into())
         })?;
 
-        let mut picture = Picture::new(
-            self.frames_decoded,
-            Rc::clone(&self.context),
-            surface,
-        );
+        let mut picture = Picture::new(self.frames_decoded, Rc::clone(&self.context), surface);
         picture.add_buffer(slice_buf);
 
         // Submit decode
@@ -219,9 +209,9 @@ impl VaapiDecoder {
         let picture = picture.render().map_err(|e| {
             TarangError::HwAccelError(format!("vaRenderPicture failed: {e:?}").into())
         })?;
-        let picture = picture.end().map_err(|e| {
-            TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into())
-        })?;
+        let picture = picture
+            .end()
+            .map_err(|e| TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into()))?;
         let picture = picture.sync().map_err(|(e, _)| {
             TarangError::HwAccelError(format!("vaSyncSurface failed: {e:?}").into())
         })?;
@@ -235,9 +225,7 @@ impl VaapiDecoder {
                 (self.width, self.height),
                 (self.width, self.height),
             )
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("create image failed: {e:?}").into())
-            })?;
+            .map_err(|e| TarangError::HwAccelError(format!("create image failed: {e:?}").into()))?;
 
         // Convert NV12 to YUV420p
         let va_image = *image.image();

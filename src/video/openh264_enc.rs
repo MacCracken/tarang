@@ -80,15 +80,15 @@ impl OpenH264Encoder {
 
         let w = self.width as usize;
         let h = self.height as usize;
-        let y_size = w
-            .checked_mul(h)
-            .ok_or_else(|| TarangError::EncodeError("overflow computing Y plane size (w*h)".into()))?;
+        let y_size = w.checked_mul(h).ok_or_else(|| {
+            TarangError::EncodeError("overflow computing Y plane size (w*h)".into())
+        })?;
         // Floor division is safe here — dimensions are validated even in new()
         let chroma_w = w / 2;
         let chroma_h = h / 2;
-        let chroma_size = chroma_w
-            .checked_mul(chroma_h)
-            .ok_or_else(|| TarangError::EncodeError("overflow computing chroma plane size".into()))?;
+        let chroma_size = chroma_w.checked_mul(chroma_h).ok_or_else(|| {
+            TarangError::EncodeError("overflow computing chroma plane size".into())
+        })?;
         let expected_size = y_size.checked_add(2 * chroma_size).ok_or_else(|| {
             TarangError::EncodeError("overflow computing total YUV420p frame size".into())
         })?;

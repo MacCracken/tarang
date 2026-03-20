@@ -3,7 +3,6 @@
 //! Operates on interleaved F32 audio buffers.
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
-use bytes::Bytes;
 
 /// Target channel layout for mixing
 #[non_exhaustive]
@@ -40,7 +39,9 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     // set num_frames to total interleaved samples rather than frames.
     let frames = src.len() / src_ch.max(1);
     if frames == 0 {
-        return Err(TarangError::ConfigError("source buffer has no frames".into()));
+        return Err(TarangError::ConfigError(
+            "source buffer has no frames".into(),
+        ));
     }
     let required_dst = frames
         .checked_mul(target_ch)
@@ -154,12 +155,15 @@ pub fn mix_channels(buf: &AudioBuffer, target: ChannelLayout) -> Result<AudioBuf
     })
 }
 
-use super::sample::{bytes_to_f32, f32_to_bytes, f32_vec_into_bytes};
+#[cfg(test)]
+use super::sample::f32_to_bytes;
+use super::sample::{bytes_to_f32, f32_vec_into_bytes};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audio::sample::make_test_buffer as make_buffer;
+    use bytes::Bytes;
     use std::time::Duration;
 
     #[test]
