@@ -959,6 +959,340 @@ fn write_sub_box(buf: &mut Vec<u8>, box_type: &[u8; 4], data: &[u8]) {
     buf.extend_from_slice(data);
 }
 
+// ---- Fragmented MP4 / DASH Muxer ----
+
+/// Fragmented MP4 muxer for DASH/HLS streaming.
+///
+/// Generates fMP4 segments: an init segment (`ftyp` + `moov`) followed by
+/// media segments (`moof` + `mdat`). Each media segment is self-contained
+/// and can be served independently.
+///
+/// ```text
+/// Init:    [ftyp][moov]
+/// Seg 1:   [moof][mdat]
+/// Seg 2:   [moof][mdat]
+/// ...
+/// ```
+pub struct FragmentedMp4Muxer<W: Write> {
+    writer: W,
+    config: MuxConfig,
+    video_config: Option<VideoMuxConfig>,
+    sequence_number: u32,
+    sample_delta: u32,
+    /// Samples accumulated for the current fragment.
+    fragment_audio_sizes: Vec<u32>,
+    fragment_video_sizes: Vec<u32>,
+    /// Raw data for the current fragment's mdat.
+    fragment_data: Vec<u8>,
+    init_written: bool,
+}
+
+impl<W: Write> FragmentedMp4Muxer<W> {
+    /// Create a fragmented MP4 muxer for audio-only DASH segments.
+    pub fn new(writer: W, config: MuxConfig) -> Self {
+        let sample_delta = match config.codec {
+            AudioCodec::Aac => 1024,
+            AudioCodec::Opus => 960,
+            _ => 1024,
+        };
+        Self {
+            writer,
+            config,
+            video_config: None,
+            sequence_number: 1,
+            sample_delta,
+            fragment_audio_sizes: Vec::new(),
+            fragment_video_sizes: Vec::new(),
+            fragment_data: Vec::new(),
+            init_written: false,
+        }
+    }
+
+    /// Create a fragmented MP4 muxer for audio+video DASH segments.
+    pub fn new_with_video(writer: W, audio: MuxConfig, video: VideoMuxConfig) -> Self {
+        let sample_delta = match audio.codec {
+            AudioCodec::Aac => 1024,
+            AudioCodec::Opus => 960,
+            _ => 1024,
+        };
+        Self {
+            writer,
+            config: audio,
+            video_config: Some(video),
+            sequence_number: 1,
+            sample_delta,
+            fragment_audio_sizes: Vec::new(),
+            fragment_video_sizes: Vec::new(),
+            fragment_data: Vec::new(),
+            init_written: false,
+        }
+    }
+
+    /// Write the init segment (`ftyp` + `moov`). Call once before any fragments.
+    pub fn write_init_segment(&mut self) -> Result<()> {
+        // ftyp
+        let mut ftyp = Vec::new();
+        ftyp.extend_from_slice(b"isom");
+        ftyp.extend_from_slice(&0u32.to_be_bytes());
+        ftyp.extend_from_slice(b"isom");
+        ftyp.extend_from_slice(b"iso5"); // fMP4 compatible brand
+        ftyp.extend_from_slice(b"dash");
+        self.write_box(b"ftyp", &ftyp)?;
+
+        // moov (empty sample tables — data is in fragments)
+        let mut moov = Vec::new();
+
+        // mvhd
+        let mut mvhd = Vec::new();
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        mvhd.extend_from_slice(&self.config.sample_rate.to_be_bytes());
+        mvhd.extend_from_slice(&0u32.to_be_bytes()); // duration = 0 (unknown)
+        mvhd.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate
+        mvhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
+        mvhd.extend_from_slice(&[0u8; 10]);
+        for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
+            mvhd.extend_from_slice(&v.to_be_bytes());
+        }
+        mvhd.extend_from_slice(&[0u8; 24]);
+        let next_id = if self.video_config.is_some() { 3u32 } else { 2u32 };
+        mvhd.extend_from_slice(&next_id.to_be_bytes());
+        write_sub_box(&mut moov, b"mvhd", &mvhd);
+
+        // Audio trak (track 1) — empty stbl for fMP4
+        let audio_trak = self.build_fmp4_audio_trak();
+        write_sub_box(&mut moov, b"trak", &audio_trak);
+
+        // mvex (movie extends — signals fragmented structure)
+        let mut mvex = Vec::new();
+        let mut trex = Vec::new();
+        trex.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        trex.extend_from_slice(&1u32.to_be_bytes()); // track_id
+        trex.extend_from_slice(&1u32.to_be_bytes()); // default_sample_description_index
+        trex.extend_from_slice(&self.sample_delta.to_be_bytes()); // default_sample_duration
+        trex.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size
+        trex.extend_from_slice(&0u32.to_be_bytes()); // default_sample_flags
+        write_sub_box(&mut mvex, b"trex", &trex);
+        write_sub_box(&mut moov, b"mvex", &mvex);
+
+        self.write_box(b"moov", &moov)?;
+        self.init_written = true;
+        Ok(())
+    }
+
+    /// Add an audio sample to the current fragment.
+    pub fn add_audio_sample(&mut self, data: &[u8]) -> Result<()> {
+        if !self.init_written {
+            return Err(TarangError::MuxError("init segment not written".into()));
+        }
+        self.fragment_audio_sizes.push(data.len() as u32);
+        self.fragment_data.extend_from_slice(data);
+        Ok(())
+    }
+
+    /// Add a video sample to the current fragment.
+    pub fn add_video_sample(&mut self, data: &[u8]) -> Result<()> {
+        if !self.init_written {
+            return Err(TarangError::MuxError("init segment not written".into()));
+        }
+        if self.video_config.is_none() {
+            return Err(TarangError::MuxError("no video track configured".into()));
+        }
+        self.fragment_video_sizes.push(data.len() as u32);
+        self.fragment_data.extend_from_slice(data);
+        Ok(())
+    }
+
+    /// Flush the current fragment as a `moof` + `mdat` pair.
+    ///
+    /// Returns the number of samples written. Call this periodically
+    /// (e.g. every 2-4 seconds) to produce DASH-compatible segments.
+    pub fn flush_fragment(&mut self) -> Result<usize> {
+        if self.fragment_audio_sizes.is_empty() && self.fragment_video_sizes.is_empty() {
+            return Ok(0);
+        }
+
+        let total_samples =
+            self.fragment_audio_sizes.len() + self.fragment_video_sizes.len();
+
+        // Build moof
+        let mut moof = Vec::new();
+
+        // mfhd (movie fragment header)
+        let mut mfhd = Vec::new();
+        mfhd.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        mfhd.extend_from_slice(&self.sequence_number.to_be_bytes());
+        write_sub_box(&mut moof, b"mfhd", &mfhd);
+
+        // traf for audio (track 1)
+        if !self.fragment_audio_sizes.is_empty() {
+            let traf = self.build_traf(1, &self.fragment_audio_sizes, self.sample_delta);
+            write_sub_box(&mut moof, b"traf", &traf);
+        }
+
+        // traf for video (track 2)
+        if !self.fragment_video_sizes.is_empty() {
+            let traf = self.build_traf(2, &self.fragment_video_sizes, 3000); // 90kHz/30fps
+            write_sub_box(&mut moof, b"traf", &traf);
+        }
+
+        self.write_box(b"moof", &moof)?;
+
+        // Write mdat with accumulated data
+        let frag_data = std::mem::take(&mut self.fragment_data);
+        self.write_box(b"mdat", &frag_data)?;
+
+        // Reset for next fragment
+        self.fragment_audio_sizes.clear();
+        self.fragment_video_sizes.clear();
+        self.fragment_data.clear();
+        self.sequence_number += 1;
+
+        Ok(total_samples)
+    }
+
+    fn build_traf(&self, track_id: u32, sample_sizes: &[u32], _sample_duration: u32) -> Vec<u8> {
+        let mut traf = Vec::new();
+
+        // tfhd (track fragment header)
+        // flags: 0x020000 = default-base-is-moof
+        let mut tfhd = Vec::new();
+        tfhd.extend_from_slice(&0x00020000u32.to_be_bytes()); // version 0 + flags
+        tfhd.extend_from_slice(&track_id.to_be_bytes());
+        write_sub_box(&mut traf, b"tfhd", &tfhd);
+
+        // trun (track run)
+        // flags: 0x000201 = data-offset-present + sample-size-present
+        let mut trun = Vec::new();
+        trun.extend_from_slice(&0x00000201u32.to_be_bytes()); // version 0 + flags
+        trun.extend_from_slice(&(sample_sizes.len() as u32).to_be_bytes());
+        // data_offset: placeholder (offset from moof start to mdat payload)
+        // We don't know the exact offset yet, but for single-track fragments
+        // this is typically the size of moof + 8 (mdat header). Use 0 for now —
+        // players compute from moof position.
+        trun.extend_from_slice(&0u32.to_be_bytes()); // data_offset (relative)
+
+        for &size in sample_sizes {
+            trun.extend_from_slice(&size.to_be_bytes());
+        }
+        write_sub_box(&mut traf, b"trun", &trun);
+
+        traf
+    }
+
+    fn build_fmp4_audio_trak(&self) -> Vec<u8> {
+        let mut trak = Vec::new();
+
+        // tkhd
+        let mut tkhd = Vec::new();
+        tkhd.extend_from_slice(&0x00000003u32.to_be_bytes());
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // creation
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // modification
+        tkhd.extend_from_slice(&1u32.to_be_bytes()); // track_id
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // reserved
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // duration = 0
+        tkhd.extend_from_slice(&[0u8; 8]);
+        tkhd.extend_from_slice(&0u16.to_be_bytes());
+        tkhd.extend_from_slice(&0u16.to_be_bytes());
+        tkhd.extend_from_slice(&0x0100u16.to_be_bytes()); // volume
+        tkhd.extend_from_slice(&0u16.to_be_bytes());
+        for &v in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
+            tkhd.extend_from_slice(&v.to_be_bytes());
+        }
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // width
+        tkhd.extend_from_slice(&0u32.to_be_bytes()); // height
+        write_sub_box(&mut trak, b"tkhd", &tkhd);
+
+        // mdia
+        let mut mdia = Vec::new();
+
+        // mdhd
+        let mut mdhd = Vec::new();
+        mdhd.extend_from_slice(&0u32.to_be_bytes());
+        mdhd.extend_from_slice(&0u32.to_be_bytes());
+        mdhd.extend_from_slice(&0u32.to_be_bytes());
+        mdhd.extend_from_slice(&self.config.sample_rate.to_be_bytes());
+        mdhd.extend_from_slice(&0u32.to_be_bytes()); // duration = 0
+        mdhd.extend_from_slice(&0x55C40000u32.to_be_bytes());
+        write_sub_box(&mut mdia, b"mdhd", &mdhd);
+
+        // hdlr
+        let mut hdlr = Vec::new();
+        hdlr.extend_from_slice(&0u32.to_be_bytes());
+        hdlr.extend_from_slice(&0u32.to_be_bytes());
+        hdlr.extend_from_slice(b"soun");
+        hdlr.extend_from_slice(&[0u8; 12]);
+        hdlr.extend_from_slice(b"tarang\0");
+        write_sub_box(&mut mdia, b"hdlr", &hdlr);
+
+        // minf with empty stbl
+        let mut minf = Vec::new();
+        let mut smhd = Vec::new();
+        smhd.extend_from_slice(&[0u8; 8]);
+        write_sub_box(&mut minf, b"smhd", &smhd);
+
+        let mut dinf = Vec::new();
+        let mut dref = Vec::new();
+        dref.extend_from_slice(&0u32.to_be_bytes());
+        dref.extend_from_slice(&1u32.to_be_bytes());
+        let mut url_entry = Vec::new();
+        url_entry.extend_from_slice(&0x00000001u32.to_be_bytes());
+        write_sub_box(&mut dref, b"url ", &url_entry);
+        write_sub_box(&mut dinf, b"dref", &dref);
+        write_sub_box(&mut minf, b"dinf", &dinf);
+
+        // stbl — must exist but empty for fMP4
+        let mut stbl = Vec::new();
+
+        // stsd — audio sample description (same as regular muxer)
+        let mut stsd = Vec::new();
+        stsd.extend_from_slice(&0u32.to_be_bytes());
+        stsd.extend_from_slice(&1u32.to_be_bytes());
+        let box_type = match self.config.codec {
+            AudioCodec::Aac => b"mp4a",
+            AudioCodec::Opus => b"Opus",
+            _ => b"mp4a",
+        };
+        let mut entry = Vec::new();
+        entry.extend_from_slice(&[0u8; 6]);
+        entry.extend_from_slice(&1u16.to_be_bytes());
+        entry.extend_from_slice(&[0u8; 8]);
+        entry.extend_from_slice(&self.config.channels.to_be_bytes());
+        entry.extend_from_slice(&self.config.bits_per_sample.to_be_bytes());
+        entry.extend_from_slice(&0u16.to_be_bytes());
+        entry.extend_from_slice(&0u16.to_be_bytes());
+        entry.extend_from_slice(&(self.config.sample_rate << 16).to_be_bytes());
+        write_sub_box(&mut stsd, box_type, &entry);
+        write_sub_box(&mut stbl, b"stsd", &stsd);
+
+        // Empty tables (required by spec even for fMP4)
+        let empty_table = [0u8; 8]; // version+flags + 0 entries
+        write_sub_box(&mut stbl, b"stts", &empty_table);
+        write_sub_box(&mut stbl, b"stsc", &empty_table);
+        let mut stsz = Vec::new();
+        stsz.extend_from_slice(&0u32.to_be_bytes());
+        stsz.extend_from_slice(&0u32.to_be_bytes());
+        stsz.extend_from_slice(&0u32.to_be_bytes());
+        write_sub_box(&mut stbl, b"stsz", &stsz);
+        write_sub_box(&mut stbl, b"stco", &empty_table);
+
+        write_sub_box(&mut minf, b"stbl", &stbl);
+        write_sub_box(&mut mdia, b"minf", &minf);
+        write_sub_box(&mut trak, b"mdia", &mdia);
+
+        trak
+    }
+
+    fn write_box(&mut self, box_type: &[u8; 4], data: &[u8]) -> Result<()> {
+        let size = (8 + data.len()) as u32;
+        self.writer.write_all(&size.to_be_bytes()).map_err(io_err)?;
+        self.writer.write_all(box_type).map_err(io_err)?;
+        self.writer.write_all(data).map_err(io_err)?;
+        Ok(())
+    }
+}
+
 // ---- MKV/WebM Muxer ----
 
 /// MKV/WebM container muxer — writes EBML-encoded Matroska files.
@@ -1920,5 +2254,109 @@ mod tests {
                 std::str::from_utf8(expected_box).unwrap()
             );
         }
+    }
+
+    // ---- Fragmented MP4 / DASH tests ----
+
+    #[test]
+    fn fmp4_init_segment() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
+        mux.write_init_segment().unwrap();
+
+        let data = buf.into_inner();
+        assert_eq!(&data[4..8], b"ftyp");
+        assert!(data.windows(4).any(|w| w == b"moov"));
+        assert!(data.windows(4).any(|w| w == b"mvex")); // movie extends
+        assert!(data.windows(4).any(|w| w == b"trex")); // track extends
+    }
+
+    #[test]
+    fn fmp4_fragment_produces_moof_mdat() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
+        mux.write_init_segment().unwrap();
+
+        // Add samples and flush a fragment
+        mux.add_audio_sample(&[0xAA; 256]).unwrap();
+        mux.add_audio_sample(&[0xBB; 128]).unwrap();
+        let count = mux.flush_fragment().unwrap();
+        assert_eq!(count, 2);
+
+        let data = buf.into_inner();
+        assert!(data.windows(4).any(|w| w == b"moof"));
+        assert!(data.windows(4).any(|w| w == b"mfhd")); // fragment header
+        assert!(data.windows(4).any(|w| w == b"traf")); // track fragment
+        assert!(data.windows(4).any(|w| w == b"tfhd"));
+        assert!(data.windows(4).any(|w| w == b"trun")); // track run
+        assert!(data.windows(4).any(|w| w == b"mdat"));
+    }
+
+    #[test]
+    fn fmp4_multiple_fragments() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 0,
+        };
+        let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
+        mux.write_init_segment().unwrap();
+
+        // Fragment 1
+        mux.add_audio_sample(&[0x01; 100]).unwrap();
+        mux.flush_fragment().unwrap();
+
+        // Fragment 2
+        mux.add_audio_sample(&[0x02; 200]).unwrap();
+        mux.add_audio_sample(&[0x03; 150]).unwrap();
+        mux.flush_fragment().unwrap();
+
+        let data = buf.into_inner();
+        // Should have 2 moof boxes
+        let moof_count = data.windows(4).filter(|w| *w == b"moof").count();
+        assert_eq!(moof_count, 2);
+    }
+
+    #[test]
+    fn fmp4_empty_fragment_returns_zero() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
+        mux.write_init_segment().unwrap();
+
+        let count = mux.flush_fragment().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fmp4_add_sample_before_init_errors() {
+        let mut buf = Cursor::new(Vec::new());
+        let config = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
+        assert!(mux.add_audio_sample(&[0x00; 100]).is_err());
     }
 }

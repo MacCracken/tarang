@@ -12,7 +12,9 @@ mod wav;
 
 pub use mkv::MkvDemuxer;
 pub use mp4::Mp4Demuxer;
-pub use mux::{MkvMuxer, Mp4Muxer, MuxConfig, Muxer, OggMuxer, VideoMuxConfig, WavMuxer};
+pub use mux::{
+    FragmentedMp4Muxer, MkvMuxer, Mp4Muxer, MuxConfig, Muxer, OggMuxer, VideoMuxConfig, WavMuxer,
+};
 pub use ogg::OggDemuxer;
 pub use wav::WavDemuxer;
 

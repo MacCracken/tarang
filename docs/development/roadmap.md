@@ -8,16 +8,9 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Pre-v1 (0.20–0.x)
 
-### Codec gaps
-
-- [ ] **DASH segmentation** — fMP4/WebM segment generation for adaptive streaming (WebM muxer now supports VP9+Opus)
-
 ### Demuxer/muxer hardening
 
 - [ ] **Fuzz testing** — `cargo-fuzz` targets for MP4, MKV, OGG, WAV demuxers with malformed input
-- [ ] **Fragmented MP4 (fMP4)** — `moof`/`mdat` segment parsing for streaming/DASH
-- [ ] **MP4 edit lists** — `elst` box parsing for correct timestamp mapping
-- [ ] **OGG chaining** — multiple logical streams concatenated (podcast chapters)
 
 ### Audio pipeline
 

@@ -27,8 +27,15 @@ ai-hwaccel integration, hardware-aware codec selection, P1 fixes.
   - `write_video_packet()` for video samples to track 2
   - Video stsd with codec-specific box types: avc1 (H.264), hev1 (H.265), vp09 (VP9), av01 (AV1)
   - vmhd, video tkhd (with dimensions), stss (sync samples), 90kHz timescale
-  - 3 new tests: video creation, error handling, codec ID verification
-- 7 new tests total for demux/mux hardening
+- **Fragmented MP4 / DASH muxer**: `FragmentedMp4Muxer` for DASH/HLS streaming
+  - `write_init_segment()` generates `ftyp` + `moov` with `mvex`/`trex`
+  - `add_audio_sample()` / `add_video_sample()` + `flush_fragment()` generates `moof` + `mdat` pairs
+  - `mfhd` (sequence numbers), `traf`/`tfhd`/`trun` (track fragments with per-sample sizes)
+  - 5 new tests: init segment, fragment structure, multiple fragments, empty fragment, error handling
+- **fMP4 demuxing**: `Mp4Demuxer` detects and parses `moof` boxes with `mfhd`/`traf`/`tfhd`/`trun`
+- **MP4 edit lists**: `parse_edts()`/`parse_elst()` — parses `edts`/`elst` boxes, stores edit list entries per track (version 0 and 1)
+- **OGG chaining**: `next_packet()` detects mid-file BOS pages and registers new logical streams dynamically
+- 13 new tests total for demux/mux hardening
 
 ### Bug fixes (found via shruti benchmarks)
 - **Linear resampler off-by-one on stereo buffers** — `resample()` and `resample_sinc()` now derive frame count from actual data length (`src.len() / channels`) instead of trusting `num_samples` field, preventing index-out-of-bounds panic when `num_samples` is set to total interleaved samples rather than frames

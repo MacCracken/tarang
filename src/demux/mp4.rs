@@ -54,6 +54,9 @@ struct Mp4Track {
     sample_to_chunk: Vec<(u32, u32, u32)>,
     /// Time-to-sample table: (sample_count, sample_delta)
     time_to_sample: Vec<(u32, u32)>,
+    /// Edit list entries: (segment_duration, media_time, media_rate_int)
+    /// media_time = -1 means empty edit (dwell), otherwise start time in media timescale
+    edit_list: Vec<(u64, i64, i32)>,
 }
 
 impl Mp4Track {
@@ -97,6 +100,12 @@ pub struct Mp4Demuxer<R: Read + Seek> {
     playback: Option<PlaybackState>,
     /// Reusable buffer for reading packet data, avoiding per-packet allocation
     packet_buf: Vec<u8>,
+    /// Fragment tracking for fMP4
+    fragment_samples: Vec<(u64, u32)>,
+    /// Current position in fragment_samples
+    fragment_index: usize,
+    /// Whether this file uses fragmented MP4 layout (moof+mdat)
+    is_fragmented: bool,
 }
 
 impl<R: Read + Seek> Mp4Demuxer<R> {
@@ -109,6 +118,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             movie_duration: 0,
             playback: None,
             packet_buf: Vec::new(),
+            fragment_samples: Vec::new(),
+            fragment_index: 0,
+            is_fragmented: false,
         }
     }
 
@@ -264,6 +276,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             chunk_offsets: Vec::new(),
             sample_to_chunk: Vec::new(),
             time_to_sample: Vec::new(),
+            edit_list: Vec::new(),
         };
 
         let mut track_type = Mp4TrackType::Other;
@@ -318,6 +331,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             match &child.box_type {
                 b"tkhd" => self.parse_tkhd(&child, track)?,
                 b"mdia" => self.parse_mdia_children(child_end.min(end), track, track_type)?,
+                b"edts" => self.parse_edts(child_end.min(end), track)?,
                 _ => {}
             }
 
@@ -356,6 +370,89 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             .read_exact(&mut id)
             .map_err(|e| TarangError::DemuxError(format!("failed to read track_id: {e}").into()))?;
         track.track_id = u32::from_be_bytes(id);
+
+        Ok(())
+    }
+
+    /// Parse edts box (edit list container).
+    fn parse_edts(&mut self, end: u64, track: &mut Mp4Track) -> Result<()> {
+        while self
+            .reader
+            .stream_position()
+            .map_err(|e| TarangError::DemuxError(format!("position error: {e}").into()))?
+            < end
+        {
+            let child = match self.read_box_header() {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+            let child_end = child.data_offset + child.data_size;
+
+            if &child.box_type == b"elst" {
+                self.parse_elst(&child, track)?;
+            }
+
+            self.reader
+                .seek(SeekFrom::Start(child_end.min(end)))
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+        }
+        Ok(())
+    }
+
+    /// Parse elst box (edit list).
+    fn parse_elst(&mut self, header: &BoxHeader, track: &mut Mp4Track) -> Result<()> {
+        self.reader
+            .seek(SeekFrom::Start(header.data_offset))
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+
+        let mut buf = [0u8; 4];
+        self.reader
+            .read_exact(&mut buf)
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
+        let version = buf[0];
+
+        let mut count_buf = [0u8; 4];
+        self.reader
+            .read_exact(&mut count_buf)
+            .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
+        let entry_count = u32::from_be_bytes(count_buf).min(1024); // cap entries
+
+        for _ in 0..entry_count {
+            let (segment_duration, media_time) = if version == 1 {
+                let mut d = [0u8; 8];
+                self.reader.read_exact(&mut d).map_err(|e| {
+                    TarangError::DemuxError(format!("read error: {e}").into())
+                })?;
+                let mut m = [0u8; 8];
+                self.reader.read_exact(&mut m).map_err(|e| {
+                    TarangError::DemuxError(format!("read error: {e}").into())
+                })?;
+                (u64::from_be_bytes(d), i64::from_be_bytes(m))
+            } else {
+                let mut d = [0u8; 4];
+                self.reader.read_exact(&mut d).map_err(|e| {
+                    TarangError::DemuxError(format!("read error: {e}").into())
+                })?;
+                let mut m = [0u8; 4];
+                self.reader.read_exact(&mut m).map_err(|e| {
+                    TarangError::DemuxError(format!("read error: {e}").into())
+                })?;
+                (
+                    u32::from_be_bytes(d) as u64,
+                    i32::from_be_bytes(m) as i64,
+                )
+            };
+
+            let mut rate_buf = [0u8; 4];
+            self.reader
+                .read_exact(&mut rate_buf)
+                .map_err(|e| TarangError::DemuxError(format!("read error: {e}").into()))?;
+            let media_rate = i32::from_be_bytes(rate_buf);
+
+            track
+                .edit_list
+                .push((segment_duration, media_time, media_rate));
+        }
 
         Ok(())
     }
@@ -893,6 +990,160 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             Duration::ZERO
         }
     }
+
+    /// Parse a moof (movie fragment) box, extracting sample offsets/sizes from trun.
+    fn parse_moof(&mut self, header: &BoxHeader) -> Result<()> {
+        let moof_end = header.data_offset + header.data_size;
+        let moof_start = header.data_offset - 8; // include 8-byte box header
+        self.reader
+            .seek(SeekFrom::Start(header.data_offset))
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+        while self.reader.stream_position().map_err(|e| {
+            TarangError::DemuxError(format!("position error: {e}").into())
+        })? < moof_end
+        {
+            let child = match self.read_box_header() {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+            let child_end = child.data_offset + child.data_size;
+            if &child.box_type == b"traf" {
+                self.parse_traf(&child, moof_start)?;
+            }
+            self.reader
+                .seek(SeekFrom::Start(child_end.min(moof_end)))
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+        }
+        Ok(())
+    }
+
+    /// Parse a traf (track fragment) box.
+    fn parse_traf(&mut self, header: &BoxHeader, moof_start: u64) -> Result<()> {
+        let traf_end = header.data_offset + header.data_size;
+        self.reader
+            .seek(SeekFrom::Start(header.data_offset))
+            .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+        let mut default_sample_size: u32 = 0;
+        let mut data_offset: Option<i32> = None;
+        while self.reader.stream_position().map_err(|e| {
+            TarangError::DemuxError(format!("position error: {e}").into())
+        })? < traf_end
+        {
+            let child = match self.read_box_header() {
+                Ok(h) => h,
+                Err(_) => break,
+            };
+            let child_end = child.data_offset + child.data_size;
+            match &child.box_type {
+                b"tfhd" => {
+                    self.reader.seek(SeekFrom::Start(child.data_offset)).map_err(|e| {
+                        TarangError::DemuxError(format!("seek error: {e}").into())
+                    })?;
+                    let mut buf = [0u8; 4];
+                    self.reader.read_exact(&mut buf).map_err(|e| {
+                        TarangError::DemuxError(format!("failed to read tfhd: {e}").into())
+                    })?;
+                    let flags = u32::from_be_bytes([0, buf[1], buf[2], buf[3]]);
+                    // track_id
+                    self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                        TarangError::DemuxError(format!("seek error: {e}").into())
+                    })?;
+                    if flags & 0x01 != 0 {
+                        self.reader.seek(SeekFrom::Current(8)).map_err(|e| {
+                            TarangError::DemuxError(format!("seek error: {e}").into())
+                        })?;
+                    }
+                    if flags & 0x02 != 0 {
+                        self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                            TarangError::DemuxError(format!("seek error: {e}").into())
+                        })?;
+                    }
+                    if flags & 0x08 != 0 {
+                        self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                            TarangError::DemuxError(format!("seek error: {e}").into())
+                        })?;
+                    }
+                    if flags & 0x10 != 0 {
+                        let mut sz = [0u8; 4];
+                        self.reader.read_exact(&mut sz).map_err(|e| {
+                            TarangError::DemuxError(format!("failed to read tfhd default_sample_size: {e}").into())
+                        })?;
+                        default_sample_size = u32::from_be_bytes(sz);
+                    }
+                }
+                b"trun" => {
+                    self.reader.seek(SeekFrom::Start(child.data_offset)).map_err(|e| {
+                        TarangError::DemuxError(format!("seek error: {e}").into())
+                    })?;
+                    let mut buf = [0u8; 4];
+                    self.reader.read_exact(&mut buf).map_err(|e| {
+                        TarangError::DemuxError(format!("failed to read trun: {e}").into())
+                    })?;
+                    let flags = u32::from_be_bytes([0, buf[1], buf[2], buf[3]]);
+                    let mut sc = [0u8; 4];
+                    self.reader.read_exact(&mut sc).map_err(|e| {
+                        TarangError::DemuxError(format!("failed to read trun sample_count: {e}").into())
+                    })?;
+                    let sample_count = u32::from_be_bytes(sc);
+                    if flags & 0x01 != 0 {
+                        let mut doff = [0u8; 4];
+                        self.reader.read_exact(&mut doff).map_err(|e| {
+                            TarangError::DemuxError(format!("failed to read trun data_offset: {e}").into())
+                        })?;
+                        data_offset = Some(i32::from_be_bytes(doff));
+                    }
+                    if flags & 0x04 != 0 {
+                        self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                            TarangError::DemuxError(format!("seek error: {e}").into())
+                        })?;
+                    }
+                    let has_duration = flags & 0x100 != 0;
+                    let has_size = flags & 0x200 != 0;
+                    let has_flags = flags & 0x400 != 0;
+                    let has_cts_offset = flags & 0x800 != 0;
+                    let base = if let Some(doff) = data_offset {
+                        (moof_start as i64 + doff as i64) as u64
+                    } else {
+                        continue;
+                    };
+                    let mut running_offset = base;
+                    for _ in 0..sample_count {
+                        if has_duration {
+                            self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                                TarangError::DemuxError(format!("seek error: {e}").into())
+                            })?;
+                        }
+                        let size = if has_size {
+                            let mut sz = [0u8; 4];
+                            self.reader.read_exact(&mut sz).map_err(|e| {
+                                TarangError::DemuxError(format!("failed to read trun sample_size: {e}").into())
+                            })?;
+                            u32::from_be_bytes(sz)
+                        } else {
+                            default_sample_size
+                        };
+                        if has_flags {
+                            self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                                TarangError::DemuxError(format!("seek error: {e}").into())
+                            })?;
+                        }
+                        if has_cts_offset {
+                            self.reader.seek(SeekFrom::Current(4)).map_err(|e| {
+                                TarangError::DemuxError(format!("seek error: {e}").into())
+                            })?;
+                        }
+                        self.fragment_samples.push((running_offset, size));
+                        running_offset += size as u64;
+                    }
+                }
+                _ => {}
+            }
+            self.reader
+                .seek(SeekFrom::Start(child_end.min(traf_end)))
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+        }
+        Ok(())
+    }
 }
 
 impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
@@ -911,6 +1162,10 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         self.reader
             .seek(SeekFrom::Start(0))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+
+        self.fragment_samples.clear();
+        self.fragment_index = 0;
+        self.is_fragmented = false;
 
         let mut found_ftyp = false;
         let mut found_moov = false;
@@ -959,6 +1214,14 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                             })?;
                     }
                 }
+                b"moof" => {
+                    self.is_fragmented = true;
+                    self.parse_moof(&header)?;
+                }
+                b"mdat" => {
+                    // Skip mdat during probe — data is read via offsets later
+                    self.skip_box(&header)?;
+                }
                 _ => {
                     self.skip_box(&header)?;
                 }
@@ -971,7 +1234,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             ));
         }
 
-        if self.tracks.is_empty() {
+        if self.tracks.is_empty() && !self.is_fragmented {
             return Err(TarangError::DemuxError(
                 "no audio tracks found in MP4".into(),
             ));
@@ -986,7 +1249,7 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             self.tracks.first().and_then(|t| t.duration())
         };
 
-        let streams: Vec<StreamInfo> = self
+        let mut streams: Vec<StreamInfo> = self
             .tracks
             .iter()
             .map(|t| {
@@ -1000,6 +1263,19 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
                 })
             })
             .collect();
+
+        // For fMP4 with no traditional tracks but fragment data, add a
+        // placeholder audio stream so the caller knows audio is present.
+        if streams.is_empty() && self.is_fragmented && !self.fragment_samples.is_empty() {
+            streams.push(StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Aac,
+                sample_rate: 44100,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                bitrate: None,
+                duration: None,
+            }));
+        }
 
         let info = MediaInfo {
             id: Uuid::new_v4(),
@@ -1030,6 +1306,43 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
+        // Fragmented MP4 path: read from fragment_samples when the normal
+        // sample table is empty or exhausted
+        if self.is_fragmented && self.fragment_index < self.fragment_samples.len() {
+            let (offset, size) = self.fragment_samples[self.fragment_index];
+            self.fragment_index += 1;
+
+            self.reader
+                .seek(SeekFrom::Start(offset))
+                .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
+
+            const MAX_SAMPLE_SIZE: u32 = 64 * 1024 * 1024;
+            if size > MAX_SAMPLE_SIZE {
+                return Err(TarangError::DemuxError(
+                    format!("fragment sample size {size} exceeds maximum ({MAX_SAMPLE_SIZE})")
+                        .into(),
+                ));
+            }
+            self.packet_buf.clear();
+            self.packet_buf.resize(size as usize, 0);
+            self.reader
+                .read_exact(&mut self.packet_buf)
+                .map_err(|e| {
+                    TarangError::DemuxError(
+                        format!("failed to read fragment sample: {e}").into(),
+                    )
+                })?;
+            let data = Bytes::copy_from_slice(&self.packet_buf);
+
+            return Ok(Packet {
+                stream_index: 0,
+                data,
+                timestamp: Duration::ZERO, // fMP4 timestamp tracking is minimal
+                duration: None,
+                is_keyframe: true,
+            });
+        }
+
         let playback = self
             .playback
             .as_mut()
@@ -1041,7 +1354,13 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         let track = self
             .tracks
             .get(track_idx)
-            .ok_or_else(|| TarangError::Pipeline("invalid track index".into()))?;
+            .ok_or_else(|| {
+                if self.is_fragmented {
+                    TarangError::EndOfStream
+                } else {
+                    TarangError::Pipeline("invalid track index".into())
+                }
+            })?;
 
         let total = track.total_samples();
         if sample_idx >= total {
@@ -2674,5 +2993,287 @@ mod tests {
             err_msg.contains("exceeds maximum"),
             "error should mention exceeds maximum, got: {err_msg}"
         );
+    }
+
+    /// Build a minimal fragmented MP4 (ftyp + moov + moof + mdat) in memory.
+    fn make_fmp4(num_samples: u32, sample_size: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let sample_rate = 44100u32;
+        let channels = 2u16;
+
+        // ── ftyp ──
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        // ── moov (init segment — track description, empty sample tables) ──
+        let moov_start = write_box_header(&mut buf, b"moov");
+
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&0u32.to_be_bytes()); // creation_time
+        buf.extend_from_slice(&0u32.to_be_bytes()); // modification_time
+        buf.extend_from_slice(&sample_rate.to_be_bytes()); // timescale
+        buf.extend_from_slice(&0u32.to_be_bytes()); // duration (0 for fMP4)
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+
+        let trak_start = write_box_header(&mut buf, b"trak");
+        let tkhd_start = write_box_header(&mut buf, b"tkhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes()); // track_id
+        buf.extend_from_slice(&[0u8; 68]);
+        patch_box_size(&mut buf, tkhd_start);
+
+        let mdia_start = write_box_header(&mut buf, b"mdia");
+        let mdhd_start = write_box_header(&mut buf, b"mdhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&sample_rate.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes()); // duration 0
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, mdhd_start);
+
+        let hdlr_start = write_box_header(&mut buf, b"hdlr");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"soun");
+        buf.extend_from_slice(&[0u8; 12]);
+        buf.push(0);
+        patch_box_size(&mut buf, hdlr_start);
+
+        let minf_start = write_box_header(&mut buf, b"minf");
+        let stbl_start = write_box_header(&mut buf, b"stbl");
+
+        // stsd with mp4a
+        let stsd_start = write_box_header(&mut buf, b"stsd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        let mp4a_start = write_box_header(&mut buf, b"mp4a");
+        buf.extend_from_slice(&[0u8; 6]);
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 8]);
+        buf.extend_from_slice(&channels.to_be_bytes());
+        buf.extend_from_slice(&16u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(sample_rate << 16).to_be_bytes());
+        patch_box_size(&mut buf, mp4a_start);
+        patch_box_size(&mut buf, stsd_start);
+
+        // Empty stts (no samples in init segment)
+        let stts_start = write_box_header(&mut buf, b"stts");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes()); // 0 entries
+        patch_box_size(&mut buf, stts_start);
+
+        // Empty stsc
+        let stsc_start = write_box_header(&mut buf, b"stsc");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, stsc_start);
+
+        // Empty stsz
+        let stsz_start = write_box_header(&mut buf, b"stsz");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size
+        buf.extend_from_slice(&0u32.to_be_bytes()); // sample_count = 0
+        patch_box_size(&mut buf, stsz_start);
+
+        // Empty stco
+        let stco_start = write_box_header(&mut buf, b"stco");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        patch_box_size(&mut buf, stco_start);
+
+        patch_box_size(&mut buf, stbl_start);
+        patch_box_size(&mut buf, minf_start);
+        patch_box_size(&mut buf, mdia_start);
+        patch_box_size(&mut buf, trak_start);
+        patch_box_size(&mut buf, moov_start);
+
+        // ── moof (movie fragment) ──
+        let moof_box_start = buf.len();
+        let moof_start = write_box_header(&mut buf, b"moof");
+
+        // mfhd
+        let mfhd_start = write_box_header(&mut buf, b"mfhd");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+        buf.extend_from_slice(&1u32.to_be_bytes()); // sequence_number
+        patch_box_size(&mut buf, mfhd_start);
+
+        // traf
+        let traf_start = write_box_header(&mut buf, b"traf");
+
+        // tfhd — no optional fields, just track_id
+        let tfhd_start = write_box_header(&mut buf, b"tfhd");
+        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags (no optional fields)
+        buf.extend_from_slice(&1u32.to_be_bytes()); // track_id
+        patch_box_size(&mut buf, tfhd_start);
+
+        // trun — with data_offset and per-sample sizes
+        let trun_start = write_box_header(&mut buf, b"trun");
+        // flags: 0x01 (data-offset-present) | 0x200 (sample-size-present)
+        let trun_flags: u32 = 0x000201;
+        buf.extend_from_slice(&trun_flags.to_be_bytes()); // version(0) + flags
+        buf.extend_from_slice(&num_samples.to_be_bytes()); // sample_count
+        // data_offset placeholder — will be patched after we know mdat position
+        let data_offset_pos = buf.len();
+        buf.extend_from_slice(&0i32.to_be_bytes()); // data_offset (relative to moof start)
+        // Per-sample sizes
+        for _ in 0..num_samples {
+            buf.extend_from_slice(&sample_size.to_be_bytes());
+        }
+        patch_box_size(&mut buf, trun_start);
+
+        patch_box_size(&mut buf, traf_start);
+        patch_box_size(&mut buf, moof_start);
+
+        // ── mdat ──
+        let mdat_data_start = buf.len() + 8; // after mdat header
+        // Patch trun data_offset: relative to moof_box_start
+        let data_offset_val = (mdat_data_start as i64 - moof_box_start as i64) as i32;
+        buf[data_offset_pos..data_offset_pos + 4]
+            .copy_from_slice(&data_offset_val.to_be_bytes());
+
+        let total_data = num_samples * sample_size;
+        let mdat_start = write_box_header(&mut buf, b"mdat");
+        // Fill each sample with a distinct byte
+        for i in 0..num_samples {
+            let fill = (i as u8).wrapping_add(0xD0);
+            buf.extend_from_slice(&vec![fill; sample_size as usize]);
+        }
+        patch_box_size(&mut buf, mdat_start);
+
+        buf
+    }
+
+    #[test]
+    fn fmp4_probe_and_read() {
+        let num_samples = 5u32;
+        let sample_size = 64u32;
+        let fmp4 = make_fmp4(num_samples, sample_size);
+        let cursor = Cursor::new(fmp4);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+
+        let info = demuxer.probe().unwrap();
+        assert_eq!(info.format, ContainerFormat::Mp4);
+        assert!(info.has_audio());
+        assert!(demuxer.is_fragmented);
+        assert_eq!(demuxer.fragment_samples.len(), num_samples as usize);
+
+        // Read all fragment packets
+        let mut count = 0u32;
+        loop {
+            match demuxer.next_packet() {
+                Ok(pkt) => {
+                    assert_eq!(pkt.data.len(), sample_size as usize);
+                    let expected_fill = (count as u8).wrapping_add(0xD0);
+                    assert!(
+                        pkt.data.iter().all(|&b| b == expected_fill),
+                        "sample {count} data mismatch"
+                    );
+                    count += 1;
+                }
+                Err(TarangError::EndOfStream) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert_eq!(count, num_samples);
+    }
+
+    #[test]
+    fn fmp4_multiple_moof_fragments() {
+        // Build an fMP4 with two moof+mdat pairs
+        let mut buf = Vec::new();
+        let sample_size = 32u32;
+
+        // ftyp
+        let ftyp_start = write_box_header(&mut buf, b"ftyp");
+        buf.extend_from_slice(b"isom");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(b"isom");
+        patch_box_size(&mut buf, ftyp_start);
+
+        // Minimal moov (needed to pass probe validation)
+        let moov_start = write_box_header(&mut buf, b"moov");
+        let mvhd_start = write_box_header(&mut buf, b"mvhd");
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&[0u32.to_be_bytes(); 2].concat());
+        buf.extend_from_slice(&44100u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&[0u8; 80]);
+        patch_box_size(&mut buf, mvhd_start);
+        patch_box_size(&mut buf, moov_start);
+
+        // Helper: append a moof+mdat pair with N samples
+        let mut append_fragment = |buf: &mut Vec<u8>, seq: u32, n_samples: u32, fill: u8| {
+            let moof_box_start = buf.len();
+            let moof_hdr = write_box_header(buf, b"moof");
+
+            let mfhd_hdr = write_box_header(buf, b"mfhd");
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&seq.to_be_bytes());
+            patch_box_size(buf, mfhd_hdr);
+
+            let traf_hdr = write_box_header(buf, b"traf");
+            let tfhd_hdr = write_box_header(buf, b"tfhd");
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&1u32.to_be_bytes());
+            patch_box_size(buf, tfhd_hdr);
+
+            let trun_hdr = write_box_header(buf, b"trun");
+            buf.extend_from_slice(&0x000201u32.to_be_bytes());
+            buf.extend_from_slice(&n_samples.to_be_bytes());
+            let doff_pos = buf.len();
+            buf.extend_from_slice(&0i32.to_be_bytes());
+            for _ in 0..n_samples {
+                buf.extend_from_slice(&sample_size.to_be_bytes());
+            }
+            patch_box_size(buf, trun_hdr);
+            patch_box_size(buf, traf_hdr);
+            patch_box_size(buf, moof_hdr);
+
+            let mdat_data_start = buf.len() + 8;
+            let doff_val = (mdat_data_start as i64 - moof_box_start as i64) as i32;
+            buf[doff_pos..doff_pos + 4].copy_from_slice(&doff_val.to_be_bytes());
+
+            let mdat_hdr = write_box_header(buf, b"mdat");
+            for _ in 0..n_samples {
+                buf.extend_from_slice(&vec![fill; sample_size as usize]);
+            }
+            patch_box_size(buf, mdat_hdr);
+        };
+
+        append_fragment(&mut buf, 1, 3, 0xAA);
+        append_fragment(&mut buf, 2, 2, 0xBB);
+
+        let cursor = Cursor::new(buf);
+        let mut demuxer = Mp4Demuxer::new(cursor);
+        demuxer.probe().unwrap();
+
+        assert!(demuxer.is_fragmented);
+        assert_eq!(demuxer.fragment_samples.len(), 5);
+
+        // Read all packets: 3 with 0xAA, 2 with 0xBB
+        for i in 0..3 {
+            let pkt = demuxer.next_packet().unwrap();
+            assert_eq!(pkt.data.len(), sample_size as usize);
+            assert!(pkt.data.iter().all(|&b| b == 0xAA), "fragment 1 sample {i}");
+        }
+        for i in 0..2 {
+            let pkt = demuxer.next_packet().unwrap();
+            assert_eq!(pkt.data.len(), sample_size as usize);
+            assert!(pkt.data.iter().all(|&b| b == 0xBB), "fragment 2 sample {i}");
+        }
+        assert!(matches!(
+            demuxer.next_packet(),
+            Err(TarangError::EndOfStream)
+        ));
     }
 }
