@@ -228,7 +228,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
+          sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev libpipewire-0.3-dev libglib2.0-dev nasm
       - name: Check if downstream repo was cloned
         id: check-repo
         run: |
@@ -241,9 +241,10 @@ jobs:
         if: steps.check-repo.outputs.exists == 'true'
         working-directory: ${{ matrix.repo }}
         run: |
-          # Override tarang dependency to use local checkout
-          echo '[patch.crates-io]' >> Cargo.toml
-          echo 'tarang = { path = "../tarang" }' >> Cargo.toml
+          # Override tarang dependency via .cargo/config.toml to avoid duplicate [patch] keys
+          mkdir -p .cargo
+          echo '[patch.crates-io]' >> .cargo/config.toml
+          echo 'tarang = { path = "../tarang" }' >> .cargo/config.toml
       - name: Build downstream consumer
         if: steps.check-repo.outputs.exists == 'true'
         working-directory: ${{ matrix.repo }}
