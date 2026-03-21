@@ -448,7 +448,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
     /// Write a video sample to the mdat. Must be called after `write_header()`.
     ///
-    /// Can be interleaved with [`write_packet`] (audio) in any order.
+    /// Can be interleaved with [`Muxer::write_packet`] (audio) in any order.
     pub fn write_video_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
             return Err(TarangError::MuxError("header not written".into()));
