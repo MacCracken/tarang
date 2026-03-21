@@ -79,6 +79,8 @@ jobs:
       - name: Build release (macOS — portable features)
         if: runner.os == 'macOS'
         run: cargo build --release --target ${{ matrix.target }} --features portable
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
       - name: Build release (Windows — default features)
         if: runner.os == 'Windows'
