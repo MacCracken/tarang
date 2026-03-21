@@ -89,7 +89,6 @@ impl Default for EffectChain {
 pub struct Gain {
     /// Linear gain multiplier (computed from dB).
     multiplier: f32,
-    _db: f32,
 }
 
 impl Gain {
@@ -97,7 +96,6 @@ impl Gain {
     pub fn new(db: f32) -> Self {
         Self {
             multiplier: 10.0f32.powf(db / 20.0),
-            _db: db,
         }
     }
 }
@@ -130,6 +128,8 @@ pub struct HighPassFilter {
     prev_out: Vec<f32>,
     alpha: f32,
     initialized: bool,
+    /// Reusable output buffer (avoids per-frame allocation).
+    out_buf: Vec<f32>,
 }
 
 impl HighPassFilter {
@@ -141,6 +141,7 @@ impl HighPassFilter {
             prev_out: Vec::new(),
             alpha: 0.0,
             initialized: false,
+            out_buf: Vec::new(),
         }
     }
 
@@ -163,17 +164,19 @@ impl AudioEffect for HighPassFilter {
 
         let samples = crate::audio::sample::bytes_to_f32(&buf.data);
         let ch = buf.channels as usize;
-        let mut out = Vec::with_capacity(samples.len());
+        self.out_buf.clear();
+        self.out_buf.reserve(samples.len());
 
         for frame_samples in samples.chunks(ch) {
             for (c, &s) in frame_samples.iter().enumerate() {
                 let y = self.alpha * (self.prev_out[c] + s - self.prev_in[c]);
                 self.prev_in[c] = s;
                 self.prev_out[c] = y;
-                out.push(y);
+                self.out_buf.push(y);
             }
         }
 
+        let out = std::mem::take(&mut self.out_buf);
         Ok(AudioBuffer {
             data: crate::audio::sample::f32_vec_into_bytes(out),
             sample_format: buf.sample_format,
@@ -191,7 +194,6 @@ impl AudioEffect for HighPassFilter {
 
 /// Simple dynamic range compressor.
 pub struct Compressor {
-    _threshold_db: f32,
     ratio: f32,
     /// Linear threshold.
     threshold_lin: f32,
@@ -202,7 +204,6 @@ impl Compressor {
     /// compression applies. `ratio` is the compression ratio (e.g. 4.0 = 4:1).
     pub fn new(threshold_db: f32, ratio: f32) -> Self {
         Self {
-            _threshold_db: threshold_db,
             ratio: ratio.max(1.0),
             threshold_lin: 10.0f32.powf(threshold_db / 20.0),
         }

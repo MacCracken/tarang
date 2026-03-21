@@ -149,6 +149,7 @@ fn compute_chroma_frames(samples: &[f32], config: &FingerprintConfig) -> Vec<Vec
 
     let mut frames = Vec::new();
     let mut fft_buf = vec![Complex::new(0.0f32, 0.0); config.frame_size];
+    let mut chroma = vec![0.0f64; config.num_bands];
     let mut pos = 0;
 
     while pos + config.frame_size <= samples.len() {
@@ -160,7 +161,7 @@ fn compute_chroma_frames(samples: &[f32], config: &FingerprintConfig) -> Vec<Vec
         fft.process(&mut fft_buf);
 
         // Map magnitudes to chroma using LUT
-        let mut chroma = vec![0.0f64; config.num_bands];
+        chroma.fill(0.0);
         for (i, slot) in fft_buf[..half].iter().enumerate() {
             if let Some(band) = band_lut[i] {
                 let mag = (slot.re * slot.re + slot.im * slot.im).sqrt() as f64;
@@ -169,14 +170,14 @@ fn compute_chroma_frames(samples: &[f32], config: &FingerprintConfig) -> Vec<Vec
         }
 
         // Normalize
-        let max = chroma.iter().cloned().fold(0.0f64, f64::max);
+        let max = chroma.iter().copied().fold(0.0f64, f64::max);
         if max > 0.0 {
             for c in &mut chroma {
                 *c /= max;
             }
         }
 
-        frames.push(chroma);
+        frames.push(chroma.clone());
         pos += config.hop_size;
     }
 

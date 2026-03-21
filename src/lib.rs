@@ -104,7 +104,8 @@
 //!
 //! | Feature | Description |
 //! |---------|-------------|
-//! | `full` | Enable all codec backends |
+//! | `full` | Enable all codec backends (Linux) |
+//! | `portable` | All codecs except platform-specific (vaapi, pipewire excluded) |
 //! | `dav1d` | AV1 decoding via libdav1d |
 //! | `vpx` | VP8/VP9 decoding via libvpx |
 //! | `vpx-enc` | VP8/VP9 encoding via libvpx |
@@ -112,10 +113,13 @@
 //! | `openh264-enc` | H.264 encoding via openh264 |
 //! | `rav1e` | AV1 encoding via rav1e (pure Rust) |
 //! | `vaapi` | VA-API hardware acceleration probe/encode |
-//! | `pipewire` | PipeWire audio output |
+//! | `h265-decode` | H.265 software decode via libde265 (LGPL) |
+//! | `hwaccel` | Hardware accelerator detection via ai-hwaccel |
+//! | `cpal-output` | Cross-platform audio output (CoreAudio, WASAPI, ALSA) |
+//! | `pipewire` | PipeWire audio output (Linux) |
 //! | `opus-enc` | Opus encoding via libopus |
 //! | `aac-enc` | AAC encoding via fdk-aac |
-//! | `hwaccel` | Hardware accelerator detection via ai-hwaccel |
+//! | `aac-dec` | AAC decoding via fdk-aac |
 //!
 //! Default features: none. Audio decoding (symphonia) and all container
 //! demuxing/muxing are always available.

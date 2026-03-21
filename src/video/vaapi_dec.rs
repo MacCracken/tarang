@@ -24,7 +24,6 @@ use cros_libva::{
     BufferType, Config, Display, Picture, Surface, UsageHint, VA_FOURCC_NV12, VA_RT_FORMAT_YUV420,
     VAConfigAttrib, VAConfigAttribType, VAEntrypoint, VAProfile,
 };
-use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -45,18 +44,7 @@ fn codec_to_decode_profile(codec: VideoCodec) -> Result<VAProfile::Type> {
     }
 }
 
-/// Open a VA-API display, trying render nodes 128-135.
-fn open_display() -> Result<Rc<Display>> {
-    for i in 128..136 {
-        let path = format!("/dev/dri/renderD{i}");
-        if let Ok(display) = Display::open_drm_display(Path::new(&path)) {
-            return Ok(display);
-        }
-    }
-    Err(TarangError::HwAccelError(
-        "no VA-API render node found".into(),
-    ))
-}
+use super::vaapi_common::{open_display, va_err};
 
 /// VA-API hardware-accelerated video decoder.
 ///
@@ -89,13 +77,14 @@ impl VaapiDecoder {
         }
 
         let profile = codec_to_decode_profile(codec)?;
-        let display = open_display()?;
+        let display = open_display(&None)?;
         let entrypoint = VAEntrypoint::VAEntrypointVLD;
 
         // Verify decode support
-        let entrypoints = display.query_config_entrypoints(profile).map_err(|e| {
-            TarangError::HwAccelError(format!("failed to query entrypoints: {e:?}").into())
-        })?;
+        let entrypoints = va_err(
+            display.query_config_entrypoints(profile),
+            "failed to query entrypoints",
+        )?;
         if !entrypoints.contains(&entrypoint) {
             return Err(TarangError::HwAccelError(
                 format!("VA-API VLD decode not supported for {codec}").into(),
@@ -106,47 +95,41 @@ impl VaapiDecoder {
             type_: VAConfigAttribType::VAConfigAttribRTFormat,
             value: 0,
         }];
-        display
-            .get_config_attributes(profile, entrypoint, &mut attrs)
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to get config attributes: {e:?}").into())
-            })?;
+        va_err(
+            display.get_config_attributes(profile, entrypoint, &mut attrs),
+            "failed to get config attributes",
+        )?;
 
-        let config = display
-            .create_config(attrs, profile, entrypoint)
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to create VA config: {e:?}").into())
-            })?;
+        let config = va_err(
+            display.create_config(attrs, profile, entrypoint),
+            "failed to create VA config",
+        )?;
 
         // Align height to 16-pixel boundary (required by some drivers)
         let aligned_height = ((height + 15) / 16) * 16;
 
-        let surfaces: Vec<Surface<()>> = display
-            .create_surfaces(
+        let surfaces: Vec<Surface<()>> = va_err(
+            display.create_surfaces(
                 VA_RT_FORMAT_YUV420,
                 None,
                 width,
                 aligned_height,
                 Some(UsageHint::USAGE_HINT_DECODER),
                 vec![(); NUM_SURFACES],
-            )
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to create surfaces: {e:?}").into())
-            })?;
+            ),
+            "failed to create surfaces",
+        )?;
 
-        let context = display
-            .create_context(&config, width, aligned_height, Some(&surfaces), true)
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to create context: {e:?}").into())
-            })?;
+        let context = va_err(
+            display.create_context(&config, width, aligned_height, Some(&surfaces), true),
+            "failed to create context",
+        )?;
 
         // Context holds surface IDs internally; pool surfaces for per-frame reuse
         let surface_pool = surfaces;
 
         // Cache NV12 image format
-        let image_fmts = display
-            .query_image_formats()
-            .map_err(|e| TarangError::HwAccelError(format!("query image formats: {e:?}").into()))?;
+        let image_fmts = va_err(display.query_image_formats(), "query image formats")?;
         let nv12_fmt = image_fmts
             .into_iter()
             .find(|f| f.fourcc == VA_FOURCC_NV12)
@@ -206,23 +189,18 @@ impl VaapiDecoder {
 
         // Submit slice data
         let slice_data = BufferType::SliceData(data.to_vec());
-        let slice_buf = self.context.create_buffer(slice_data).map_err(|e| {
-            TarangError::HwAccelError(format!("failed to create slice buffer: {e:?}").into())
-        })?;
+        let slice_buf = va_err(
+            self.context.create_buffer(slice_data),
+            "failed to create slice buffer",
+        )?;
 
         let mut picture = Picture::new(self.frames_decoded, Rc::clone(&self.context), surface);
         picture.add_buffer(slice_buf);
 
         // Submit decode
-        let picture = picture.begin().map_err(|e| {
-            TarangError::HwAccelError(format!("vaBeginPicture failed: {e:?}").into())
-        })?;
-        let picture = picture.render().map_err(|e| {
-            TarangError::HwAccelError(format!("vaRenderPicture failed: {e:?}").into())
-        })?;
-        let picture = picture
-            .end()
-            .map_err(|e| TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into()))?;
+        let picture = va_err(picture.begin(), "vaBeginPicture failed")?;
+        let picture = va_err(picture.render(), "vaRenderPicture failed")?;
+        let picture = va_err(picture.end(), "vaEndPicture failed")?;
         let picture = picture.sync().map_err(|(e, _)| {
             TarangError::HwAccelError(format!("vaSyncSurface failed: {e:?}").into())
         })?;
@@ -230,13 +208,14 @@ impl VaapiDecoder {
         // Read back decoded frame as NV12
         let nv12_fmt = self.nv12_fmt;
 
-        let image = picture
-            .create_image(
+        let image = va_err(
+            picture.create_image(
                 nv12_fmt,
                 (self.width, self.height),
                 (self.width, self.height),
-            )
-            .map_err(|e| TarangError::HwAccelError(format!("create image failed: {e:?}").into()))?;
+            ),
+            "create image failed",
+        )?;
 
         // Convert NV12 to YUV420p (read back before reclaiming surface)
         let va_image = *image.image();

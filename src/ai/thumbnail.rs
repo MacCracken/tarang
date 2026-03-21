@@ -198,82 +198,13 @@ pub fn generate_thumbnails(
     generator.generate()
 }
 
-/// Convert YUV420p frame data to RGB24.
+/// Convert YUV420p frame data to RGB24 bytes.
+///
+/// Delegates to [`crate::video::convert::yuv420p_to_rgb24`] and extracts
+/// the raw byte data for image processing.
 pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<Vec<u8>> {
-    if frame.pixel_format == PixelFormat::Rgb24 {
-        return Ok(frame.data.to_vec());
-    }
-    if frame.pixel_format != PixelFormat::Yuv420p {
-        return Err(TarangError::ImageError(
-            format!(
-                "unsupported pixel format for RGB conversion: {:?}",
-                frame.pixel_format
-            )
-            .into(),
-        ));
-    }
-
-    let w = frame.width as usize;
-    let h = frame.height as usize;
-    let y_size = w * h;
-    let chroma_w = w.div_ceil(2);
-    let chroma_h = h.div_ceil(2);
-
-    if frame.data.len() < y_size + 2 * chroma_w * chroma_h {
-        return Err(TarangError::ImageError("frame data too small".into()));
-    }
-
-    let y_plane = &frame.data[..y_size];
-    let u_plane = &frame.data[y_size..y_size + chroma_w * chroma_h];
-    let v_plane = &frame.data[y_size + chroma_w * chroma_h..];
-
-    let mut rgb = vec![0u8; w * h * 3];
-
-    // Process two luma rows at a time to share chroma computations.
-    // Pre-compute U/V contributions per chroma row using integer BT.601 math:
-    //   R = Y + (359*V >> 8)
-    //   G = Y - (88*U + 183*V >> 8)
-    //   B = Y + (454*U >> 8)
-    for chroma_row in 0..chroma_h {
-        // Pre-compute chroma contributions for this row of chroma samples
-        let chroma_row_offset = chroma_row * chroma_w;
-        let mut cr_r = vec![0i32; chroma_w];
-        let mut cr_g = vec![0i32; chroma_w];
-        let mut cr_b = vec![0i32; chroma_w];
-
-        for cx in 0..chroma_w {
-            let u = u_plane[chroma_row_offset + cx] as i32 - 128;
-            let v = v_plane[chroma_row_offset + cx] as i32 - 128;
-            cr_r[cx] = (359 * v) >> 8;
-            cr_g[cx] = (88 * u + 183 * v) >> 8;
-            cr_b[cx] = (454 * u) >> 8;
-        }
-
-        // Apply to the (up to) 2 luma rows that share this chroma row
-        let luma_row_start = chroma_row * 2;
-        let luma_row_end = (luma_row_start + 2).min(h);
-
-        for row in luma_row_start..luma_row_end {
-            let y_row_offset = row * w;
-            let rgb_row_offset = y_row_offset * 3;
-
-            for col in 0..w {
-                let y_val = y_plane[y_row_offset + col] as i32;
-                let cx = col / 2;
-
-                let r = (y_val + cr_r[cx]).clamp(0, 255) as u8;
-                let g = (y_val - cr_g[cx]).clamp(0, 255) as u8;
-                let b = (y_val + cr_b[cx]).clamp(0, 255) as u8;
-
-                let offset = rgb_row_offset + col * 3;
-                rgb[offset] = r;
-                rgb[offset + 1] = g;
-                rgb[offset + 2] = b;
-            }
-        }
-    }
-
-    Ok(rgb)
+    let rgb_frame = crate::video::convert::yuv420p_to_rgb24(frame)?;
+    Ok(rgb_frame.data.to_vec())
 }
 
 /// Content-based frame scoring using saliency heuristics.
@@ -447,20 +378,7 @@ mod tests {
         }
     }
 
-    fn make_solid_yuv_frame(width: u32, height: u32, y_val: u8) -> VideoFrame {
-        let y_size = (width * height) as usize;
-        let chroma_w = width.div_ceil(2) as usize;
-        let chroma_h = height.div_ceil(2) as usize;
-        let mut data = vec![y_val; y_size];
-        data.resize(y_size + 2 * chroma_w * chroma_h, 128);
-        VideoFrame {
-            data: Bytes::from(data),
-            pixel_format: PixelFormat::Yuv420p,
-            width,
-            height,
-            timestamp: Duration::ZERO,
-        }
-    }
+    use crate::video::test_utils::helpers::make_solid_yuv_frame;
 
     #[test]
     fn solid_frame_low_variance() {

@@ -37,7 +37,6 @@ use cros_libva::{
     VAEntrypoint,
     VAProfile,
 };
-use std::path::Path;
 use std::rc::Rc;
 
 /// VA-API encoder configuration
@@ -78,6 +77,8 @@ fn codec_to_va_profile(codec: VideoCodec) -> Result<VAProfile::Type> {
     }
 }
 
+use super::vaapi_common::{open_display, va_err};
+
 /// Find the best encode entrypoint for a profile on a display.
 fn find_encode_entrypoint(
     display: &Display,
@@ -95,25 +96,6 @@ fn find_encode_entrypoint(
     } else {
         Err(TarangError::HwAccelError(
             format!("no encode entrypoint for VA profile {profile}").into(),
-        ))
-    }
-}
-
-/// Open a VA-API display, trying the given device or auto-discovering render nodes.
-fn open_display(device: &Option<String>) -> Result<Rc<Display>> {
-    if let Some(path) = device {
-        Display::open_drm_display(Path::new(path))
-            .map_err(|e| TarangError::HwAccelError(format!("failed to open {path}: {e:?}").into()))
-    } else {
-        // Try render nodes 128..136
-        for i in 128..136 {
-            let path = format!("/dev/dri/renderD{i}");
-            if let Ok(display) = Display::open_drm_display(Path::new(&path)) {
-                return Ok(display);
-            }
-        }
-        Err(TarangError::HwAccelError(
-            "no VA-API render node found".into(),
         ))
     }
 }
@@ -161,8 +143,6 @@ pub struct VaapiEncoder {
     display: Rc<Display>,
     _config: Config,
     context: Rc<cros_libva::Context>,
-    _profile: VAProfile::Type,
-    _entrypoint: VAEntrypoint::Type,
     codec: VideoCodec,
     width: u32,
     height: u32,
@@ -262,8 +242,6 @@ impl VaapiEncoder {
             display,
             _config: va_config,
             context,
-            _profile: profile,
-            _entrypoint: entrypoint,
             codec: config.codec,
             width: config.width,
             height: config.height,

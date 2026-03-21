@@ -11,6 +11,8 @@
 
 pub mod convert;
 pub mod scale;
+#[cfg(test)]
+pub(crate) mod test_utils;
 
 #[cfg(feature = "dav1d")]
 pub mod dav1d_dec;
@@ -20,6 +22,8 @@ pub mod openh264_dec;
 pub mod openh264_enc;
 #[cfg(feature = "rav1e")]
 pub mod rav1e_enc;
+#[cfg(feature = "vaapi")]
+mod vaapi_common;
 #[cfg(feature = "vaapi")]
 pub mod vaapi_dec;
 #[cfg(feature = "vaapi")]

@@ -2,10 +2,11 @@
 //!
 //! Centralizes YUV420p, NV12, and RGB24 conversions using BT.601 coefficients.
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use tarang::video::convert::convert_pixel_format;
 //! use tarang::core::PixelFormat;
 //!
+//! # let yuv_frame = todo!();
 //! let rgb_frame = convert_pixel_format(&yuv_frame, PixelFormat::Rgb24).unwrap();
 //! ```
 
@@ -345,39 +346,8 @@ pub fn convert_pixel_format(frame: &VideoFrame, target: PixelFormat) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::test_utils::helpers::{make_solid_rgb_frame, make_solid_yuv_frame};
     use std::time::Duration;
-
-    fn make_solid_yuv_frame(width: u32, height: u32, y_val: u8) -> VideoFrame {
-        let y_size = (width * height) as usize;
-        let chroma_w = width.div_ceil(2) as usize;
-        let chroma_h = height.div_ceil(2) as usize;
-        let mut data = vec![y_val; y_size];
-        data.resize(y_size + 2 * chroma_w * chroma_h, 128);
-        VideoFrame {
-            data: Bytes::from(data),
-            pixel_format: PixelFormat::Yuv420p,
-            width,
-            height,
-            timestamp: Duration::ZERO,
-        }
-    }
-
-    fn make_solid_rgb_frame(width: u32, height: u32, r: u8, g: u8, b: u8) -> VideoFrame {
-        let size = (width * height * 3) as usize;
-        let mut data = Vec::with_capacity(size);
-        for _ in 0..(width * height) {
-            data.push(r);
-            data.push(g);
-            data.push(b);
-        }
-        VideoFrame {
-            data: Bytes::from(data),
-            pixel_format: PixelFormat::Rgb24,
-            width,
-            height,
-            timestamp: Duration::ZERO,
-        }
-    }
 
     #[test]
     fn yuv420p_to_rgb24_neutral_gray() {
