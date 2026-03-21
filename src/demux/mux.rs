@@ -2469,7 +2469,7 @@ mod tests {
 
         // Write 10 video frames
         for i in 0..10 {
-            mux.write_video_packet(&vec![0x00, 0x00, 0x00, 0x01, 0x65, i])
+            mux.write_video_packet(&[0x00, 0x00, 0x00, 0x01, 0x65, i])
                 .unwrap();
         }
 
@@ -2560,10 +2560,10 @@ mod tests {
         mux.write_header().unwrap();
 
         // Write in alternating order: A(100), V(200), A(150), V(250)
-        mux.write_packet(&vec![0xAA; 100]).unwrap();
-        mux.write_video_packet(&vec![0xBB; 200]).unwrap();
-        mux.write_packet(&vec![0xAA; 150]).unwrap();
-        mux.write_video_packet(&vec![0xBB; 250]).unwrap();
+        mux.write_packet(&[0xAA; 100]).unwrap();
+        mux.write_video_packet(&[0xBB; 200]).unwrap();
+        mux.write_packet(&[0xAA; 150]).unwrap();
+        mux.write_video_packet(&[0xBB; 250]).unwrap();
 
         // Verify internal offset tracking
         assert_eq!(mux.sample_sizes.len(), 2);
