@@ -18,7 +18,7 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ai-hwaccel]]
-version = "0.20.3"
+version = "0.21.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.aligned]]

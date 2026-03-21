@@ -32,7 +32,7 @@ Pre-v1.0 hardening: performance optimizations, cross-platform support, API clean
 
 ### Dependency updates
 
-- **ai-hwaccel** bumped from 0.19 to 0.20.3
+- **ai-hwaccel** bumped from 0.19 to 0.21.3
 - **cpal** 0.15 added (optional, behind `cpal-output` feature)
 
 ### Refactoring
