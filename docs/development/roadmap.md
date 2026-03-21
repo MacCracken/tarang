@@ -12,6 +12,12 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
+## 0.22.3
+
+- [ ] **Review ai-hwaccel feature set** — audit ai-hwaccel 0.21.3 API surface for new capabilities (NPU detection, workload planning); update hwaccel.rs integration if needed
+
+---
+
 ## v1.0.0 criteria
 
 All of the following must be true before cutting 1.0:
