@@ -1105,6 +1105,15 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                         )
                     })?;
                     let sample_count = u32::from_be_bytes(sc);
+                    if sample_count > Self::MAX_TABLE_ENTRIES {
+                        return Err(TarangError::DemuxError(
+                            format!(
+                                "trun sample count {sample_count} exceeds maximum ({})",
+                                Self::MAX_TABLE_ENTRIES
+                            )
+                            .into(),
+                        ));
+                    }
                     if flags & 0x01 != 0 {
                         let mut doff = [0u8; 4];
                         self.reader.read_exact(&mut doff).map_err(|e| {
