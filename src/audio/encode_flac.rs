@@ -5,6 +5,18 @@
 //! Rice-coded residuals. Automatically selects whichever method produces
 //! the smallest output. Produces valid FLAC frames with proper CRC-8
 //! and CRC-16 checksums suitable for writing into FLAC or OGG containers.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::encode_flac::FlacEncoder;
+//! use tarang::audio::encode::{AudioEncoder, EncoderConfig};
+//! use tarang::core::AudioCodec;
+//!
+//! let config = EncoderConfig::builder(AudioCodec::Flac)
+//!     .sample_rate(44100).channels(2).bits_per_sample(16).build();
+//! let mut enc = FlacEncoder::new(&config).unwrap();
+//! // let packets = enc.encode(&audio_buf).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 

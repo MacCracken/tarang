@@ -2,6 +2,19 @@
 //!
 //! Parses OGG bitstream pages and extracts codec packets.
 //! Identifies Vorbis, Opus, and FLAC streams from their identification headers.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::demux::{Demuxer, ogg::OggDemuxer};
+//!
+//! let file = std::fs::File::open("input.ogg").unwrap();
+//! let mut demuxer = OggDemuxer::new(file);
+//! let info = demuxer.probe().unwrap();
+//! while let Ok(Some(pkt)) = demuxer.read_packet() {
+//!     // process packet
+//! }
+//! ```
 
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,

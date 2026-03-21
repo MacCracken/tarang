@@ -3,6 +3,19 @@
 //! Parses ISO Base Media File Format (ISOBMFF) boxes to extract audio stream
 //! metadata and produce raw codec packets. Supports AAC, ALAC, FLAC, Opus, and MP3
 //! audio tracks.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::demux::{Demuxer, mp4::Mp4Demuxer};
+//!
+//! let file = std::fs::File::open("input.mp4").unwrap();
+//! let mut demuxer = Mp4Demuxer::new(file);
+//! let info = demuxer.probe().unwrap();
+//! while let Ok(Some(pkt)) = demuxer.read_packet() {
+//!     // process packet
+//! }
+//! ```
 
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,

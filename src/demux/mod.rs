@@ -2,6 +2,18 @@
 //!
 //! Pure Rust container parsers for MP4, MKV/WebM, OGG, WAV, and FLAC.
 //! Extracts stream metadata and produces raw codec packets for downstream decoders.
+//!
+//! ```rust,ignore
+//! use tarang::demux::{Demuxer, WavDemuxer};
+//!
+//! let file = std::fs::File::open("audio.wav").unwrap();
+//! let mut demuxer = WavDemuxer::new(file).unwrap();
+//! let info = demuxer.media_info();
+//! println!("duration: {:?}", info.duration);
+//! while let Ok(Some(packet)) = demuxer.next_packet() {
+//!     // process packet.data...
+//! }
+//! ```
 
 pub mod ebml;
 mod mkv;

@@ -2,6 +2,18 @@
 //!
 //! Wraps the `opus` crate to encode F32 audio into Opus packets.
 //! Requires the `opus-enc` feature and libopus system library.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::encode_opus::OpusEncoder;
+//! use tarang::audio::encode::{AudioEncoder, EncoderConfig};
+//! use tarang::core::AudioCodec;
+//!
+//! let config = EncoderConfig::builder(AudioCodec::Opus)
+//!     .sample_rate(48000).channels(2).build();
+//! let mut enc = OpusEncoder::new(&config).unwrap();
+//! // let packets = enc.encode(&audio_buf).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 

@@ -2,6 +2,16 @@
 //!
 //! `AudioOutput` trait abstracts over output sinks. The PipeWire backend
 //! is available behind the `pipewire` feature flag.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::output::{NullOutput, OutputConfig, AudioOutput};
+//!
+//! let mut out = NullOutput::new();
+//! out.open(&OutputConfig::default()).unwrap();
+//! // out.write(&audio_buf).unwrap();
+//! out.close().unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, Result, TarangError};
 

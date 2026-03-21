@@ -2,6 +2,17 @@
 //!
 //! `FileDecoder` wraps symphonia's format reader + codec decoder to produce
 //! interleaved F32 `AudioBuffer`s from any supported audio file.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::decode::FileDecoder;
+//!
+//! let file = std::fs::File::open("song.flac").unwrap();
+//! let mut decoder = FileDecoder::open(Box::new(file), Some("flac")).unwrap();
+//! while let Some(buf) = decoder.next_buffer().unwrap() {
+//!     // process buf.data …
+//! }
+//! ```
 
 use crate::core::{AudioBuffer, AudioCodec, Result, SampleFormat, TarangError};
 use bytes::Bytes;

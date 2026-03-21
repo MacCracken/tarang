@@ -3,6 +3,16 @@
 //! Preprocesses audio for transcription (resample to 16kHz mono),
 //! encodes as in-memory WAV, and routes to a hoosh endpoint for
 //! Whisper-based speech-to-text.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::ai::transcribe::{HooshClient, HooshConfig};
+//!
+//! let client = HooshClient::new(HooshConfig::default()).unwrap();
+//! let result = client.transcribe(&audio_buf).await.unwrap();
+//! println!("{}", result.text);
+//! ```
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 use std::time::Duration;

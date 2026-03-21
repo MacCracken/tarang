@@ -2,6 +2,20 @@
 //!
 //! Media analysis, content classification, and transcription routing via hoosh.
 //! Connects to the AGNOS LLM gateway for AI-powered media understanding.
+//!
+//! ```rust,ignore
+//! use tarang::ai::fingerprint::{compute_fingerprint, FingerprintConfig};
+//! use tarang::ai::scene::{SceneDetector, SceneDetectionConfig};
+//!
+//! # let mono_samples: Vec<f32> = vec![];
+//! // Audio fingerprinting
+//! let fp = compute_fingerprint(&mono_samples, &FingerprintConfig::default());
+//!
+//! // Video scene detection
+//! let mut detector = SceneDetector::new(SceneDetectionConfig::default());
+//! // detector.feed(&frame);
+//! let scenes = detector.finalize();
+//! ```
 
 pub mod acoustid;
 pub mod audio_utils;

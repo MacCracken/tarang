@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.21.3
+
+Pre-v1.0 hardening: performance optimizations, cross-platform support, API cleanup, CI expansion.
+
+### Performance
+
+- **VA-API surface pooling** — pre-allocated surface pool with `take_surface()` reclaim in both encoder and decoder; eliminates per-frame GPU surface allocation
+- **Video convert chroma pre-allocation** — `cr_r`/`cr_g`/`cr_b` vectors hoisted outside per-row loop in `yuv420p_to_rgb24` (~1600 allocs/frame eliminated)
+- **`extract_mono_f32` fast path** — zero-copy `bytes_to_f32()` with stride for F32 mono sources (replaces per-byte assembly)
+- **Direct YUV scaling** — scales Y/U/V planes independently as grayscale images; skips YUV→RGB→scale→RGB→YUV roundtrip
+- **Effects chain in-place processing** — `AudioEffect::process` takes `AudioBuffer` by value; removes clone storm in `EffectChain`
+- **Fingerprint chroma allocation** — hoisted chroma Vec outside FFT loop with `fill(0.0)` reuse; `.cloned()` → `.copied()` for f64
+- **HighPassFilter output buffer** — reusable `out_buf` via `std::mem::take` avoids per-frame Vec allocation
+
+### Cross-platform
+
+- **`portable` feature flag** — all codecs except platform-specific hw accel (vaapi, pipewire excluded)
+- **`cpal` audio output** — cross-platform playback (CoreAudio, WASAPI, ALSA) via `cpal` crate behind `cpal-output` feature; ring buffer with 5s timeout safety
+- **macOS CI** — Homebrew codec deps (dav1d, libvpx, opus, fdk-aac); tests with `portable` features
+- **macOS release builds** — Homebrew FFI codecs in release workflow with `--features portable`
+- **Windows CI** — vendored codecs (openh264, rav1e, hwaccel) on windows-latest
+- **Linux arm64 release** — vendored-only codecs for cross-compilation (no x86_64 FFI libs)
+
+### API changes
+
+- **Rename `AudioDecoder` → `AudioCodecInfo`** — vestigial type that was never a decoder
+- **`Muxer` trait: `write_video_packet()`** — new default method returns error for audio-only muxers
+- **`AudioEffect::process` signature** — changed from `&AudioBuffer` to `AudioBuffer` (by value)
+- **NV12 conversion paths** — added `nv12_to_yuv420p()` and `nv12_to_rgb24()` to `video::convert`; `convert_pixel_format` dispatcher updated
+
+### Dependency updates
+
+- **ai-hwaccel** bumped from 0.19 to 0.20.3
+- **cpal** 0.15 added (optional, behind `cpal-output` feature)
+
+### Refactoring
+
+- **Shared VA-API helpers** — `vaapi_common.rs` with `open_display()` and `va_err()`, deduplicated from encoder/decoder
+- **Deduplicated thumbnail YUV→RGB** — 75-line duplicate replaced with delegation to `video::convert::yuv420p_to_rgb24`
+- **Shared test utils** — `video::test_utils` consolidates `make_solid_yuv_frame`/`make_solid_rgb_frame` from 3 modules
+- **Dead code removed** — `Gain::_db`, `Compressor::_threshold_db`, `VaapiEncoder::_profile`/`_entrypoint`
+- **Effects F32 guard** — `require_f32()` validation on all built-in effects (Gain, HighPassFilter, Compressor)
+
+### CI & supply chain
+
+- **Downstream consumer verification** — CI job builds Jalwa/Tazama/Shruti against current tarang
+- **Linux test: portable features** — `cargo test --features portable` added to test matrix
+- **cargo-vet refreshed** — 374 exempted, 74 fully audited for new deps (cpal, ai-hwaccel 0.20.3)
+
+### Documentation
+
+- **Feature table updated** — crate-level docs now list `portable`, `cpal-output`, `h265-decode`, `aac-dec`
+- **Doc examples improved** — `rust,ignore` → `rust,no_run` with proper placeholder bindings in convert.rs, scale.rs
+- **Scale module docs** — updated to reflect direct plane scaling (no longer mentions RGB roundtrip)
+
+### Bug fixes
+
+- **`yuv420p_to_nv12` odd-height fix** — uses `div_ceil(2)` for chroma dimensions (was truncating)
+- **`yuv420p_to_nv12` bounds check** — added missing input data size validation (prevented panic)
+- **Encoder macroblock count** — uses `div_ceil(16)` instead of truncating division for non-16-aligned dimensions
+- **CI downstream job** — fixed invalid `hashFiles(format(...))` syntax with shell-based existence check
+- **Ring buffer zero-capacity safety** — early-return guards in `push()`/`pop()` prevent modulo-by-zero
+
 ## 0.20.3
 
 ai-hwaccel integration, hardware-aware codec selection, P1 fixes, pre-v1.0 hardening.

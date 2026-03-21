@@ -3,6 +3,17 @@
 //! Chromaprint-style audio fingerprinting: decode audio to mono,
 //! compute spectrograms via FFT, extract chroma features, and
 //! hash into compact fingerprints for content identification.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use tarang::ai::fingerprint::{compute_fingerprint, FingerprintConfig};
+//!
+//! let audio_buf = /* AudioBuffer from decoding */ panic!();
+//! let config = FingerprintConfig::default();
+//! let fp = compute_fingerprint(&audio_buf, &config).unwrap();
+//! println!("fingerprint: {} hashes, {:.1}s", fp.hashes.len(), fp.duration_secs);
+//! ```
 
 use crate::core::{AudioBuffer, Result};
 use rustfft::FftPlanner;

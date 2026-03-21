@@ -1,4 +1,13 @@
 //! Audio file probing via symphonia
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::probe::probe_audio;
+//!
+//! let file = std::fs::File::open("song.flac").unwrap();
+//! let info = probe_audio(file).unwrap();
+//! println!("streams: {:?}", info.streams);
+//! ```
 
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,

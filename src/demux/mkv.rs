@@ -2,6 +2,19 @@
 //!
 //! Parses EBML-encoded Matroska containers to extract audio and video stream
 //! metadata and produce raw codec packets from Clusters.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::demux::{Demuxer, mkv::MkvDemuxer};
+//!
+//! let file = std::fs::File::open("input.mkv").unwrap();
+//! let mut demuxer = MkvDemuxer::new(file);
+//! let info = demuxer.probe().unwrap();
+//! while let Ok(Some(pkt)) = demuxer.read_packet() {
+//!     // process packet
+//! }
+//! ```
 
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, PixelFormat, Result, SampleFormat,

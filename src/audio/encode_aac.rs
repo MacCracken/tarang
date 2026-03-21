@@ -8,6 +8,18 @@
 //! `fdk-aac-devel` (Fedora), or `fdk-aac` (Arch) before enabling this
 //! feature. If linking fdk-aac is not possible, use Opus (`opus-enc`)
 //! or FLAC encoding as alternatives — both are pure Rust.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::encode_aac::AacEncoder;
+//! use tarang::audio::encode::{AudioEncoder, EncoderConfig};
+//! use tarang::core::AudioCodec;
+//!
+//! let config = EncoderConfig::builder(AudioCodec::Aac)
+//!     .sample_rate(44100).channels(2).build();
+//! let mut enc = AacEncoder::new(&config).unwrap();
+//! // let packets = enc.encode(&audio_buf).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 

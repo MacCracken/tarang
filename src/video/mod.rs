@@ -8,6 +8,17 @@
 //! Each codec is behind a feature flag. The Rust layer owns the pipeline,
 //! memory management, and error handling. C codecs are called through safe
 //! FFI boundaries.
+//!
+//! ```rust,no_run
+//! use tarang::video::{convert_pixel_format, scale::{scale_frame, ScaleFilter}};
+//! use tarang::core::PixelFormat;
+//!
+//! # let frame = todo!();
+//! // Convert YUV420p to RGB24 for display
+//! let rgb = convert_pixel_format(&frame, PixelFormat::Rgb24).unwrap();
+//! // Scale to 720p
+//! let thumb = scale_frame(&rgb, 1280, 720, ScaleFilter::Bilinear).unwrap();
+//! ```
 
 pub mod convert;
 pub mod scale;

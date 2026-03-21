@@ -2,6 +2,16 @@
 //!
 //! Safe wrapper around rav1e for AV1 encoding.
 //! Requires the `rav1e` feature.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::rav1e_enc::{Rav1eEncoder, Rav1eConfig};
+//!
+//! let config = Rav1eConfig { width: 1280, height: 720, ..Default::default() };
+//! let mut encoder = Rav1eEncoder::new(&config).unwrap();
+//! let packets = encoder.encode(&yuv_frame).unwrap();
+//! ```
 
 use crate::core::{Result, TarangError, VideoFrame};
 

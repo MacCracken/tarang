@@ -1,22 +1,18 @@
-// VA-API hardware-accelerated decoding
-//
-// Provides GPU-accelerated video decoding via VA-API. Currently supports
-// H.264 decode by passing NAL units through the VA-API pipeline.
-//
-// The VA-API decode pipeline requires codec-specific parameter buffers
-// (PictureParameter, SliceParameter, IQMatrix) constructed from parsed
-// bitstream headers. For H.264, this means parsing SPS/PPS/slice headers
-// from Annex B NAL units.
-//
-// Current status: infrastructure (display, config, context, surfaces) is
-// complete. Actual decode submits compressed data as SliceData and relies
-// on the VA-API driver's long-slice mode for parameter construction.
-
 //! VA-API hardware-accelerated video decoding.
 //!
 //! Requires the `vaapi` feature and a GPU with VA-API decode support.
 //! Use [`VaapiDecoder::new`] to create a decoder for a given codec,
 //! then feed compressed packets via [`decode`](VaapiDecoder::decode).
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::vaapi_dec::VaapiDecoder;
+//! use tarang::core::VideoCodec;
+//!
+//! let mut decoder = VaapiDecoder::new(VideoCodec::H264, 1920, 1080, None).unwrap();
+//! let frame = decoder.decode(&h264_packet, timestamp).unwrap();
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoCodec, VideoFrame};
 use bytes::Bytes;

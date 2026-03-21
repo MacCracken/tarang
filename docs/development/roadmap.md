@@ -8,34 +8,6 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## 0.21.3 — Pre-v1.0 hardening
 
-### P1 — Should-fix (quality)
-
-- [x] **VA-API surface pooling** — reuse pre-allocated surfaces instead of per-frame GPU allocation (encode + decode)
-- [x] **Video convert chroma pre-allocation** — hoist `cr_r`/`cr_g`/`cr_b` Vecs out of per-row loop (~1600 allocs/frame eliminated)
-- [x] **`extract_mono_f32` fast path** — use `bytes_to_f32()` + stride for F32 mono instead of per-byte assembly
-- [x] **Direct YUV scaling** — scale Y/U/V planes independently, skip YUV→RGB→scale→RGB→YUV roundtrip
-- [x] **Effects chain in-place processing** — `AudioEffect::process` takes `AudioBuffer` by value, remove clone storm
-- [x] **`Muxer` trait video support** — add `write_video_packet()` to trait with default error impl
-- [x] **NV12 conversion paths** — add NV12→YUV420p and NV12→RGB24 to `video::convert`
-
-### Cross-platform (Phases 1-3 for v1.0)
-
-- [x] **`portable` feature flag** — all codecs except platform-specific hw accel (vaapi, pipewire excluded)
-- [x] **macOS CI with Homebrew codecs** — install dav1d, libvpx, opus, fdk-aac; test with `portable` features
-- [x] **macOS release builds with FFI codecs** — Homebrew deps in release workflow
-- [x] **`cpal` audio output** — cross-platform audio playback (CoreAudio, WASAPI, ALSA) via `cpal` crate
-- [x] **Windows CI with vendored codecs** — openh264, rav1e, hwaccel; test on windows-latest
-
-### P2 — Polish
-
-- [x] **Rename `AudioDecoder` → `AudioCodecInfo`** — vestigial type that isn't a decoder
-- [x] **Verify downstream consumers** — CI job that builds Jalwa/Tazama/Shruti against current tarang
-- [x] **Refresh `cargo-vet` trust entries** — audit for new deps since last review
-- [ ] **Remove `cros-libva` patch** — cros-libva still at 0.0.13 on crates.io, patch stays
-
-### Release
-
-- [x] **Update ai-hwaccel to 0.20.3** — bump dependency version when released
 - [ ] **Publish 0.21.3 to crates.io** — `cargo publish --dry-run`, tag, push
 
 ---
@@ -53,6 +25,7 @@ All of the following must be true before cutting 1.0:
 - [ ] docs.rs documentation complete with examples for every public module
 - [ ] No `unsafe` blocks without `// SAFETY:` comments
 - [ ] `cargo-vet` fully audited (zero exemptions for direct dependencies)
+- [ ] `cros-libva` patch removed (waiting for upstream > 0.0.13 release)
 - [ ] SemVer compliance enforced via `cargo-semver-checks` in CI
 
 ---

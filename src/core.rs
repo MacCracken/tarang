@@ -2,6 +2,24 @@
 //!
 //! Defines codecs, container formats, media buffers, stream metadata,
 //! and pipeline primitives used across all Tarang crates.
+//!
+//! ```rust
+//! use tarang::core::{AudioCodec, SampleFormat, AudioBuffer};
+//! use bytes::Bytes;
+//! use std::time::Duration;
+//!
+//! // Construct an audio buffer with 1024 silent stereo frames
+//! let data = vec![0u8; 1024 * 2 * 4]; // 1024 frames × 2 channels × 4 bytes (F32)
+//! let buf = AudioBuffer {
+//!     data: Bytes::from(data),
+//!     sample_format: SampleFormat::F32,
+//!     channels: 2,
+//!     sample_rate: 44100,
+//!     num_frames: 1024,
+//!     timestamp: Duration::ZERO,
+//! };
+//! assert_eq!(buf.channels, 2);
+//! ```
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};

@@ -6,6 +6,17 @@
 //!
 //! VDPAU is not supported — Mesa removed VDPAU from all open-source
 //! drivers; VA-API is the standard for Linux hardware video acceleration.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::vaapi_probe::probe_vaapi;
+//!
+//! if let Some(report) = probe_vaapi() {
+//!     println!("VA-API driver: {}", report.driver_name);
+//!     println!("Can decode H.264: {}", report.can_decode(tarang::core::VideoCodec::H264));
+//! }
+//! ```
 
 use crate::core::VideoCodec;
 use cros_libva::{Display, VAEntrypoint, VAProfile};

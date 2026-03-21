@@ -2,6 +2,16 @@
 //!
 //! Safe Rust wrapper around libvpx for VP8 and VP9 encoding.
 //! Requires the `vpx-enc` feature and libvpx system library.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::vpx_enc::{VpxEncoder, VpxEncoderConfig};
+//!
+//! let config = VpxEncoderConfig { width: 1280, height: 720, ..Default::default() };
+//! let mut encoder = VpxEncoder::new(&config).unwrap();
+//! let packets = encoder.encode(&yuv_frame).unwrap();
+//! ```
 
 use crate::core::{Result, TarangError, VideoCodec, VideoFrame};
 

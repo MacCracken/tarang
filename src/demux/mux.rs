@@ -2,6 +2,20 @@
 //!
 //! Provides muxers that write encoded audio packets into container files.
 //! Currently supports WAV and OGG containers.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::demux::mux::{WavMuxer, MuxConfig, Muxer};
+//! use tarang::core::AudioCodec;
+//!
+//! let file = std::fs::File::create("output.wav").unwrap();
+//! let config = MuxConfig { codec: AudioCodec::Pcm, sample_rate: 44100, channels: 2, bits_per_sample: 16 };
+//! let mut muxer = WavMuxer::new(file, config);
+//! muxer.write_header().unwrap();
+//! muxer.write_packet(&[0u8; 4096]).unwrap();
+//! muxer.finalize().unwrap();
+//! ```
 
 use crate::core::{AudioCodec, Result, TarangError};
 use std::io::{Seek, Write};

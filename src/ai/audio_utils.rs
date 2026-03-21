@@ -3,6 +3,15 @@
 //! Common routines for extracting mono F32 samples from AudioBuffers
 //! and converting between sample formats. Used by both fingerprinting
 //! and transcription.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use tarang::ai::audio_utils::extract_mono_f32;
+//!
+//! let audio_buf = /* AudioBuffer from decoding */ panic!();
+//! let mono_samples: Vec<f32> = extract_mono_f32(&audio_buf).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 

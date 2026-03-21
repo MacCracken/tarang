@@ -5,6 +5,18 @@
 //! - RAG: media metadata ingestion for natural-language queries
 //! - Multimodal agent registration: Audio + Vision modalities
 //! - LLM content description: route thumbnails/metadata to hoosh for richer analysis
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use tarang::ai::daimon::DaimonConfig;
+//!
+//! let config = DaimonConfig {
+//!     endpoint: "http://localhost:8090".into(),
+//!     api_key: None,
+//!     timeout_secs: 30,
+//! };
+//! ```
 
 use crate::core::{MediaInfo, Result, TarangError};
 use serde::{Deserialize, Serialize};

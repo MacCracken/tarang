@@ -2,6 +2,18 @@
 //!
 //! Safe Rust wrapper around the dav1d AV1 decoder.
 //! Requires the `dav1d` feature and libdav1d system library.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::dav1d_dec::Dav1dDecoder;
+//!
+//! let mut decoder = Dav1dDecoder::new().unwrap();
+//! decoder.send_data(&encoded_av1_packet, timestamp_ns).unwrap();
+//! if let Some(frame) = decoder.get_frame().unwrap() {
+//!     // process decoded VideoFrame
+//! }
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;

@@ -2,6 +2,16 @@
 //!
 //! Safe Rust wrapper around openh264 for H.264 decoding.
 //! Requires the `openh264` feature.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::openh264_dec::OpenH264Decoder;
+//!
+//! let mut decoder = OpenH264Decoder::new().unwrap();
+//! let frame = decoder.decode(&h264_nal_unit, timestamp).unwrap();
+//! // frame is a VideoFrame with YUV420p data
+//! ```
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;

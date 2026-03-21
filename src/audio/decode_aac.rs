@@ -8,6 +8,16 @@
 //! **System dependency**: install `libfdk-aac-dev` (Debian/Ubuntu),
 //! `fdk-aac-devel` (Fedora), or `fdk-aac` (Arch) before enabling this
 //! feature.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::decode_aac::FdkAacDecoder;
+//! use std::time::Duration;
+//!
+//! let mut decoder = FdkAacDecoder::new_raw();
+//! // decoder.configure(&asc_bytes).unwrap();
+//! // let buf = decoder.decode(&aac_packet, Duration::ZERO).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 use bytes::Bytes;

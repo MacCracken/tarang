@@ -1,3 +1,7 @@
+//! MCP (Model Context Protocol) server for tarang.
+//!
+//! Exposes tarang's media analysis capabilities as MCP tools over JSON-RPC stdio.
+
 pub mod tools;
 
 pub use tools::{handle_async_tool_call, handle_tool_call};

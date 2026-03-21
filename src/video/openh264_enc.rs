@@ -2,6 +2,16 @@
 //!
 //! Safe Rust wrapper around openh264 for H.264 encoding.
 //! Requires the `openh264-enc` feature.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
+//!
+//! let config = OpenH264EncoderConfig { width: 1280, height: 720, ..Default::default() };
+//! let mut encoder = OpenH264Encoder::new(&config).unwrap();
+//! let encoded = encoder.encode(&yuv_frame).unwrap();
+//! ```
 
 use crate::core::{Result, TarangError, VideoFrame};
 use openh264::Timestamp;

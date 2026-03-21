@@ -2,6 +2,17 @@
 //!
 //! Pure Rust audio decoding powered by symphonia.
 //! Supports MP3, FLAC, WAV, OGG Vorbis, AAC, ALAC, and PCM.
+//!
+//! ```rust,ignore
+//! use tarang::audio::{FileDecoder, resample};
+//!
+//! let file = std::fs::File::open("song.flac").unwrap();
+//! let mut decoder = FileDecoder::open(file).unwrap();
+//! while let Ok(buf) = decoder.next_buffer() {
+//!     let buf_48k = resample(&buf, 48000).unwrap();
+//!     // process buf_48k...
+//! }
+//! ```
 
 mod decode;
 #[cfg(feature = "aac-dec")]

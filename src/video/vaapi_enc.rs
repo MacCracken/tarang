@@ -7,6 +7,16 @@
 //! The VA-API driver handles the actual codec bitstream generation (SPS/PPS,
 //! slice headers, rate control) — we manage surfaces, buffers, and the
 //! encode→sync→readback lifecycle.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::video::vaapi_enc::{VaapiEncoder, VaapiEncoderConfig};
+//!
+//! let config = VaapiEncoderConfig { width: 1920, height: 1080, ..Default::default() };
+//! let mut encoder = VaapiEncoder::new(&config).unwrap();
+//! let encoded = encoder.encode(&yuv_frame).unwrap();
+//! ```
 
 use crate::core::{Result, TarangError, VideoCodec, VideoFrame};
 use cros_libva::{

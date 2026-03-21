@@ -2,6 +2,19 @@
 //!
 //! Encoders take F32 interleaved audio and produce encoded packets suitable
 //! for writing into container muxers.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::encode::{EncoderConfig, create_encoder};
+//! use tarang::core::AudioCodec;
+//!
+//! let config = EncoderConfig::builder(AudioCodec::Flac)
+//!     .sample_rate(44100)
+//!     .channels(2)
+//!     .build();
+//! let mut encoder = create_encoder(&config).unwrap();
+//! // encoder.encode(&audio_buffer).unwrap();
+//! ```
 
 use crate::core::{AudioBuffer, AudioCodec, Result, TarangError};
 

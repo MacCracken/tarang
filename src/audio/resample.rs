@@ -2,6 +2,15 @@
 //!
 //! Converts audio between sample rates using windowed sinc interpolation.
 //! Operates on interleaved F32 buffers.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::resample::resample;
+//!
+//! # let audio_buf = todo!();
+//! let resampled = resample(&audio_buf, 48000).unwrap();
+//! assert_eq!(resampled.sample_rate, 48000);
+//! ```
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 

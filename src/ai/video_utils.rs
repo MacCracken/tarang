@@ -2,6 +2,15 @@
 //!
 //! Provides common luminance operations used by both scene detection
 //! and thumbnail generation.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use tarang::ai::video_utils::extract_luminance;
+//!
+//! let frame = /* VideoFrame from decoding */ panic!();
+//! let luma: Vec<u8> = extract_luminance(&frame);
+//! ```
 
 use crate::core::{PixelFormat, VideoFrame};
 

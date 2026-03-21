@@ -1,4 +1,17 @@
 //! WAV container demuxer (pure Rust)
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tarang::demux::{Demuxer, wav::WavDemuxer};
+//!
+//! let file = std::fs::File::open("input.wav").unwrap();
+//! let mut demuxer = WavDemuxer::new(file);
+//! let info = demuxer.probe().unwrap();
+//! while let Ok(Some(pkt)) = demuxer.read_packet() {
+//!     // process packet
+//! }
+//! ```
 
 use crate::core::{
     AudioCodec, AudioStreamInfo, ContainerFormat, MediaInfo, Result, SampleFormat, StreamInfo,

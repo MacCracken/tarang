@@ -1,6 +1,15 @@
 //! Channel mixing — stereo↔mono, 5.1 downmix
 //!
 //! Operates on interleaved F32 audio buffers.
+//!
+//! # Example
+//! ```rust,ignore
+//! use tarang::audio::mix::{mix_channels, ChannelLayout};
+//!
+//! # let stereo_buf = todo!();
+//! let mono = mix_channels(&stereo_buf, ChannelLayout::Mono).unwrap();
+//! assert_eq!(mono.channels, 1);
+//! ```
 
 use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 
