@@ -126,18 +126,20 @@ fn yuv420p_to_nv12(data: &[u8], width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
     let y_size = w * h;
-    let uv_size = w * (h / 2);
+    let chroma_w = w.div_ceil(2);
+    let chroma_h = h.div_ceil(2);
+    let chroma_count = chroma_w * chroma_h;
 
-    let mut nv12 = vec![0u8; y_size + uv_size];
+    let mut nv12 = vec![0u8; y_size + chroma_count * 2];
 
     // Copy Y plane as-is
     nv12[..y_size].copy_from_slice(&data[..y_size]);
 
     // Interleave U and V into NV12 UV plane
-    let u_plane = &data[y_size..y_size + y_size / 4];
-    let v_plane = &data[y_size + y_size / 4..];
+    let u_plane = &data[y_size..y_size + chroma_count];
+    let v_plane = &data[y_size + chroma_count..];
     let uv_dst = &mut nv12[y_size..];
-    for i in 0..y_size / 4 {
+    for i in 0..chroma_count {
         uv_dst[i * 2] = u_plane[i];
         uv_dst[i * 2 + 1] = v_plane[i];
     }

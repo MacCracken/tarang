@@ -229,16 +229,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libvpx-dev libdav1d-dev libva-dev libopus-dev libfdk-aac-dev nasm
+      - name: Check if downstream repo was cloned
+        id: check-repo
+        run: |
+          if [ -f "${{ matrix.repo }}/Cargo.toml" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Patch tarang dependency to local
-        if: hashFiles(format('{0}/Cargo.toml', matrix.repo)) != ''
+        if: steps.check-repo.outputs.exists == 'true'
         working-directory: ${{ matrix.repo }}
         run: |
           # Override tarang dependency to use local checkout
-          mkdir -p .cargo
           echo '[patch.crates-io]' >> Cargo.toml
           echo 'tarang = { path = "../tarang" }' >> Cargo.toml
       - name: Build downstream consumer
-        if: hashFiles(format('{0}/Cargo.toml', matrix.repo)) != ''
+        if: steps.check-repo.outputs.exists == 'true'
         working-directory: ${{ matrix.repo }}
         run: cargo check
 

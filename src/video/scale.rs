@@ -38,7 +38,7 @@ impl ScaleFilter {
 /// Scale a video frame to the given dimensions.
 ///
 /// For RGB24 frames, uses the `image` crate directly.
-/// For YUV420p frames, converts to RGB24, scales, then converts back.
+/// For YUV420p frames, scales Y/U/V planes independently as grayscale.
 /// Other pixel formats are not currently supported.
 pub fn scale_frame(
     frame: &VideoFrame,

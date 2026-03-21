@@ -222,6 +222,10 @@ pub fn yuv420p_to_nv12(frame: &VideoFrame) -> Result<VideoFrame> {
     let chroma_count = chroma_w * chroma_h;
     let uv_size = chroma_count * 2;
 
+    if frame.data.len() < y_size + 2 * chroma_count {
+        return Err(TarangError::ImageError("frame data too small".into()));
+    }
+
     let mut nv12 = vec![0u8; y_size + uv_size];
 
     // Copy Y plane as-is

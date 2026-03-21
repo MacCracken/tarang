@@ -34,6 +34,9 @@ impl RingBuffer {
     }
 
     fn push(&mut self, samples: &[f32]) -> usize {
+        if self.data.is_empty() {
+            return 0;
+        }
         let available = self.data.len() - self.len;
         let to_write = samples.len().min(available);
         for &s in &samples[..to_write] {
@@ -45,6 +48,12 @@ impl RingBuffer {
     }
 
     fn pop(&mut self, out: &mut [f32]) -> usize {
+        if self.data.is_empty() {
+            for sample in out.iter_mut() {
+                *sample = 0.0;
+            }
+            return 0;
+        }
         let to_read = out.len().min(self.len);
         for sample in &mut out[..to_read] {
             *sample = self.data[self.read_pos];
