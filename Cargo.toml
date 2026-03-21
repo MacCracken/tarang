@@ -14,6 +14,8 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 [features]
 default = []
 full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "aac-dec", "hwaccel"]
+# All codecs except platform-specific hw accel (vaapi, pipewire excluded)
+portable = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "opus-enc", "aac-enc", "aac-dec", "hwaccel"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]
@@ -27,6 +29,7 @@ h265-decode = ["dep:libde265-rs"]
 # Hardware detection
 hwaccel = ["dep:ai-hwaccel"]
 # Audio
+cpal-output = ["dep:cpal"]
 pipewire = ["dep:pipewire"]
 opus-enc = ["dep:opus"]
 aac-enc = ["dep:fdk-aac"]
@@ -60,7 +63,8 @@ symphonia = { version = "0.5", features = ["all"] }
 rustfft = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
-# Optional audio encoders
+# Optional audio encoders/output
+cpal = { version = "0.15", optional = true }
 pipewire = { version = "0.9", optional = true }
 opus = { version = "0.3", optional = true }
 fdk-aac = { version = "0.8", optional = true }
@@ -71,7 +75,7 @@ env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
 rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
 cros-libva = { version = "0.0.13", optional = true }
-ai-hwaccel = { version = "0.19", optional = true, default-features = false, features = ["vulkan"] }
+ai-hwaccel = { version = "0.20.3", optional = true, default-features = false, features = ["vulkan"] }
 # WARNING: libde265-rs is LGPL-3.0. Not included in `full` feature.
 # Enable `h265-decode` only if your project's license is GPL-compatible.
 # To remove: delete this dep, the feature, src/video/libde265_dec.rs, and

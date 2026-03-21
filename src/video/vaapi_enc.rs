@@ -159,7 +159,6 @@ pub struct VaapiEncoder {
     display: Rc<Display>,
     _config: Config,
     context: Rc<cros_libva::Context>,
-    _surfaces: Vec<Surface<()>>,
     _profile: VAProfile::Type,
     _entrypoint: VAEntrypoint::Type,
     codec: VideoCodec,
@@ -171,6 +170,8 @@ pub struct VaapiEncoder {
     frames_encoded: u64,
     /// Cached NV12 image format (queried once in constructor).
     nv12_fmt: cros_libva::VAImageFormat,
+    /// Pre-allocated surface pool for encode (avoids per-frame GPU allocation).
+    surface_pool: Vec<Surface<()>>,
 }
 
 /// Number of surfaces to rotate through for encoding.
@@ -241,6 +242,9 @@ impl VaapiEncoder {
                 TarangError::HwAccelError(format!("failed to create context: {e:?}").into())
             })?;
 
+        // Context holds surface IDs internally; pool surfaces for per-frame reuse
+        let surface_pool = surfaces;
+
         // Cache NV12 image format (avoid per-frame ioctl)
         let image_fmts = display.query_image_formats().map_err(|e| {
             TarangError::HwAccelError(format!("failed to query image formats: {e:?}").into())
@@ -256,7 +260,6 @@ impl VaapiEncoder {
             display,
             _config: va_config,
             context,
-            _surfaces: surfaces,
             _profile: profile,
             _entrypoint: entrypoint,
             codec: config.codec,
@@ -267,6 +270,7 @@ impl VaapiEncoder {
             frame_rate_den: config.frame_rate_den,
             frames_encoded: 0,
             nv12_fmt,
+            surface_pool,
         })
     }
 
@@ -305,8 +309,8 @@ impl VaapiEncoder {
 
         let w = self.width as usize;
         let h = self.height as usize;
-        let w_mbs = (self.width / 16) as u16;
-        let h_mbs = (self.height / 16) as u16;
+        let w_mbs = self.width.div_ceil(16) as u16;
+        let h_mbs = self.height.div_ceil(16) as u16;
         let time_scale = self.frame_rate_num * 2;
 
         // Build H.264 SPS (Sequence Parameter Set)
@@ -417,31 +421,29 @@ impl VaapiEncoder {
             TarangError::HwAccelError(format!("failed to create slice buffer: {e:?}").into())
         })?;
 
-        // Submit encode: begin → render → end → sync
-        // We need to take the surface out temporarily for the Picture typestate machine.
-        // Since we can't move out of the Vec, we swap with a dummy and swap back.
-        // Actually, Picture::new takes ownership. We need to restructure slightly.
-        // The cros-libva Picture takes a surface by value — but we want to reuse surfaces.
-        // The test in lib.rs pops the surface from the vec. Let's do the same pattern:
-        // we create fresh surfaces per encode call to keep things simple for now.
-
-        let mut enc_surfaces = self
-            .display
-            .create_surfaces(
-                cros_libva::VA_RT_FORMAT_YUV420,
-                None,
-                self.width,
-                self.height,
-                Some(UsageHint::USAGE_HINT_ENCODER),
-                vec![()],
-            )
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to create encode surface: {e:?}").into())
-            })?;
-
-        let enc_surface = enc_surfaces.pop().ok_or_else(|| {
-            TarangError::HwAccelError("VA-API returned no encode surfaces".into())
-        })?;
+        // Reuse a surface from the pool, or allocate a new one if empty
+        let enc_surface = if let Some(s) = self.surface_pool.pop() {
+            s
+        } else {
+            let mut enc_surfaces = self
+                .display
+                .create_surfaces(
+                    cros_libva::VA_RT_FORMAT_YUV420,
+                    None,
+                    self.width,
+                    self.height,
+                    Some(UsageHint::USAGE_HINT_ENCODER),
+                    vec![()],
+                )
+                .map_err(|e| {
+                    TarangError::HwAccelError(
+                        format!("failed to create encode surface: {e:?}").into(),
+                    )
+                })?;
+            enc_surfaces.pop().ok_or_else(|| {
+                TarangError::HwAccelError("VA-API returned no encode surfaces".into())
+            })?
+        };
 
         // Upload NV12 to the new surface
         let mut enc_image = Image::create_from(
@@ -513,9 +515,14 @@ impl VaapiEncoder {
         let picture = picture
             .end()
             .map_err(|e| TarangError::HwAccelError(format!("vaEndPicture failed: {e:?}").into()))?;
-        let _picture = picture.sync().map_err(|(e, _)| {
+        let picture = picture.sync().map_err(|(e, _)| {
             TarangError::HwAccelError(format!("vaSyncSurface failed: {e:?}").into())
         })?;
+
+        // Reclaim surface for reuse
+        if let Ok(surface) = picture.take_surface() {
+            self.surface_pool.push(surface);
+        }
 
         // Read back encoded bitstream
         let mapped = MappedCodedBuffer::new(&coded_buffer).map_err(|e| {

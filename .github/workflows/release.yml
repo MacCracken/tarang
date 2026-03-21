@@ -63,14 +63,25 @@ jobs:
           echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
 
-      # macOS — build with default features only (no VA-API, no PipeWire, no system FFI codecs)
-      # Windows — same: default features only
-      - name: Build release (Linux)
-        if: runner.os == 'Linux'
+      # macOS — install Homebrew FFI codec deps and build with portable features
+      - name: Install codec dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install dav1d libvpx opus fdk-aac nasm
+
+      - name: Build release (Linux amd64)
+        if: matrix.name == 'linux-amd64'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build release (macOS/Windows — default features)
-        if: runner.os != 'Linux'
+      - name: Build release (Linux arm64 — vendored codecs only)
+        if: matrix.name == 'linux-arm64'
+        run: cargo build --release --target ${{ matrix.target }} --features openh264,openh264-enc,rav1e,hwaccel
+
+      - name: Build release (macOS — portable features)
+        if: runner.os == 'macOS'
+        run: cargo build --release --target ${{ matrix.target }} --features portable
+
+      - name: Build release (Windows — default features)
+        if: runner.os == 'Windows'
         run: cargo build --release --target ${{ matrix.target }}
 
       # Package

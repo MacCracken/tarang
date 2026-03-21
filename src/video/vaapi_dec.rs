@@ -73,6 +73,8 @@ pub struct VaapiDecoder {
     frames_decoded: u64,
     /// Cached NV12 image format.
     nv12_fmt: cros_libva::VAImageFormat,
+    /// Pre-allocated surface pool for decode (avoids per-frame GPU allocation).
+    surface_pool: Vec<Surface<()>>,
 }
 
 impl VaapiDecoder {
@@ -138,6 +140,9 @@ impl VaapiDecoder {
                 TarangError::HwAccelError(format!("failed to create context: {e:?}").into())
             })?;
 
+        // Context holds surface IDs internally; pool surfaces for per-frame reuse
+        let surface_pool = surfaces;
+
         // Cache NV12 image format
         let image_fmts = display
             .query_image_formats()
@@ -156,6 +161,7 @@ impl VaapiDecoder {
             height,
             frames_decoded: 0,
             nv12_fmt,
+            surface_pool,
         })
     }
 
@@ -174,24 +180,29 @@ impl VaapiDecoder {
             return Ok(None);
         }
 
-        // Create a fresh surface for this frame
-        let mut surfaces = self
-            .display
-            .create_surfaces(
-                VA_RT_FORMAT_YUV420,
-                None,
-                self.width,
-                ((self.height + 15) / 16) * 16,
-                Some(UsageHint::USAGE_HINT_DECODER),
-                vec![()],
-            )
-            .map_err(|e| {
-                TarangError::HwAccelError(format!("failed to create decode surface: {e:?}").into())
-            })?;
-
-        let surface = surfaces.pop().ok_or_else(|| {
-            TarangError::HwAccelError("VA-API returned no decode surfaces".into())
-        })?;
+        // Reuse a surface from the pool, or allocate a new one if empty
+        let surface = if let Some(s) = self.surface_pool.pop() {
+            s
+        } else {
+            let mut surfaces = self
+                .display
+                .create_surfaces(
+                    VA_RT_FORMAT_YUV420,
+                    None,
+                    self.width,
+                    ((self.height + 15) / 16) * 16,
+                    Some(UsageHint::USAGE_HINT_DECODER),
+                    vec![()],
+                )
+                .map_err(|e| {
+                    TarangError::HwAccelError(
+                        format!("failed to create decode surface: {e:?}").into(),
+                    )
+                })?;
+            surfaces.pop().ok_or_else(|| {
+                TarangError::HwAccelError("VA-API returned no decode surfaces".into())
+            })?
+        };
 
         // Submit slice data
         let slice_data = BufferType::SliceData(data.to_vec());
@@ -227,7 +238,7 @@ impl VaapiDecoder {
             )
             .map_err(|e| TarangError::HwAccelError(format!("create image failed: {e:?}").into()))?;
 
-        // Convert NV12 to YUV420p
+        // Convert NV12 to YUV420p (read back before reclaiming surface)
         let va_image = *image.image();
         let src = image.as_ref();
         let w = self.width as usize;
@@ -257,6 +268,12 @@ impl VaapiDecoder {
         }
         yuv420p.extend_from_slice(&u_plane);
         yuv420p.extend_from_slice(&v_plane);
+
+        // Drop image to release borrow on picture, then reclaim surface for reuse
+        drop(image);
+        if let Ok(surface) = picture.take_surface() {
+            self.surface_pool.push(surface);
+        }
 
         self.frames_decoded += 1;
 

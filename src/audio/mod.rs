@@ -30,6 +30,8 @@ pub use encode_flac::FlacEncoder;
 #[cfg(feature = "opus-enc")]
 pub use encode_opus::OpusEncoder;
 pub use mix::{ChannelLayout, mix_channels};
+#[cfg(feature = "cpal-output")]
+pub use output::CpalOutput;
 #[cfg(feature = "pipewire")]
 pub use output::PipeWireOutput;
 pub use output::{AudioOutput, NullOutput, OutputConfig};
@@ -38,15 +40,15 @@ pub use resample::{resample, resample_sinc};
 
 use crate::core::{AudioCodec, AudioStreamInfo, Result, TarangError};
 
-/// Audio decoder metadata (lightweight, no symphonia state)
-pub struct AudioDecoder {
+/// Audio codec metadata (lightweight, no symphonia state)
+pub struct AudioCodecInfo {
     codec: AudioCodec,
     sample_rate: u32,
     channels: u16,
 }
 
-impl AudioDecoder {
-    /// Create a decoder for the given audio codec
+impl AudioCodecInfo {
+    /// Create codec info for the given audio codec
     pub fn new(codec: AudioCodec) -> Result<Self> {
         match codec {
             AudioCodec::Pcm
@@ -101,48 +103,48 @@ mod tests {
 
     #[test]
     fn create_mp3_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Mp3).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Mp3).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Mp3);
     }
 
     #[test]
     fn create_flac_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Flac).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Flac).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Flac);
     }
 
     #[test]
     fn create_vorbis_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Vorbis).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Vorbis).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Vorbis);
     }
 
     #[test]
     fn create_opus_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Opus).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Opus).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Opus);
     }
 
     #[test]
     fn create_aac_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Aac).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Aac).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Aac);
     }
 
     #[test]
     fn create_pcm_decoder() {
-        let decoder = AudioDecoder::new(AudioCodec::Pcm).unwrap();
+        let decoder = AudioCodecInfo::new(AudioCodec::Pcm).unwrap();
         assert_eq!(decoder.codec(), AudioCodec::Pcm);
     }
 
     #[test]
     fn unsupported_wma() {
-        assert!(AudioDecoder::new(AudioCodec::Wma).is_err());
+        assert!(AudioCodecInfo::new(AudioCodec::Wma).is_err());
     }
 
     #[test]
     fn decoder_init() {
-        let mut decoder = AudioDecoder::new(AudioCodec::Mp3).unwrap();
+        let mut decoder = AudioCodecInfo::new(AudioCodec::Mp3).unwrap();
         let info = AudioStreamInfo {
             codec: AudioCodec::Mp3,
             sample_rate: 48000,

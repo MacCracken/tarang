@@ -1,7 +1,8 @@
 //! Video frame scaling
 //!
-//! Resizes video frames using the `image` crate for RGB24 data.
-//! YUV420p frames are converted to RGB24, resized, then converted back.
+//! Resizes video frames using the `image` crate.
+//! YUV420p frames are scaled directly per-plane (Y, U, V independently)
+//! to avoid the YUV→RGB→scale→RGB→YUV roundtrip.
 //!
 //! ```rust,ignore
 //! use tarang::video::scale::{scale_frame, ScaleFilter};
@@ -11,9 +12,7 @@
 
 use crate::core::{PixelFormat, Result, TarangError, VideoFrame};
 use bytes::Bytes;
-use image::{ImageBuffer, RgbImage};
-
-use super::convert::{rgb24_to_yuv420p, yuv420p_to_rgb24};
+use image::{GrayImage, ImageBuffer, RgbImage};
 
 /// Scaling filter algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,15 +59,86 @@ pub fn scale_frame(
 
     match frame.pixel_format {
         PixelFormat::Rgb24 => scale_rgb24(frame, width, height, filter),
-        PixelFormat::Yuv420p => {
-            let rgb = yuv420p_to_rgb24(frame)?;
-            let scaled_rgb = scale_rgb24(&rgb, width, height, filter)?;
-            rgb24_to_yuv420p(&scaled_rgb)
-        }
+        PixelFormat::Yuv420p => scale_yuv420p_direct(frame, width, height, filter),
         other => Err(TarangError::ImageError(
             format!("scaling not supported for pixel format: {other:?}").into(),
         )),
     }
+}
+
+/// Scale a single grayscale plane using the `image` crate.
+fn scale_plane(
+    data: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+    filter: ScaleFilter,
+) -> Result<Vec<u8>> {
+    let img: GrayImage = ImageBuffer::from_raw(src_w, src_h, data.to_vec()).ok_or_else(|| {
+        TarangError::ImageError("failed to create grayscale image from plane data".into())
+    })?;
+    let resized = image::imageops::resize(&img, dst_w, dst_h, filter.to_image_filter());
+    Ok(resized.into_raw())
+}
+
+/// Scale a YUV420p frame by scaling Y/U/V planes independently.
+///
+/// Avoids the YUV→RGB→scale→RGB→YUV roundtrip.
+fn scale_yuv420p_direct(
+    frame: &VideoFrame,
+    width: u32,
+    height: u32,
+    filter: ScaleFilter,
+) -> Result<VideoFrame> {
+    let src_w = frame.width;
+    let src_h = frame.height;
+    let y_size = (src_w * src_h) as usize;
+    let src_chroma_w = src_w.div_ceil(2);
+    let src_chroma_h = src_h.div_ceil(2);
+    let chroma_size = (src_chroma_w * src_chroma_h) as usize;
+
+    if frame.data.len() < y_size + 2 * chroma_size {
+        return Err(TarangError::ImageError("frame data too small".into()));
+    }
+
+    let y_plane = &frame.data[..y_size];
+    let u_plane = &frame.data[y_size..y_size + chroma_size];
+    let v_plane = &frame.data[y_size + chroma_size..y_size + 2 * chroma_size];
+
+    let dst_chroma_w = width.div_ceil(2);
+    let dst_chroma_h = height.div_ceil(2);
+
+    let scaled_y = scale_plane(y_plane, src_w, src_h, width, height, filter)?;
+    let scaled_u = scale_plane(
+        u_plane,
+        src_chroma_w,
+        src_chroma_h,
+        dst_chroma_w,
+        dst_chroma_h,
+        filter,
+    )?;
+    let scaled_v = scale_plane(
+        v_plane,
+        src_chroma_w,
+        src_chroma_h,
+        dst_chroma_w,
+        dst_chroma_h,
+        filter,
+    )?;
+
+    let mut data = Vec::with_capacity(scaled_y.len() + scaled_u.len() + scaled_v.len());
+    data.extend_from_slice(&scaled_y);
+    data.extend_from_slice(&scaled_u);
+    data.extend_from_slice(&scaled_v);
+
+    Ok(VideoFrame {
+        data: Bytes::from(data),
+        pixel_format: PixelFormat::Yuv420p,
+        width,
+        height,
+        timestamp: frame.timestamp,
+    })
 }
 
 /// Scale an RGB24 frame using the `image` crate.

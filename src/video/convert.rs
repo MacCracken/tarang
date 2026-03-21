@@ -48,11 +48,13 @@ pub fn yuv420p_to_rgb24(frame: &VideoFrame) -> Result<VideoFrame> {
 
     let mut rgb = vec![0u8; w * h * 3];
 
+    // Pre-allocate chroma contribution vectors once, reuse per row
+    let mut cr_r = vec![0i32; chroma_w];
+    let mut cr_g = vec![0i32; chroma_w];
+    let mut cr_b = vec![0i32; chroma_w];
+
     for chroma_row in 0..chroma_h {
         let chroma_row_offset = chroma_row * chroma_w;
-        let mut cr_r = vec![0i32; chroma_w];
-        let mut cr_g = vec![0i32; chroma_w];
-        let mut cr_b = vec![0i32; chroma_w];
 
         for cx in 0..chroma_w {
             let u = u_plane[chroma_row_offset + cx] as i32 - 128;
@@ -215,7 +217,10 @@ pub fn yuv420p_to_nv12(frame: &VideoFrame) -> Result<VideoFrame> {
     let w = frame.width as usize;
     let h = frame.height as usize;
     let y_size = w * h;
-    let uv_size = w * (h / 2);
+    let chroma_w = w.div_ceil(2);
+    let chroma_h = h.div_ceil(2);
+    let chroma_count = chroma_w * chroma_h;
+    let uv_size = chroma_count * 2;
 
     let mut nv12 = vec![0u8; y_size + uv_size];
 
@@ -223,10 +228,10 @@ pub fn yuv420p_to_nv12(frame: &VideoFrame) -> Result<VideoFrame> {
     nv12[..y_size].copy_from_slice(&frame.data[..y_size]);
 
     // Interleave U and V into NV12 UV plane
-    let u_plane = &frame.data[y_size..y_size + y_size / 4];
-    let v_plane = &frame.data[y_size + y_size / 4..];
+    let u_plane = &frame.data[y_size..y_size + chroma_count];
+    let v_plane = &frame.data[y_size + chroma_count..];
     let uv_dst = &mut nv12[y_size..];
-    for i in 0..y_size / 4 {
+    for i in 0..chroma_count {
         uv_dst[i * 2] = u_plane[i];
         uv_dst[i * 2 + 1] = v_plane[i];
     }
@@ -240,12 +245,77 @@ pub fn yuv420p_to_nv12(frame: &VideoFrame) -> Result<VideoFrame> {
     })
 }
 
+/// Convert NV12 frame data to YUV420p layout.
+///
+/// NV12:    Y plane, interleaved UV plane (w * h/2)
+/// YUV420p: Y plane, U plane (w/2 * h/2), V plane (w/2 * h/2)
+pub fn nv12_to_yuv420p(frame: &VideoFrame) -> Result<VideoFrame> {
+    if frame.pixel_format == PixelFormat::Yuv420p {
+        return Ok(frame.clone());
+    }
+    if frame.pixel_format != PixelFormat::Nv12 {
+        return Err(TarangError::ImageError(
+            format!(
+                "unsupported pixel format for NV12->YUV420p conversion: {:?}",
+                frame.pixel_format
+            )
+            .into(),
+        ));
+    }
+
+    let w = frame.width as usize;
+    let h = frame.height as usize;
+    let y_size = w * h;
+    let chroma_w = w.div_ceil(2);
+    let chroma_h = h.div_ceil(2);
+    let chroma_count = chroma_w * chroma_h;
+
+    if frame.data.len() < y_size + chroma_count * 2 {
+        return Err(TarangError::ImageError("frame data too small".into()));
+    }
+
+    let mut yuv = vec![0u8; y_size + 2 * chroma_count];
+
+    // Copy Y plane as-is
+    yuv[..y_size].copy_from_slice(&frame.data[..y_size]);
+
+    // De-interleave UV into separate U and V planes
+    let uv_src = &frame.data[y_size..];
+    let (u_plane, v_plane) = yuv[y_size..].split_at_mut(chroma_count);
+    for i in 0..chroma_count {
+        u_plane[i] = uv_src[i * 2];
+        v_plane[i] = uv_src[i * 2 + 1];
+    }
+
+    Ok(VideoFrame {
+        data: Bytes::from(yuv),
+        pixel_format: PixelFormat::Yuv420p,
+        width: frame.width,
+        height: frame.height,
+        timestamp: frame.timestamp,
+    })
+}
+
+/// Convert NV12 frame data to RGB24.
+///
+/// Converts via NV12 -> YUV420p -> RGB24.
+pub fn nv12_to_rgb24(frame: &VideoFrame) -> Result<VideoFrame> {
+    if frame.pixel_format == PixelFormat::Rgb24 {
+        return Ok(frame.clone());
+    }
+    let yuv = nv12_to_yuv420p(frame)?;
+    yuv420p_to_rgb24(&yuv)
+}
+
 /// Convert a video frame to the target pixel format.
 ///
 /// Currently supports:
 /// - YUV420p -> RGB24
 /// - YUV420p -> NV12
+/// - NV12 -> YUV420p
+/// - NV12 -> RGB24
 /// - RGB24 -> YUV420p
+/// - RGB24 -> NV12
 /// - Identity (same format returns clone)
 pub fn convert_pixel_format(frame: &VideoFrame, target: PixelFormat) -> Result<VideoFrame> {
     if frame.pixel_format == target {
@@ -255,6 +325,8 @@ pub fn convert_pixel_format(frame: &VideoFrame, target: PixelFormat) -> Result<V
     match (frame.pixel_format, target) {
         (PixelFormat::Yuv420p, PixelFormat::Rgb24) => yuv420p_to_rgb24(frame),
         (PixelFormat::Yuv420p, PixelFormat::Nv12) => yuv420p_to_nv12(frame),
+        (PixelFormat::Nv12, PixelFormat::Yuv420p) => nv12_to_yuv420p(frame),
+        (PixelFormat::Nv12, PixelFormat::Rgb24) => nv12_to_rgb24(frame),
         (PixelFormat::Rgb24, PixelFormat::Yuv420p) => rgb24_to_yuv420p(frame),
         (PixelFormat::Rgb24, PixelFormat::Nv12) => {
             let yuv = rgb24_to_yuv420p(frame)?;
@@ -468,6 +540,69 @@ mod tests {
             timestamp: Duration::ZERO,
         };
         assert!(convert_pixel_format(&frame, PixelFormat::Rgb24).is_err());
+    }
+
+    #[test]
+    fn nv12_to_yuv420p_basic() {
+        let nv12_data = vec![
+            // Y plane (4x2)
+            10, 20, 30, 40, 50, 60, 70, 80, // Interleaved UV plane (U0, V0, U1, V1)
+            100, 200, 110, 210,
+        ];
+        let frame = VideoFrame {
+            data: Bytes::from(nv12_data),
+            pixel_format: PixelFormat::Nv12,
+            width: 4,
+            height: 2,
+            timestamp: Duration::ZERO,
+        };
+        let yuv = nv12_to_yuv420p(&frame).unwrap();
+        assert_eq!(yuv.pixel_format, PixelFormat::Yuv420p);
+        // Y plane preserved
+        assert_eq!(&yuv.data[..8], &frame.data[..8]);
+        // U plane de-interleaved
+        assert_eq!(yuv.data[8], 100);
+        assert_eq!(yuv.data[9], 110);
+        // V plane de-interleaved
+        assert_eq!(yuv.data[10], 200);
+        assert_eq!(yuv.data[11], 210);
+    }
+
+    #[test]
+    fn nv12_yuv420p_roundtrip() {
+        let frame = make_solid_yuv_frame(8, 8, 128);
+        let nv12 = yuv420p_to_nv12(&frame).unwrap();
+        let back = nv12_to_yuv420p(&nv12).unwrap();
+        assert_eq!(back.pixel_format, PixelFormat::Yuv420p);
+        assert_eq!(back.data, frame.data);
+    }
+
+    #[test]
+    fn nv12_to_rgb24_basic() {
+        // Create NV12 via YUV420p
+        let yuv = make_solid_yuv_frame(4, 4, 128);
+        let nv12 = yuv420p_to_nv12(&yuv).unwrap();
+        let rgb = nv12_to_rgb24(&nv12).unwrap();
+        assert_eq!(rgb.pixel_format, PixelFormat::Rgb24);
+        assert_eq!(rgb.data.len(), 4 * 4 * 3);
+        // Neutral gray should come through
+        assert!((rgb.data[0] as i32 - 128).abs() < 3);
+    }
+
+    #[test]
+    fn convert_nv12_to_yuv() {
+        let yuv = make_solid_yuv_frame(4, 4, 128);
+        let nv12 = yuv420p_to_nv12(&yuv).unwrap();
+        let result = convert_pixel_format(&nv12, PixelFormat::Yuv420p).unwrap();
+        assert_eq!(result.pixel_format, PixelFormat::Yuv420p);
+    }
+
+    #[test]
+    fn convert_nv12_to_rgb() {
+        let yuv = make_solid_yuv_frame(4, 4, 128);
+        let nv12 = yuv420p_to_nv12(&yuv).unwrap();
+        let result = convert_pixel_format(&nv12, PixelFormat::Rgb24).unwrap();
+        assert_eq!(result.pixel_format, PixelFormat::Rgb24);
     }
 
     #[test]

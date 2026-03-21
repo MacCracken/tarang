@@ -9,7 +9,8 @@ use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
 /// Extract mono F32 samples from an AudioBuffer.
 ///
 /// For multi-channel buffers, only the first channel is extracted.
-/// Supports F32 and I16 input formats.
+/// Supports F32 and I16 input formats. Uses zero-copy `bytes_to_f32`
+/// with stride for F32 sources.
 pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
     if buf.channels == 0 {
         return Err(TarangError::DecodeError("zero channels".into()));
@@ -17,23 +18,11 @@ pub fn extract_mono_f32(buf: &AudioBuffer) -> Result<Vec<f32>> {
     let channels = buf.channels as usize;
     match buf.sample_format {
         SampleFormat::F32 => {
-            let total_values = buf.data.len() / 4;
-            let num_samples = total_values / channels;
-            let mut mono = Vec::with_capacity(num_samples);
-            for i in 0..num_samples {
-                let offset = match i.checked_mul(channels).and_then(|v| v.checked_mul(4)) {
-                    Some(o) => o,
-                    None => continue,
-                };
-                if offset + 4 <= buf.data.len() {
-                    let sample = f32::from_le_bytes([
-                        buf.data[offset],
-                        buf.data[offset + 1],
-                        buf.data[offset + 2],
-                        buf.data[offset + 3],
-                    ]);
-                    mono.push(sample);
-                }
+            let samples = crate::audio::sample::bytes_to_f32(&buf.data);
+            let num_frames = samples.len() / channels;
+            let mut mono = Vec::with_capacity(num_frames);
+            for i in 0..num_frames {
+                mono.push(samples[i * channels]);
             }
             Ok(mono)
         }

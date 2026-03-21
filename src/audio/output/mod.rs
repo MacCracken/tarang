@@ -50,6 +50,14 @@ mod pw;
 #[cfg(feature = "pipewire")]
 pub use pw::PipeWireOutput;
 
+// ---- cpal backend (cross-platform: CoreAudio, WASAPI, ALSA) ----
+
+#[cfg(feature = "cpal-output")]
+mod cpal_out;
+
+#[cfg(feature = "cpal-output")]
+pub use cpal_out::CpalOutput;
+
 // ---- Null output (always available, useful for testing/benchmarks) ----
 
 /// A no-op audio output that discards all samples.

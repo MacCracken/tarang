@@ -10,7 +10,7 @@ use std::io::{Seek, Write};
 ///
 /// Muxers follow a strict state machine:
 /// 1. `write_header()` — initialize the container (must be called first)
-/// 2. `write_packet()` — write encoded data (call N times)
+/// 2. `write_packet()` / `write_video_packet()` — write encoded data (call N times)
 /// 3. `finalize()` — close the container (fix headers, write indices)
 ///
 /// Calling methods out of order returns a `Pipeline` error.
@@ -22,6 +22,14 @@ pub trait Muxer {
     /// Write a packet of encoded audio data.
     /// Must be called after `write_header()` and before `finalize()`.
     fn write_packet(&mut self, data: &[u8]) -> Result<()>;
+
+    /// Write a packet of encoded video data.
+    /// Not all muxers support video — the default implementation returns an error.
+    fn write_video_packet(&mut self, _data: &[u8]) -> Result<()> {
+        Err(TarangError::MuxError(
+            "video not supported by this muxer".into(),
+        ))
+    }
 
     /// Finalize the container (write trailing metadata, fix headers, etc.)
     /// After this call, no more packets can be written.
@@ -706,7 +714,6 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-
     fn build_stsz(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
@@ -873,7 +880,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
         // stco/co64: per-sample offsets for interleaved audio+video
         let co = build_sample_offset_table(&self.video_sample_offsets);
-        let box_type = if self.video_sample_offsets.iter().any(|&o| o > u32::MAX as u64) {
+        let box_type = if self
+            .video_sample_offsets
+            .iter()
+            .any(|&o| o > u32::MAX as u64)
+        {
             b"co64"
         } else {
             b"stco"

@@ -8,15 +8,30 @@
 //! let mut chain = EffectChain::new();
 //! chain.add(Box::new(Gain::new(-3.0)));  // -3 dB
 //! chain.add(Box::new(HighPassFilter::new(80.0)));
-//! // let output = chain.process(&input_buffer).unwrap();
+//! // let output = chain.process(input_buffer).unwrap();
 //! ```
 
-use crate::core::{AudioBuffer, Result};
+use crate::core::{AudioBuffer, Result, SampleFormat, TarangError};
+
+/// Verify that the buffer contains F32 samples. All built-in effects operate on F32.
+fn require_f32(buf: &AudioBuffer) -> Result<()> {
+    if buf.sample_format != SampleFormat::F32 {
+        return Err(TarangError::Pipeline(
+            format!(
+                "audio effect requires F32 samples, got {:?}",
+                buf.sample_format
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
 
 /// Trait for audio effects that process buffers.
 pub trait AudioEffect: Send {
     /// Process an audio buffer, returning the transformed output.
-    fn process(&mut self, buf: &AudioBuffer) -> Result<AudioBuffer>;
+    /// Takes ownership to enable in-place processing and avoid cloning.
+    fn process(&mut self, buf: AudioBuffer) -> Result<AudioBuffer>;
 
     /// Human-readable name for this effect.
     fn name(&self) -> &str;
@@ -41,10 +56,10 @@ impl EffectChain {
     }
 
     /// Process a buffer through all effects in order.
-    pub fn process(&mut self, buf: &AudioBuffer) -> Result<AudioBuffer> {
-        let mut current = buf.clone();
+    pub fn process(&mut self, buf: AudioBuffer) -> Result<AudioBuffer> {
+        let mut current = buf;
         for effect in &mut self.effects {
-            current = effect.process(&current)?;
+            current = effect.process(current)?;
         }
         Ok(current)
     }
@@ -88,7 +103,8 @@ impl Gain {
 }
 
 impl AudioEffect for Gain {
-    fn process(&mut self, buf: &AudioBuffer) -> Result<AudioBuffer> {
+    fn process(&mut self, buf: AudioBuffer) -> Result<AudioBuffer> {
+        require_f32(&buf)?;
         let samples = crate::audio::sample::bytes_to_f32(&buf.data);
         let out: Vec<f32> = samples.iter().map(|&s| s * self.multiplier).collect();
         Ok(AudioBuffer {
@@ -139,7 +155,8 @@ impl HighPassFilter {
 }
 
 impl AudioEffect for HighPassFilter {
-    fn process(&mut self, buf: &AudioBuffer) -> Result<AudioBuffer> {
+    fn process(&mut self, buf: AudioBuffer) -> Result<AudioBuffer> {
+        require_f32(&buf)?;
         if !self.initialized {
             self.init(buf.sample_rate, buf.channels);
         }
@@ -193,7 +210,8 @@ impl Compressor {
 }
 
 impl AudioEffect for Compressor {
-    fn process(&mut self, buf: &AudioBuffer) -> Result<AudioBuffer> {
+    fn process(&mut self, buf: AudioBuffer) -> Result<AudioBuffer> {
+        require_f32(&buf)?;
         let samples = crate::audio::sample::bytes_to_f32(&buf.data);
         let out: Vec<f32> = samples
             .iter()
@@ -233,7 +251,7 @@ mod tests {
     fn gain_positive() {
         let buf = make_test_buffer(&[0.5, -0.5], 1, 44100);
         let mut gain = Gain::new(6.0); // ~2x
-        let out = gain.process(&buf).unwrap();
+        let out = gain.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         assert!(samples[0] > 0.9); // 0.5 * ~2 ≈ 1.0
     }
@@ -242,7 +260,7 @@ mod tests {
     fn gain_negative() {
         let buf = make_test_buffer(&[1.0, -1.0], 1, 44100);
         let mut gain = Gain::new(-6.0); // ~0.5x
-        let out = gain.process(&buf).unwrap();
+        let out = gain.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         assert!(samples[0] < 0.6);
         assert!(samples[0] > 0.4);
@@ -252,7 +270,7 @@ mod tests {
     fn gain_zero_db_passthrough() {
         let buf = make_test_buffer(&[0.42, -0.42], 1, 44100);
         let mut gain = Gain::new(0.0);
-        let out = gain.process(&buf).unwrap();
+        let out = gain.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         assert!((samples[0] - 0.42).abs() < 1e-6);
     }
@@ -262,7 +280,7 @@ mod tests {
         let buf = make_test_buffer(&[0.5], 1, 44100);
         let mut chain = EffectChain::new();
         assert!(chain.is_empty());
-        let out = chain.process(&buf).unwrap();
+        let out = chain.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         assert!((samples[0] - 0.5).abs() < 1e-6);
     }
@@ -274,7 +292,7 @@ mod tests {
         chain.add(Box::new(Gain::new(6.0)));
         chain.add(Box::new(Gain::new(-6.0))); // should cancel out
         assert_eq!(chain.len(), 2);
-        let out = chain.process(&buf).unwrap();
+        let out = chain.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         // +6dB then -6dB ≈ identity (small floating point error)
         assert!((samples[0] - 0.5).abs() < 0.01);
@@ -286,7 +304,7 @@ mod tests {
         let dc = vec![0.5f32; 4410]; // 0.1 sec at 44100Hz
         let buf = make_test_buffer(&dc, 1, 44100);
         let mut hpf = HighPassFilter::new(100.0);
-        let out = hpf.process(&buf).unwrap();
+        let out = hpf.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         // Last sample should be near 0 (DC removed)
         assert!(
@@ -299,7 +317,7 @@ mod tests {
     fn compressor_leaves_quiet_signals() {
         let buf = make_test_buffer(&[0.1, -0.1, 0.05], 1, 44100);
         let mut comp = Compressor::new(-6.0, 4.0); // threshold ≈ 0.5
-        let out = comp.process(&buf).unwrap();
+        let out = comp.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         // Below threshold — unchanged
         assert!((samples[0] - 0.1).abs() < 1e-6);
@@ -309,9 +327,27 @@ mod tests {
     fn compressor_reduces_loud_signals() {
         let buf = make_test_buffer(&[0.9, -0.9], 1, 44100);
         let mut comp = Compressor::new(-6.0, 4.0); // threshold ≈ 0.5
-        let out = comp.process(&buf).unwrap();
+        let out = comp.process(buf).unwrap();
         let samples = crate::audio::sample::bytes_to_f32(&out.data);
         assert!(samples[0].abs() < 0.9, "compressor should reduce level");
         assert!(samples[0].abs() > 0.5, "should still be above threshold");
+    }
+
+    #[test]
+    fn rejects_non_f32_input() {
+        use crate::core::SampleFormat;
+        use bytes::Bytes;
+        use std::time::Duration;
+
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 16]),
+            sample_format: SampleFormat::I16,
+            channels: 1,
+            sample_rate: 44100,
+            num_frames: 8,
+            timestamp: Duration::ZERO,
+        };
+        let mut gain = Gain::new(0.0);
+        assert!(gain.process(buf).is_err());
     }
 }
