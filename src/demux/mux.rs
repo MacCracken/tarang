@@ -330,10 +330,16 @@ pub struct Mp4Muxer<W: Write + Seek> {
     writer: W,
     config: MuxConfig,
     video_config: Option<VideoMuxConfig>,
+    /// Whether this muxer has an audio track.
+    audio_enabled: bool,
     /// Per-sample sizes for audio stsz
     sample_sizes: Vec<u32>,
+    /// Per-sample byte offsets within mdat for audio stco (interleaved support)
+    sample_offsets: Vec<u64>,
     /// Per-sample sizes for video stsz
     video_sample_sizes: Vec<u32>,
+    /// Per-sample byte offsets within mdat for video stco (interleaved support)
+    video_sample_offsets: Vec<u64>,
     /// Sample delta for stts (constant for audio)
     sample_delta: u32,
     /// Offset where the mdat box starts (for patching size in finalize)
@@ -346,7 +352,6 @@ pub struct Mp4Muxer<W: Write + Seek> {
 impl<W: Write + Seek> Mp4Muxer<W> {
     /// Create an audio-only MP4 muxer.
     pub fn new(writer: W, config: MuxConfig) -> Self {
-        // Default sample delta: 1024 for AAC, 960 for Opus, 1 for PCM
         let sample_delta = match config.codec {
             AudioCodec::Aac => 1024,
             AudioCodec::Opus => 960,
@@ -356,8 +361,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             writer,
             config,
             video_config: None,
+            audio_enabled: true,
             sample_sizes: Vec::new(),
+            sample_offsets: Vec::new(),
             video_sample_sizes: Vec::new(),
+            video_sample_offsets: Vec::new(),
             sample_delta,
             mdat_offset: 0,
             mdat_data_size: 0,
@@ -366,6 +374,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     /// Create an audio+video MP4 muxer.
+    ///
+    /// Audio and video packets can be written in any order (interleaved).
+    /// The muxer tracks per-sample offsets so the sample table correctly
+    /// maps each sample to its position in the mdat box.
     pub fn new_with_video(writer: W, audio: MuxConfig, video: VideoMuxConfig) -> Self {
         let sample_delta = match audio.codec {
             AudioCodec::Aac => 1024,
@@ -376,8 +388,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             writer,
             config: audio,
             video_config: Some(video),
+            audio_enabled: true,
             sample_sizes: Vec::new(),
+            sample_offsets: Vec::new(),
             video_sample_sizes: Vec::new(),
+            video_sample_offsets: Vec::new(),
             sample_delta,
             mdat_offset: 0,
             mdat_data_size: 0,
@@ -385,7 +400,33 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         }
     }
 
+    /// Create a video-only MP4 muxer (no audio track).
+    pub fn new_video_only(writer: W, video: VideoMuxConfig) -> Self {
+        let config = MuxConfig {
+            codec: AudioCodec::Pcm,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        Self {
+            writer,
+            config,
+            video_config: Some(video),
+            audio_enabled: false,
+            sample_sizes: Vec::new(),
+            sample_offsets: Vec::new(),
+            video_sample_sizes: Vec::new(),
+            video_sample_offsets: Vec::new(),
+            sample_delta: 1024,
+            mdat_offset: 0,
+            mdat_data_size: 0,
+            header_written: false,
+        }
+    }
+
     /// Write a video sample to the mdat. Must be called after `write_header()`.
+    ///
+    /// Can be interleaved with [`write_packet`] (audio) in any order.
     pub fn write_video_packet(&mut self, data: &[u8]) -> Result<()> {
         if !self.header_written {
             return Err(TarangError::MuxError("header not written".into()));
@@ -395,8 +436,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
                 "no video track configured — use new_with_video()".into(),
             ));
         }
+        // Record absolute byte offset of this sample within mdat
+        let offset = self.mdat_offset + 8 + self.mdat_data_size;
         self.writer.write_all(data).map_err(io_err)?;
         self.video_sample_sizes.push(data.len() as u32);
+        self.video_sample_offsets.push(offset);
         self.mdat_data_size += data.len() as u64;
         Ok(())
     }
@@ -433,11 +477,13 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let mvhd = self.build_mvhd();
         write_sub_box(&mut moov, b"mvhd", &mvhd);
 
-        // Audio trak (track 1)
-        let trak = self.build_audio_trak(mdat_offset)?;
-        write_sub_box(&mut moov, b"trak", &trak);
+        // Audio trak (track 1) — skip for video-only muxers
+        if self.audio_enabled {
+            let trak = self.build_audio_trak(mdat_offset)?;
+            write_sub_box(&mut moov, b"trak", &trak);
+        }
 
-        // Video trak (track 2) if configured
+        // Video trak (track 2, or track 1 if video-only)
         if let Some(ref video) = self.video_config {
             let vtrak = self.build_video_trak(mdat_offset, video)?;
             write_sub_box(&mut moov, b"trak", &vtrak);
@@ -447,11 +493,19 @@ impl<W: Write + Seek> Mp4Muxer<W> {
     }
 
     fn build_mvhd(&self) -> Vec<u8> {
-        let num_samples = self.sample_sizes.len() as u64;
-        let timescale = self.config.sample_rate;
-        let duration = num_samples
-            .saturating_mul(self.sample_delta as u64)
-            .min(u32::MAX as u64) as u32;
+        // For video-only muxers, use the 90kHz video timescale
+        let (timescale, duration) = if self.audio_enabled {
+            let num_samples = self.sample_sizes.len() as u64;
+            let dur = num_samples
+                .saturating_mul(self.sample_delta as u64)
+                .min(u32::MAX as u64) as u32;
+            (self.config.sample_rate, dur)
+        } else {
+            // 90kHz is standard video timescale, 3000 ticks per frame at 30fps
+            let num_video = self.video_sample_sizes.len() as u64;
+            let dur = num_video.saturating_mul(3000).min(u32::MAX as u64) as u32;
+            (90000u32, dur)
+        };
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
@@ -467,12 +521,14 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             buf.extend_from_slice(&v.to_be_bytes());
         }
         buf.extend_from_slice(&[0u8; 24]); // pre_defined
-        let next_id = if self.video_config.is_some() {
-            3u32
-        } else {
-            2u32
-        };
-        buf.extend_from_slice(&next_id.to_be_bytes()); // next_track_id
+        let mut track_count = 0u32;
+        if self.audio_enabled {
+            track_count += 1;
+        }
+        if self.video_config.is_some() {
+            track_count += 1;
+        }
+        buf.extend_from_slice(&(track_count + 1).to_be_bytes()); // next_track_id
         buf
     }
 
@@ -585,7 +641,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         Ok(minf)
     }
 
-    fn build_stbl(&self, mdat_offset: u64) -> Result<Vec<u8>> {
+    fn build_stbl(&self, _mdat_offset: u64) -> Result<Vec<u8>> {
         let mut stbl = Vec::new();
 
         let stsd = self.build_stsd();
@@ -594,22 +650,21 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let stts = self.build_stts();
         write_sub_box(&mut stbl, b"stts", &stts);
 
-        let stsc = self.build_stsc();
+        // stsc: one sample per chunk (each sample is its own chunk for interleaved support)
+        let stsc = build_one_sample_per_chunk_stsc(self.sample_sizes.len() as u32);
         write_sub_box(&mut stbl, b"stsc", &stsc);
 
         let stsz = self.build_stsz();
         write_sub_box(&mut stbl, b"stsz", &stsz);
 
-        // mdat data starts at mdat_offset + 8 (box header)
-        let data_start = mdat_offset + 8;
-        if data_start > u32::MAX as u64 {
-            // 64-bit chunk offsets for files > 4GB
-            let co64 = self.build_co64(data_start);
-            write_sub_box(&mut stbl, b"co64", &co64);
+        // stco/co64: per-sample offsets for interleaved audio+video
+        let co = build_sample_offset_table(&self.sample_offsets);
+        let box_type = if self.sample_offsets.iter().any(|&o| o > u32::MAX as u64) {
+            b"co64"
         } else {
-            let stco = self.build_stco(data_start);
-            write_sub_box(&mut stbl, b"stco", &stco);
-        }
+            b"stco"
+        };
+        write_sub_box(&mut stbl, box_type, &co);
 
         Ok(stbl)
     }
@@ -651,15 +706,6 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         buf
     }
 
-    fn build_stsc(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
-        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-        buf.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
-        buf.extend_from_slice(&(self.sample_sizes.len() as u32).to_be_bytes()); // samples_per_chunk
-        buf.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index
-        buf
-    }
 
     fn build_stsz(&self) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -685,23 +731,6 @@ impl<W: Write + Seek> Mp4Muxer<W> {
                 buf.extend_from_slice(&size.to_be_bytes());
             }
         }
-        buf
-    }
-
-    fn build_stco(&self, data_start: u64) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
-        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
-        buf.extend_from_slice(&(data_start as u32).to_be_bytes());
-        buf
-    }
-
-    /// Build a co64 box (64-bit chunk offset table) for files > 4GB.
-    fn build_co64(&self, data_start: u64) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
-        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count (single chunk)
-        buf.extend_from_slice(&data_start.to_be_bytes()); // 64-bit offset
         buf
     }
 
@@ -803,7 +832,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         Ok(mdia)
     }
 
-    fn build_video_stbl(&self, mdat_offset: u64, video: &VideoMuxConfig) -> Result<Vec<u8>> {
+    fn build_video_stbl(&self, _mdat_offset: u64, video: &VideoMuxConfig) -> Result<Vec<u8>> {
         let mut stbl = Vec::new();
 
         // stsd — video sample description
@@ -828,12 +857,8 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         write_sub_box(&mut stbl, b"stss", &stss);
 
         // stsc
-        let mut stsc = Vec::new();
-        stsc.extend_from_slice(&0u32.to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
-        stsc.extend_from_slice(&(self.video_sample_sizes.len() as u32).to_be_bytes());
-        stsc.extend_from_slice(&1u32.to_be_bytes());
+        // stsc: one sample per chunk (each sample is its own chunk for interleaved support)
+        let stsc = build_one_sample_per_chunk_stsc(self.video_sample_sizes.len() as u32);
         write_sub_box(&mut stbl, b"stsc", &stsc);
 
         // stsz
@@ -846,16 +871,14 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         }
         write_sub_box(&mut stbl, b"stsz", &stsz);
 
-        // stco — video data offset (after all audio data in mdat)
-        let audio_data_size: u64 = self.sample_sizes.iter().map(|&s| s as u64).sum();
-        let video_data_start = mdat_offset + 8 + audio_data_size;
-        if video_data_start > u32::MAX as u64 {
-            let co64 = self.build_co64(video_data_start);
-            write_sub_box(&mut stbl, b"co64", &co64);
+        // stco/co64: per-sample offsets for interleaved audio+video
+        let co = build_sample_offset_table(&self.video_sample_offsets);
+        let box_type = if self.video_sample_offsets.iter().any(|&o| o > u32::MAX as u64) {
+            b"co64"
         } else {
-            let stco = self.build_stco(video_data_start);
-            write_sub_box(&mut stbl, b"stco", &stco);
-        }
+            b"stco"
+        };
+        write_sub_box(&mut stbl, box_type, &co);
 
         Ok(stbl)
     }
@@ -915,8 +938,16 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
         if !self.header_written {
             return Err(TarangError::MuxError("header not written".into()));
         }
+        if !self.audio_enabled {
+            return Err(TarangError::MuxError(
+                "no audio track configured — use new() or new_with_video() for audio".into(),
+            ));
+        }
+        // Record absolute byte offset of this sample within mdat
+        let offset = self.mdat_offset + 8 + self.mdat_data_size;
         self.writer.write_all(data).map_err(io_err)?;
         self.sample_sizes.push(data.len() as u32);
+        self.sample_offsets.push(offset);
         self.mdat_data_size += data.len() as u64;
         Ok(())
     }
@@ -959,6 +990,41 @@ fn write_sub_box(buf: &mut Vec<u8>, box_type: &[u8; 4], data: &[u8]) {
     buf.extend_from_slice(&size.to_be_bytes());
     buf.extend_from_slice(box_type);
     buf.extend_from_slice(data);
+}
+
+/// Build a per-sample chunk offset table (stco or co64).
+///
+/// Each sample is its own chunk, enabling interleaved audio+video in mdat.
+fn build_sample_offset_table(offsets: &[u64]) -> Vec<u8> {
+    let use_64bit = offsets.iter().any(|&o| o > u32::MAX as u64);
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+    buf.extend_from_slice(&(offsets.len() as u32).to_be_bytes());
+    for &offset in offsets {
+        if use_64bit {
+            buf.extend_from_slice(&offset.to_be_bytes());
+        } else {
+            buf.extend_from_slice(&(offset as u32).to_be_bytes());
+        }
+    }
+    buf
+}
+
+/// Build stsc box for one-sample-per-chunk layout.
+///
+/// All chunks contain exactly 1 sample with sample_description_index=1.
+fn build_one_sample_per_chunk_stsc(num_samples: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u32.to_be_bytes()); // version + flags
+    if num_samples > 0 {
+        buf.extend_from_slice(&1u32.to_be_bytes()); // entry_count = 1
+        buf.extend_from_slice(&1u32.to_be_bytes()); // first_chunk = 1
+        buf.extend_from_slice(&1u32.to_be_bytes()); // samples_per_chunk = 1
+        buf.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index = 1
+    } else {
+        buf.extend_from_slice(&0u32.to_be_bytes()); // entry_count = 0
+    }
+    buf
 }
 
 // ---- Fragmented MP4 / DASH Muxer ----
@@ -2363,5 +2429,130 @@ mod tests {
         };
         let mut mux = FragmentedMp4Muxer::new(&mut buf, config);
         assert!(mux.add_audio_sample(&[0x00; 100]).is_err());
+    }
+
+    #[test]
+    fn mp4_video_only_muxer() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let video = VideoMuxConfig {
+            codec: crate::core::VideoCodec::H264,
+            width: 320,
+            height: 240,
+        };
+        let mut mux = Mp4Muxer::new_video_only(&mut buf, video);
+        mux.write_header().unwrap();
+
+        // Write 10 video frames
+        for i in 0..10 {
+            mux.write_video_packet(&vec![0x00, 0x00, 0x00, 0x01, 0x65, i])
+                .unwrap();
+        }
+
+        // Audio should be rejected
+        assert!(mux.write_packet(&[0xFFu8; 64]).is_err());
+
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        assert!(!data.is_empty());
+        // Should have ftyp + mdat + moov
+        assert_eq!(&data[4..8], b"ftyp");
+    }
+
+    #[test]
+    fn mp4_interleaved_audio_video() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let audio = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let video = VideoMuxConfig {
+            codec: crate::core::VideoCodec::H264,
+            width: 640,
+            height: 480,
+        };
+        let mut mux = Mp4Muxer::new_with_video(&mut buf, audio, video);
+        mux.write_header().unwrap();
+
+        // Interleave: video, audio, video, audio, video, audio...
+        for i in 0..10 {
+            mux.write_video_packet(&vec![0x65u8; 1024 + i * 10])
+                .unwrap();
+            mux.write_packet(&vec![0xAAu8; 128 + i]).unwrap();
+        }
+
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        assert!(!data.is_empty());
+        assert_eq!(&data[4..8], b"ftyp");
+        // Should contain moov with both tracks
+        let moov_pos = data
+            .windows(4)
+            .position(|w| w == b"moov")
+            .expect("should contain moov box");
+        assert!(moov_pos > 0);
+    }
+
+    #[test]
+    fn mp4_video_only_no_audio_trak() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let video = VideoMuxConfig {
+            codec: crate::core::VideoCodec::H264,
+            width: 1920,
+            height: 1080,
+        };
+        let mut mux = Mp4Muxer::new_video_only(&mut buf, video);
+        mux.write_header().unwrap();
+        mux.write_video_packet(&vec![0x00u8; 512]).unwrap();
+        mux.finalize().unwrap();
+
+        let data = buf.into_inner();
+        // Should have 'vide' handler but no 'soun' handler
+        let has_vide = data.windows(4).any(|w| w == b"vide");
+        let has_soun = data.windows(4).any(|w| w == b"soun");
+        assert!(has_vide, "should have video handler");
+        assert!(!has_soun, "should NOT have audio handler");
+    }
+
+    #[test]
+    fn mp4_interleaved_offsets_are_correct() {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let audio = MuxConfig {
+            codec: AudioCodec::Aac,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+        };
+        let video = VideoMuxConfig {
+            codec: crate::core::VideoCodec::H264,
+            width: 320,
+            height: 240,
+        };
+        let mut mux = Mp4Muxer::new_with_video(&mut buf, audio, video);
+        mux.write_header().unwrap();
+
+        // Write in alternating order: A(100), V(200), A(150), V(250)
+        mux.write_packet(&vec![0xAA; 100]).unwrap();
+        mux.write_video_packet(&vec![0xBB; 200]).unwrap();
+        mux.write_packet(&vec![0xAA; 150]).unwrap();
+        mux.write_video_packet(&vec![0xBB; 250]).unwrap();
+
+        // Verify internal offset tracking
+        assert_eq!(mux.sample_sizes.len(), 2);
+        assert_eq!(mux.video_sample_sizes.len(), 2);
+        assert_eq!(mux.sample_offsets.len(), 2);
+        assert_eq!(mux.video_sample_offsets.len(), 2);
+
+        // First audio at mdat+8, first video at mdat+8+100
+        let mdat_data_start = mux.mdat_offset + 8;
+        assert_eq!(mux.sample_offsets[0], mdat_data_start);
+        assert_eq!(mux.video_sample_offsets[0], mdat_data_start + 100);
+        assert_eq!(mux.sample_offsets[1], mdat_data_start + 300); // after 100+200
+        assert_eq!(mux.video_sample_offsets[1], mdat_data_start + 450); // after 100+200+150
+
+        mux.finalize().unwrap();
     }
 }

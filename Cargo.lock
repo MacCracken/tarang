@@ -3042,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "tarang"
-version = "0.20.3"
+version = "0.21.3"
 dependencies = [
  "ai-hwaccel",
  "anyhow",
