@@ -348,6 +348,8 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
+ "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -933,6 +935,7 @@ dependencies = [
 name = "env-libvpx-sys"
 version = "5.1.3"
 dependencies = [
+ "bindgen 0.72.1",
  "pkg-config",
 ]
 

@@ -41,7 +41,7 @@ repository = "https://github.com/astraw/env-libvpx-sys"
 name = "vpx_sys"
 
 [build-dependencies.bindgen]
-version = "0.68.1"
+version = "0.72"
 optional = true
 
 [build-dependencies.pkg-config]

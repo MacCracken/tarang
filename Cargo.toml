@@ -71,7 +71,7 @@ fdk-aac = { version = "0.8", optional = true }
 
 # Optional video codecs
 dav1d = { version = "0.11", optional = true }
-env-libvpx-sys = { version = "5.1", optional = true }
+env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
 rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
 
@@ -107,8 +107,8 @@ cros-libva = { version = "0.0.13", optional = true }
 
 # Patch cros-libva for libva >= 1.23 compatibility (VP9 struct fields added upstream)
 # Remove when cros-libva > 0.0.13 is released
-# Patch env-libvpx-sys: bundled bindgen 0.68 generates opaque structs with vpx >= 1.14 headers.
-# Pre-generated bindings for 1.15.2 included; remove when env-libvpx-sys updates bindgen.
+# Patch env-libvpx-sys: upstream bindgen 0.68 generates opaque structs with vpx >= 1.14 headers.
+# Bumped to bindgen 0.72. Remove when replaced by chitrsys.
 [patch.crates-io]
 cros-libva = { path = "patches/cros-libva" }
 env-libvpx-sys = { path = "patches/env-libvpx-sys" }
