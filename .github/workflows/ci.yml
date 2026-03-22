@@ -159,13 +159,13 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       - name: Fuzz fuzz_wav
-        run: cargo +nightly fuzz run fuzz_wav -- -max_total_time=60 -max_len=65536
+        run: cargo +nightly fuzz run fuzz_wav -- -max_total_time=85 -max_len=65536
       - name: Fuzz fuzz_mp4
-        run: cargo +nightly fuzz run fuzz_mp4 -- -max_total_time=60 -max_len=65536
+        run: cargo +nightly fuzz run fuzz_mp4 -- -max_total_time=85 -max_len=65536
       - name: Fuzz fuzz_mkv
-        run: cargo +nightly fuzz run fuzz_mkv -- -max_total_time=60 -max_len=65536
+        run: cargo +nightly fuzz run fuzz_mkv -- -max_total_time=85 -max_len=65536
       - name: Fuzz fuzz_ogg
-        run: cargo +nightly fuzz run fuzz_ogg -- -max_total_time=60 -max_len=65536
+        run: cargo +nightly fuzz run fuzz_ogg -- -max_total_time=85 -max_len=65536
 
   bench:
     name: Benchmarks
