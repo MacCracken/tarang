@@ -102,7 +102,7 @@ impl VaapiDecoder {
         )?;
 
         // Align height to 16-pixel boundary (required by some drivers)
-        let aligned_height = ((height + 15) / 16) * 16;
+        let aligned_height = height.div_ceil(16) * 16;
 
         let surfaces: Vec<Surface<()>> = va_err(
             display.create_surfaces(
@@ -169,7 +169,7 @@ impl VaapiDecoder {
                     VA_RT_FORMAT_YUV420,
                     None,
                     self.width,
-                    ((self.height + 15) / 16) * 16,
+                    self.height.div_ceil(16) * 16,
                     Some(UsageHint::USAGE_HINT_DECODER),
                     vec![()],
                 )

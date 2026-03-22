@@ -352,7 +352,7 @@ pub fn probe_hardware() -> HardwareReport {
         .all_profiles()
         .iter()
         .filter(|p| p.available)
-        .map(|p| profile_to_info(p))
+        .map(profile_to_info)
         .collect();
     let total_accel_memory = registry.total_accelerator_memory();
     let total_system_memory = registry.total_memory();

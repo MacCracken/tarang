@@ -10,6 +10,9 @@ url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.t
 [policy.cros-libva]
 audit-as-crates-io = true
 
+[policy.env-libvpx-sys]
+audit-as-crates-io = true
+
 [policy.tarang]
 audit-as-crates-io = false
 
