@@ -78,14 +78,7 @@ pub fn main() {
 
     #[cfg(not(feature = "generate"))]
     {
-        let src = format!("vpx-ffi-{}.rs", found_version);
-        let full_src = std::path::PathBuf::from("generated").join(src);
-        if !full_src.exists() {
-            panic!(
-                "Expected file \"{}\" not found but 'generate' cargo feature not used.",
-                full_src.display()
-            );
-        }
+        let full_src = find_pregenerated_bindings(&found_version);
         std::fs::copy(&full_src, &ffi_rs).unwrap();
     }
 }
@@ -102,6 +95,60 @@ fn infer_static(name: &str) -> bool {
         false
     } else {
         false
+    }
+}
+
+/// Find pre-generated bindings for the given vpx version.
+/// Tries exact match first, then falls back to the highest available version
+/// that doesn't exceed the detected version (ABI is stable within major versions).
+#[cfg(not(feature = "generate"))]
+fn find_pregenerated_bindings(version: &str) -> std::path::PathBuf {
+    let exact = std::path::PathBuf::from("generated").join(format!("vpx-ffi-{}.rs", version));
+    if exact.exists() {
+        return exact;
+    }
+
+    // Parse detected version for comparison
+    let detected_parts: Vec<u32> = version
+        .split('.')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    // Scan generated/ for the best fallback
+    let mut best: Option<(Vec<u32>, std::path::PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir("generated") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(ver_str) = name.strip_prefix("vpx-ffi-").and_then(|s| s.strip_suffix(".rs"))
+            {
+                let parts: Vec<u32> = ver_str
+                    .split('.')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if parts <= detected_parts {
+                    if best.as_ref().map_or(true, |(b, _)| &parts > b) {
+                        best = Some((parts, entry.path()));
+                    }
+                }
+            }
+        }
+    }
+
+    match best {
+        Some((_, path)) => {
+            eprintln!(
+                "cargo:warning=No exact vpx bindings for {}; using {}",
+                version,
+                path.display()
+            );
+            path
+        }
+        None => panic!(
+            "No pre-generated vpx bindings found for version {} or any earlier version. \
+             Enable the 'generate' cargo feature or add bindings to generated/.",
+            version
+        ),
     }
 }
 
