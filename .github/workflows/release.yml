@@ -76,11 +76,13 @@ jobs:
         if: matrix.name == 'linux-arm64'
         run: cargo build --release --target ${{ matrix.target }} --features openh264,openh264-enc,rav1e,hwaccel
 
-      - name: Build release (macOS — portable features)
-        if: runner.os == 'macOS'
+      - name: Build release (macOS arm64 — portable features)
+        if: matrix.name == 'macos-arm64'
         run: cargo build --release --target ${{ matrix.target }} --features portable
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Build release (macOS amd64 — vendored codecs only)
+        if: matrix.name == 'macos-amd64'
+        run: cargo build --release --target ${{ matrix.target }} --features openh264,openh264-enc,rav1e,hwaccel
 
       - name: Build release (Windows — default features)
         if: runner.os == 'Windows'
