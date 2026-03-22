@@ -71,10 +71,10 @@ fdk-aac = { version = "0.8", optional = true }
 
 # Optional video codecs
 dav1d = { version = "0.11", optional = true }
-env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
+env-libvpx-sys = { version = "5.1", optional = true }
 rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
-cros-libva = { version = "0.0.13", optional = true }
+
 ai-hwaccel = { version = "0.21.3", optional = true, default-features = false, features = ["vulkan"] }
 # WARNING: libde265-rs is LGPL-3.0. Not included in `full` feature.
 # Enable `h265-decode` only if your project's license is GPL-compatible.
@@ -102,7 +102,13 @@ harness = false
 name = "ai"
 harness = false
 
+[target.'cfg(target_os = "linux")'.dependencies]
+cros-libva = { version = "0.0.13", optional = true }
+
 # Patch cros-libva for libva >= 1.23 compatibility (VP9 struct fields added upstream)
 # Remove when cros-libva > 0.0.13 is released
+# Patch env-libvpx-sys: bundled bindgen 0.68 generates opaque structs with vpx >= 1.14 headers.
+# Pre-generated bindings for 1.15.2 included; remove when env-libvpx-sys updates bindgen.
 [patch.crates-io]
 cros-libva = { path = "patches/cros-libva" }
+env-libvpx-sys = { path = "patches/env-libvpx-sys" }

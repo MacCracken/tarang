@@ -227,7 +227,7 @@ pub fn probe_codec_capabilities() -> CodecCapabilities {
     let mut encode = Vec::new();
 
     // --- Hardware: VA-API ---
-    #[cfg(feature = "vaapi")]
+    #[cfg(all(target_os = "linux", feature = "vaapi"))]
     if let Some(vaapi) = crate::video::probe_vaapi() {
         use crate::video::HwCodecDirection;
         for cap in &vaapi.capabilities {

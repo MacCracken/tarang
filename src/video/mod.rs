@@ -33,13 +33,13 @@ pub mod openh264_dec;
 pub mod openh264_enc;
 #[cfg(feature = "rav1e")]
 pub mod rav1e_enc;
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 mod vaapi_common;
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub mod vaapi_dec;
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub mod vaapi_enc;
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub mod vaapi_probe;
 #[cfg(feature = "vpx")]
 pub mod vpx_dec;
@@ -57,11 +57,11 @@ pub use openh264_dec::OpenH264Decoder;
 pub use openh264_enc::{OpenH264Encoder, OpenH264EncoderConfig};
 #[cfg(feature = "rav1e")]
 pub use rav1e_enc::{Rav1eConfig, Rav1eEncoder};
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub use vaapi_dec::VaapiDecoder;
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub use vaapi_enc::{VaapiEncoder, VaapiEncoderConfig};
-#[cfg(feature = "vaapi")]
+#[cfg(all(target_os = "linux", feature = "vaapi"))]
 pub use vaapi_probe::{HwAccelReport, HwCodecCapability, HwCodecDirection, probe_vaapi};
 #[cfg(feature = "vpx")]
 pub use vpx_dec::VpxDecoder;
@@ -206,7 +206,7 @@ impl DecoderConfig {
             match entry.backend {
                 CodecBackendKind::Vaapi => {
                     // VA-API path: check that the vaapi feature is compiled in.
-                    if !cfg!(feature = "vaapi") {
+                    if !cfg!(all(target_os = "linux", feature = "vaapi")) {
                         // Hardware detected but vaapi feature not compiled — fall through to software.
                         return Self::for_codec(codec);
                     }
@@ -234,7 +234,7 @@ enum BackendInner {
     OpenH264(OpenH264Decoder),
     #[cfg(feature = "vpx")]
     Vpx(VpxDecoder),
-    #[cfg(feature = "vaapi")]
+    #[cfg(all(target_os = "linux", feature = "vaapi"))]
     Vaapi(VaapiDecoder),
     /// Software / stub — produces black frames (used for Theora until a Rust decoder exists)
     Stub,
@@ -263,7 +263,7 @@ impl VideoDecoder {
             DecoderBackend::OpenH264 => BackendInner::OpenH264(OpenH264Decoder::new()?),
             #[cfg(feature = "vpx")]
             DecoderBackend::LibVpx => BackendInner::Vpx(VpxDecoder::new(config.codec)?),
-            #[cfg(feature = "vaapi")]
+            #[cfg(all(target_os = "linux", feature = "vaapi"))]
             DecoderBackend::Vaapi => {
                 // VA-API decoder needs dimensions — default to 1920x1080,
                 // updated when init() is called with stream info.
@@ -349,7 +349,7 @@ impl VideoDecoder {
             BackendInner::Vpx(dec) => {
                 decoded = dec.decode(data, timestamp)?;
             }
-            #[cfg(feature = "vaapi")]
+            #[cfg(all(target_os = "linux", feature = "vaapi"))]
             BackendInner::Vaapi(dec) => {
                 if let Some(frame) = dec.decode(data, timestamp)? {
                     decoded.push(frame);
@@ -492,7 +492,7 @@ pub fn supported_codecs_with_hw() -> Vec<(VideoCodec, DecoderBackend)> {
     let mut codecs = Vec::new();
 
     // Hardware backends first
-    #[cfg(feature = "vaapi")]
+    #[cfg(all(target_os = "linux", feature = "vaapi"))]
     if let Some(vaapi) = probe_vaapi() {
         for codec in vaapi.decode_codecs() {
             codecs.push((codec, DecoderBackend::Vaapi));

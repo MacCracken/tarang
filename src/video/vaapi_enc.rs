@@ -87,7 +87,7 @@ fn codec_to_va_profile(codec: VideoCodec) -> Result<VAProfile::Type> {
     }
 }
 
-use super::vaapi_common::{open_display, va_err};
+use super::vaapi_common::open_display;
 
 /// Find the best encode entrypoint for a profile on a display.
 fn find_encode_entrypoint(
