@@ -67,7 +67,7 @@ rustfft = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 # Optional audio encoders/output
-cpal = { version = "0.15", optional = true }
+cpal = { version = "0.17", optional = true }
 pipewire = { version = "0.9", optional = true }
 opus = { version = "0.3", optional = true }
 fdk-aac = { version = "0.8", optional = true }
@@ -84,11 +84,11 @@ mabda = { version = "1", optional = true }
 # Enable `h265-decode` only if your project's license is GPL-compatible.
 # To remove: delete this dep, the feature, src/video/libde265_dec.rs, and
 # the mod/use lines in src/video/mod.rs.
-libde265-rs = { version = "0.2", optional = true, features = ["system-libde265"] }
+libde265-rs = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bin]]
 name = "tarang"

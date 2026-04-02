@@ -1,4 +1,5 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::io::Cursor;
 use tarang::demux::{Demuxer, Mp4Demuxer, WavDemuxer};
 

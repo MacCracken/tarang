@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::time::Duration;
 use tarang::ai::{self, SceneDetectionConfig, SceneDetector, luminance_variance};
 use tarang::core::{
