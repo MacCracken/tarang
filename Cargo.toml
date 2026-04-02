@@ -1,9 +1,9 @@
 [package]
 name = "tarang"
-version = "0.21.3"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.89"
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 description = "AI-native Rust media framework — container parsing, audio/video decoding, codec bindings, media analysis"
 homepage = "https://github.com/MacCracken/tarang"
 repository = "https://github.com/MacCracken/tarang"

@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.0.0
+
+First stable release. Public API frozen under SemVer.
+
+### Breaking changes
+
+- **`AudioBuffer`, `VideoFrame`, `MediaInfo`, `Packet`** — marked `#[non_exhaustive]`; use `::new()` constructors instead of struct literals
+- **`FdkAacDecoder` removed** — replaced by `AacDecoder` backed by shravan (pure Rust)
+- **`aac-enc`, `aac-dec` features removed** — AAC encode/decode always available via shravan
+- **`opus-enc` feature** — no longer pulls `opus` (libopus FFI); Opus encoding now pure Rust via shravan
+- **`FileDecoder::open` signature** — accepts `Box<dyn Read + Send>` instead of `Box<dyn symphonia::core::io::MediaSource>`
+- **License identifier** — corrected from `GPL-3.0` (deprecated) to `GPL-3.0-only`
+
+### Audio engine migration
+
+- **symphonia → shravan** — entire audio decode/encode pipeline migrated to AGNOS shravan crate (pure Rust)
+- **Opus encode** — pure Rust CELT-mode encoder via shravan; `opus` (libopus FFI) crate dropped
+- **AAC encode/decode** — pure Rust via shravan; `fdk-aac` (libfdk-aac FFI) crate dropped
+- **ALAC decode** — new, via shravan; MP4 demuxer already extracts raw ALAC frames
+- All audio codecs now pure Rust: WAV, FLAC, MP3, Vorbis, Opus, AAC, ALAC, AIFF, PCM
+
+### New dependencies
+
+- **shravan 1.1** — AGNOS audio codec engine (replaces symphonia, opus, fdk-aac)
+- **mabda 1.0** — GPU compute pipeline (Vulkan/wgpu), behind `gpu` feature
+- **ai-hwaccel 1.0** — bumped from 0.21.3; cached/lazy registry, detection warnings, `Gpu` backend kind
+
+### API additions
+
+- **`AudioBuffer::new()`** — constructor for `#[non_exhaustive]` struct
+- **`VideoFrame::new()`** — constructor for `#[non_exhaustive]` struct
+- **`MediaInfo::new(format, streams)`** — constructor with auto-generated UUID
+- **`Packet::new(stream_index, data, timestamp)`** — constructor with defaults
+- **`AacDecoder`** — pure Rust AAC decoder with `decode_adts()` and `decode_frame()` methods
+- **`CodecBackendKind::Gpu`** — new variant for mabda GPU compute pipeline
+- **`hwaccel::cached_registry(ttl)`** — cached hardware detection with TTL
+- **`hwaccel::lazy_registry()`** — deferred hardware detection
+- **`hwaccel::report_from_registry()`** — build report from existing registry
+- **`hwaccel::detection_warnings()`** — surface detection issues
+- **`#[must_use]`** on `has_video()`, `has_audio()`, `can_decode()`, `can_encode()`, `best_decode()`, `best_encode()`, and hwaccel query methods
+- **`#[non_exhaustive]`** on `ScaleFilter`, `ThumbnailStrategy`, `CodecBackendKind`
+
+### Scaffold hardening (P-1)
+
+- **Clippy fixes** — unnecessary casts, `div_ceil`, `while let`, collapsible if
+- **unwrap() removal** — 4 instances in library code replaced with proper error propagation
+- **Clone optimization** — eliminated redundant clone+move pattern in all 4 demuxers
+- **Tracing** — added to `FileDecoder::open`, `open_path`, `decode_all`, `compute_fingerprint`
+- **Field documentation** — all fields on `MediaInfo` and `Packet` now documented
+
+### Dependency updates
+
+- **ai-hwaccel** 0.21.3 → 1.0.0
+- **cpal** 0.15 → 0.17 (`SampleRate` newtype → `u32`)
+- **criterion** 0.5 → 0.8 (`criterion::black_box` → `std::hint::black_box`)
+- **libde265-rs** 0.2.0 → 0.2.1 (dropped `system-libde265` feature, 10+ transitive deps removed)
+- **bote** path dep → crates.io `"0.90"`
+- **51 minor/patch updates** across the dependency tree
+- **Removed**: `symphonia`, `opus`, `fdk-aac` (replaced by shravan)
+
+### CI & quality
+
+- **Downstream consumers** — added Kiran to CI matrix (Jalwa, Tazama, Shruti, Kiran)
+- **deny.toml** — added `GPL-3.0-only`, `CC0-1.0` licenses; fixed wildcard dep
+- **Coverage** — 89.57% line coverage (excluding mcp/main), 876 tests
+- **Fuzzing** — all 4 demuxer targets (WAV, MP4, MKV, OGG) pass with 0 crashes over 50.8M runs
+
 ## 0.21.3
 
 Pre-v1.0 hardening: performance optimizations, cross-platform support, API cleanup, CI expansion.

@@ -6,47 +6,22 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ---
 
-## 0.21.3 — Pre-v1.0 hardening
-
-- [ ] **Publish 0.21.3 to crates.io** — `cargo publish --dry-run`, tag, push
-
----
-
-## 0.22.3
-
-- [x] **Review ai-hwaccel feature set** — bumped to v1.0.0; added cached/lazy registry, detection warnings, report_from_registry, GPU backend kind for mabda pipeline
-
----
-
-## v1.0.0 criteria
-
-All of the following must be true before cutting 1.0:
-
-- [ ] Public API reviewed and marked stable (no `#[non_exhaustive]` additions expected)
-- [ ] All `Demuxer`/`Muxer`/`AudioEncoder` traits finalized
-- [ ] Core types (`AudioBuffer`, `VideoFrame`, `MediaInfo`, `Packet`) frozen
-- [ ] 89%+ line coverage (library code, excluding mcp/main)
-- [ ] All demuxer fuzz targets passing with 0 crashes after 1M iterations
-- [ ] At least one downstream consumer (Jalwa, Tazama, Shruti, or Kiran) running on stable tarang
-- [ ] docs.rs documentation complete with examples for every public module
-- [ ] No `unsafe` blocks without `// SAFETY:` comments
-- [ ] `cargo-vet` fully audited (zero exemptions for direct dependencies)
-- [x] `cros-libva` patch accepted — 1-line `..Default::default()` fix for libva >= 1.23 VP9 struct compat; upstream 0.0.13 still latest, no release in sight. Patch is stable, tested, minimal. Will remove when upstream > 0.0.13 ships or when AGNOS fork replaces it.
-- [ ] SemVer compliance enforced via `cargo-semver-checks` in CI
-
----
-
 ## Post-v1
 
 Longer-term items that don't block any release.
 
-### New codec backends
+### Pure Rust codec backends (drop remaining C FFI deps)
 
-- [ ] **AV1 decode via rav1e** — if rav1e adds decode support, replace dav1d for pure-Rust AV1
-- [ ] **VP8/VP9 pure Rust** — when a viable pure-Rust VP8/VP9 decoder exists, add as alternative to libvpx
-- [x] **Drop opus dep** — Opus encode now via shravan (CELT-mode)
-- [x] **Drop fdk-aac dep** — AAC encode/decode now via shravan
-- [ ] **ALAC decode** — waiting on shravan to add ALAC support (tracked in shravan roadmap)
+- [ ] **AV1 decode** — replace dav1d (C FFI); reference impl via vidya
+- [ ] **AV1 encode** — replace rav1e or complement with AGNOS encoder; reference impl via vidya
+- [ ] **H.264 decode/encode** — replace openh264 (C FFI); reference impl via vidya
+- [ ] **H.265 decode** — replace libde265 (C FFI); reference impl via vidya
+- [ ] **VP8/VP9 decode/encode** — replace libvpx (C FFI); reference impl via vidya
+
+### Patches to remove
+
+- [ ] **cros-libva patch** — 1-line `..Default::default()` fix for libva >= 1.23 VP9 struct compat; remove when upstream > 0.0.13 ships or AGNOS fork replaces it
+- [ ] **env-libvpx-sys patch** — bindgen 0.72 bump + fallback bindings; remove when replaced by chitrsys
 
 ### Platform support
 
