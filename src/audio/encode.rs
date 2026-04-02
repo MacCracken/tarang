@@ -203,7 +203,6 @@ pub fn create_encoder(config: &EncoderConfig) -> Result<Box<dyn AudioEncoder>> {
         AudioCodec::Flac => Ok(Box::new(super::FlacEncoder::new(config)?)),
         #[cfg(feature = "opus-enc")]
         AudioCodec::Opus => Ok(Box::new(super::OpusEncoder::new(config)?)),
-        #[cfg(feature = "aac-enc")]
         AudioCodec::Aac => Ok(Box::new(super::AacEncoder::new(config)?)),
         other => Err(TarangError::UnsupportedCodec(
             format!("no encoder for {other}").into(),

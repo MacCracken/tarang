@@ -85,6 +85,7 @@ pub(crate) fn map_shravan_format(fmt: shravan::format::AudioFormat) -> AudioCode
         shravan::format::AudioFormat::Mp3 => AudioCodec::Mp3,
         shravan::format::AudioFormat::Opus => AudioCodec::Opus,
         shravan::format::AudioFormat::Aiff => AudioCodec::Pcm,
+        shravan::format::AudioFormat::Alac => AudioCodec::Alac,
         shravan::format::AudioFormat::RawPcm => AudioCodec::Pcm,
         _ => AudioCodec::Pcm,
     }
@@ -99,6 +100,7 @@ fn map_format_to_container(fmt: shravan::format::AudioFormat) -> ContainerFormat
         shravan::format::AudioFormat::Mp3 => ContainerFormat::Mp3,
         shravan::format::AudioFormat::Opus => ContainerFormat::Ogg,
         shravan::format::AudioFormat::Aiff => ContainerFormat::Wav,
+        shravan::format::AudioFormat::Alac => ContainerFormat::Mp4,
         shravan::format::AudioFormat::RawPcm => ContainerFormat::Wav,
         _ => ContainerFormat::Mp4,
     }

@@ -44,7 +44,8 @@ Longer-term items that don't block any release.
 
 - [ ] **AV1 decode via rav1e** — if rav1e adds decode support, replace dav1d for pure-Rust AV1
 - [ ] **VP8/VP9 pure Rust** — when a viable pure-Rust VP8/VP9 decoder exists, add as alternative to libvpx
-- [ ] **Drop opus/fdk-aac deps** — waiting on shravan to add Opus encode, AAC decode/encode (tracked in shravan roadmap)
+- [x] **Drop opus dep** — Opus encode now via shravan (CELT-mode)
+- [x] **Drop fdk-aac dep** — AAC encode/decode now via shravan
 - [ ] **ALAC decode** — waiting on shravan to add ALAC support (tracked in shravan roadmap)
 
 ### Platform support

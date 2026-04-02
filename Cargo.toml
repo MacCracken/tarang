@@ -13,9 +13,9 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "aac-dec", "hwaccel", "gpu"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "hwaccel", "gpu"]
 # All codecs except platform-specific hw accel (vaapi, pipewire excluded)
-portable = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "opus-enc", "aac-enc", "aac-dec", "hwaccel", "gpu"]
+portable = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "opus-enc", "hwaccel", "gpu"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]
@@ -33,9 +33,7 @@ hwaccel = ["dep:ai-hwaccel"]
 # Audio
 cpal-output = ["dep:cpal"]
 pipewire = ["dep:pipewire"]
-opus-enc = ["dep:opus"]
-aac-enc = ["dep:fdk-aac"]
-aac-dec = ["dep:fdk-aac"]
+opus-enc = []
 
 [dependencies]
 # Core
@@ -60,7 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 
 # Audio codec engine (AGNOS)
-shravan = { version = "1", features = ["full"] }
+shravan = { version = "1.1", features = ["full"] }
 
 # AI / analysis
 rustfft = "6"
@@ -69,8 +67,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # Optional audio encoders/output
 cpal = { version = "0.17", optional = true }
 pipewire = { version = "0.9", optional = true }
-opus = { version = "0.3", optional = true }
-fdk-aac = { version = "0.8", optional = true }
 
 # Optional video codecs
 dav1d = { version = "0.11", optional = true }

@@ -16,8 +16,8 @@
 //! | FLAC | yes | yes | shravan / pure Rust encoder |
 //! | Vorbis | yes | - | shravan |
 //! | Opus | yes | yes | shravan / libopus FFI (`opus-enc`) |
-//! | AAC | yes* | yes* | fdk-aac FFI (`aac-dec` / `aac-enc`) |
-//! | ALAC | - | - | — |
+//! | AAC | yes | yes | shravan (pure Rust) |
+//! | ALAC | yes | - | shravan (pure Rust) |
 //! | PCM | yes | yes | pure Rust (16/24/32-bit) |
 //!
 //! ### Video codecs (feature-gated)
@@ -29,8 +29,7 @@
 //! | VP8/VP9 | libvpx | libvpx | `vpx` / `vpx-enc` |
 //! | H.265 | VA-API hw only | VA-API | `vaapi` + `hwaccel` |
 //!
-//! *\* AAC encoding requires the `libfdk-aac` system library (LGPL-2.1).
-//! No pure-Rust AAC encoder exists yet. If linking fdk-aac is not possible,
+//! Audio codecs are pure Rust via shravan. If linking system libraries is not possible,
 //! use Opus (`opus-enc`) or FLAC as alternatives.*
 //!
 //! *H.265 decode has no free software decoder. Use
@@ -118,8 +117,6 @@
 //! | `cpal-output` | Cross-platform audio output (CoreAudio, WASAPI, ALSA) |
 //! | `pipewire` | PipeWire audio output (Linux) |
 //! | `opus-enc` | Opus encoding via libopus |
-//! | `aac-enc` | AAC encoding via fdk-aac |
-//! | `aac-dec` | AAC decoding via fdk-aac |
 //!
 //! Default features: none. Audio decoding (shravan) and all container
 //! demuxing/muxing are always available.

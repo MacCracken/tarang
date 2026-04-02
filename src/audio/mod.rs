@@ -15,11 +15,9 @@
 //! ```
 
 mod decode;
-#[cfg(feature = "aac-dec")]
 pub mod decode_aac;
 pub mod effects;
 mod encode;
-#[cfg(feature = "aac-enc")]
 mod encode_aac;
 mod encode_flac;
 #[cfg(feature = "opus-enc")]
@@ -32,10 +30,8 @@ mod resample;
 pub(crate) mod sample;
 
 pub use decode::FileDecoder;
-#[cfg(feature = "aac-dec")]
-pub use decode_aac::FdkAacDecoder;
+pub use decode_aac::AacDecoder;
 pub use encode::{AudioEncoder, EncoderConfig, PcmEncoder, create_encoder};
-#[cfg(feature = "aac-enc")]
 pub use encode_aac::AacEncoder;
 pub use encode_flac::FlacEncoder;
 #[cfg(feature = "opus-enc")]
