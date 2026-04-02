@@ -52,11 +52,7 @@ impl OpusEncoder {
         // shravan's Opus encoder currently requires 48kHz
         if config.sample_rate != 48000 {
             return Err(TarangError::UnsupportedCodec(
-                format!(
-                    "Opus encoder requires 48 kHz, got {}",
-                    config.sample_rate
-                )
-                .into(),
+                format!("Opus encoder requires 48 kHz, got {}", config.sample_rate).into(),
             ));
         }
 
@@ -86,8 +82,9 @@ impl AudioEncoder for OpusEncoder {
         }
 
         let samples = std::mem::take(&mut self.samples);
-        let encoded = shravan::opus::encode(&samples, self.sample_rate, self.channels, self.bitrate)
-            .map_err(|e| TarangError::EncodeError(format!("Opus encode error: {e}").into()))?;
+        let encoded =
+            shravan::opus::encode(&samples, self.sample_rate, self.channels, self.bitrate)
+                .map_err(|e| TarangError::EncodeError(format!("Opus encode error: {e}").into()))?;
 
         Ok(vec![encoded])
     }

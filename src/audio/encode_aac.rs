@@ -66,9 +66,8 @@ impl AudioEncoder for AacEncoder {
         }
 
         let samples = std::mem::take(&mut self.samples);
-        let encoded =
-            shravan::aac::encode(&samples, self.sample_rate, self.channels, self.bitrate)
-                .map_err(|e| TarangError::EncodeError(format!("AAC encode error: {e}").into()))?;
+        let encoded = shravan::aac::encode(&samples, self.sample_rate, self.channels, self.bitrate)
+            .map_err(|e| TarangError::EncodeError(format!("AAC encode error: {e}").into()))?;
 
         Ok(vec![encoded])
     }
