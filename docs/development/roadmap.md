@@ -14,7 +14,7 @@ Completed items are in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## 0.22.3
 
-- [ ] **Review ai-hwaccel feature set** — audit ai-hwaccel 0.21.3 API surface for new capabilities (NPU detection, workload planning); update hwaccel.rs integration if needed
+- [x] **Review ai-hwaccel feature set** — bumped to v1.0.0; added cached/lazy registry, detection warnings, report_from_registry, GPU backend kind for mabda pipeline
 
 ---
 
@@ -27,11 +27,11 @@ All of the following must be true before cutting 1.0:
 - [ ] Core types (`AudioBuffer`, `VideoFrame`, `MediaInfo`, `Packet`) frozen
 - [ ] 89%+ line coverage (library code, excluding mcp/main)
 - [ ] All demuxer fuzz targets passing with 0 crashes after 1M iterations
-- [ ] At least one downstream consumer (Jalwa, Tazama, or Shruti) running on stable tarang
+- [ ] At least one downstream consumer (Jalwa, Tazama, Shruti, or Kiran) running on stable tarang
 - [ ] docs.rs documentation complete with examples for every public module
 - [ ] No `unsafe` blocks without `// SAFETY:` comments
 - [ ] `cargo-vet` fully audited (zero exemptions for direct dependencies)
-- [ ] `cros-libva` patch removed (waiting for upstream > 0.0.13 release)
+- [x] `cros-libva` patch accepted — 1-line `..Default::default()` fix for libva >= 1.23 VP9 struct compat; upstream 0.0.13 still latest, no release in sight. Patch is stable, tested, minimal. Will remove when upstream > 0.0.13 ships or when AGNOS fork replaces it.
 - [ ] SemVer compliance enforced via `cargo-semver-checks` in CI
 
 ---
@@ -43,9 +43,9 @@ Longer-term items that don't block any release.
 ### New codec backends
 
 - [ ] **AV1 decode via rav1e** — if rav1e adds decode support, replace dav1d for pure-Rust AV1
-- [ ] **Opus decode via pure Rust** — replace symphonia's Opus with a dedicated decoder for lower latency
-- [ ] **FLAC decode via tarang** — replace symphonia's FLAC with our own encoder running in reverse (roundtrip validation)
 - [ ] **VP8/VP9 pure Rust** — when a viable pure-Rust VP8/VP9 decoder exists, add as alternative to libvpx
+- [ ] **Drop opus/fdk-aac deps** — waiting on shravan to add Opus encode, AAC decode/encode (tracked in shravan roadmap)
+- [ ] **ALAC decode** — waiting on shravan to add ALAC support (tracked in shravan roadmap)
 
 ### Platform support
 

@@ -217,7 +217,7 @@ impl DecoderConfig {
                         hw_accel: true,
                     })
                 }
-                CodecBackendKind::Software => Self::for_codec(codec),
+                _ => Self::for_codec(codec),
             }
         } else {
             // No path at all — try software for a better error message.
@@ -860,5 +860,155 @@ mod tests {
 
         let result2 = decoder2.send_packet(&[0x02], Duration::ZERO);
         assert!(result2.is_err(), "height > 8192 should be rejected");
+    }
+
+    #[test]
+    fn supported_codecs_with_hw_includes_software() {
+        let codecs = supported_codecs_with_hw();
+        // Should always include software Theora at minimum
+        assert!(codecs.contains(&(VideoCodec::Theora, DecoderBackend::Software)));
+    }
+
+    #[test]
+    fn decoder_config_debug() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("Theora"));
+        assert!(debug.contains("Software"));
+    }
+
+    #[test]
+    fn decoder_status_debug() {
+        assert!(format!("{:?}", DecoderStatus::Ready).contains("Ready"));
+        assert!(format!("{:?}", DecoderStatus::NeedsInput).contains("NeedsInput"));
+        assert!(format!("{:?}", DecoderStatus::HasOutput).contains("HasOutput"));
+        assert!(format!("{:?}", DecoderStatus::Flushed).contains("Flushed"));
+    }
+
+    #[test]
+    fn decoder_backend_debug() {
+        assert!(format!("{:?}", DecoderBackend::Dav1d).contains("Dav1d"));
+        assert!(format!("{:?}", DecoderBackend::OpenH264).contains("OpenH264"));
+        assert!(format!("{:?}", DecoderBackend::LibVpx).contains("LibVpx"));
+        assert!(format!("{:?}", DecoderBackend::Software).contains("Software"));
+        assert!(format!("{:?}", DecoderBackend::Vaapi).contains("Vaapi"));
+    }
+
+    #[test]
+    fn decoder_send_after_flush() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+        decoder.flush().unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::Flushed);
+
+        // Sending after flush should still work (stub decoder)
+        decoder
+            .send_packet(&[0x42], Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::HasOutput);
+        let frame = decoder.receive_frame().unwrap();
+        assert_eq!(frame.timestamp, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn decoder_init_updates_stub_dimensions() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+
+        // Without init, stub uses 320x240
+        decoder.send_packet(&[0x01], Duration::ZERO).unwrap();
+        let frame1 = decoder.receive_frame().unwrap();
+        assert_eq!(frame1.width, 320);
+        assert_eq!(frame1.height, 240);
+
+        // After init, uses specified dimensions
+        decoder.init(&VideoStreamInfo {
+            codec: VideoCodec::Theora,
+            width: 800,
+            height: 600,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 30.0,
+            bitrate: None,
+            duration: None,
+        });
+
+        decoder.send_packet(&[0x02], Duration::ZERO).unwrap();
+        let frame2 = decoder.receive_frame().unwrap();
+        assert_eq!(frame2.width, 800);
+        assert_eq!(frame2.height, 600);
+    }
+
+    #[test]
+    fn decoder_config_clone() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let cloned = config.clone();
+        assert_eq!(cloned.codec, config.codec);
+        assert_eq!(cloned.backend, config.backend);
+        assert_eq!(cloned.thread_count, config.thread_count);
+        assert_eq!(cloned.hw_accel, config.hw_accel);
+    }
+
+    #[test]
+    fn decoder_status_copy() {
+        let status = DecoderStatus::HasOutput;
+        let copied = status;
+        assert_eq!(status, copied);
+    }
+
+    #[test]
+    fn decoder_backend_copy() {
+        let backend = DecoderBackend::Software;
+        let copied = backend;
+        assert_eq!(backend, copied);
+    }
+
+    #[test]
+    fn decoder_receive_after_multiple_sends_without_receive() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+
+        // Send 3 packets without receiving
+        for i in 0..3u64 {
+            decoder
+                .send_packet(&[i as u8], Duration::from_millis(i * 33))
+                .unwrap();
+        }
+
+        // Should get 3 frames back (stub produces one per send)
+        // pending_frames uses Vec::pop (LIFO), so order is reversed
+        for _ in 0..3 {
+            let _frame = decoder.receive_frame().unwrap();
+        }
+        assert_eq!(decoder.frames_decoded(), 3);
+
+        // Next receive should error
+        assert!(decoder.receive_frame().is_err());
+    }
+
+    #[test]
+    fn flush_with_buffered_frames() {
+        let config = DecoderConfig::for_codec(VideoCodec::Theora).unwrap();
+        let mut decoder = VideoDecoder::new(config).unwrap();
+
+        // Send a packet and leave frame buffered
+        decoder
+            .send_packet(&[0x01], Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::HasOutput);
+
+        // Flush should transition to HasOutput (frame still pending)
+        decoder.flush().unwrap();
+        assert_eq!(decoder.status(), DecoderStatus::HasOutput);
+
+        // Can still receive the pending frame
+        let frame = decoder.receive_frame().unwrap();
+        assert_eq!(frame.timestamp, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn num_cpus_reasonable() {
+        let cpus = num_cpus();
+        assert!(cpus >= 1);
+        assert!(cpus <= 1024); // sanity upper bound
     }
 }

@@ -23,8 +23,12 @@
 //! ```
 
 use crate::core::VideoCodec;
-use ai_hwaccel::{AcceleratorFamily, AcceleratorProfile, AcceleratorRegistry, AcceleratorType};
+use ai_hwaccel::{
+    AcceleratorFamily, AcceleratorProfile, AcceleratorRegistry, AcceleratorType, CachedRegistry,
+    LazyRegistry,
+};
 use std::fmt;
+use std::time::Duration;
 
 /// Summary of a single detected accelerator, tailored for tarang's needs.
 #[derive(Debug, Clone)]
@@ -63,11 +67,13 @@ pub struct HardwareReport {
 
 impl HardwareReport {
     /// Whether any GPU with Vulkan compute support was found.
+    #[must_use]
     pub fn has_vulkan_compute(&self) -> bool {
         self.accelerators.iter().any(|a| a.vulkan_compute)
     }
 
     /// Whether any dedicated GPU is available.
+    #[must_use]
     pub fn has_gpu(&self) -> bool {
         self.accelerators
             .iter()
@@ -75,6 +81,7 @@ impl HardwareReport {
     }
 
     /// Whether any NPU/TPU/ASIC accelerator is available.
+    #[must_use]
     pub fn has_npu(&self) -> bool {
         self.accelerators.iter().any(|a| {
             matches!(
@@ -85,6 +92,7 @@ impl HardwareReport {
     }
 
     /// Get the best accelerator (most memory) or None if only CPU.
+    #[must_use]
     pub fn best_accelerator(&self) -> Option<&AcceleratorInfo> {
         self.accelerators
             .iter()
@@ -123,6 +131,8 @@ pub enum CodecBackendKind {
     Software,
     /// VA-API hardware path (Linux DRM render node).
     Vaapi,
+    /// GPU compute pipeline via mabda (Vulkan/wgpu).
+    Gpu,
 }
 
 impl fmt::Display for CodecBackendKind {
@@ -130,6 +140,7 @@ impl fmt::Display for CodecBackendKind {
         match self {
             Self::Software => write!(f, "software"),
             Self::Vaapi => write!(f, "vaapi"),
+            Self::Gpu => write!(f, "gpu"),
         }
     }
 }
@@ -161,22 +172,26 @@ pub struct CodecCapabilities {
 
 impl CodecCapabilities {
     /// Check if any decode path exists for the given codec.
+    #[must_use]
     pub fn can_decode(&self, codec: VideoCodec) -> bool {
         self.decode.iter().any(|e| e.codec == codec)
     }
 
     /// Check if any encode path exists for the given codec.
+    #[must_use]
     pub fn can_encode(&self, codec: VideoCodec) -> bool {
         self.encode.iter().any(|e| e.codec == codec)
     }
 
     /// Best decode entry for a codec (hardware preferred over software).
+    #[must_use]
     pub fn best_decode(&self, codec: VideoCodec) -> Option<&CodecEntry> {
         // List is sorted hw-first, so first match is best.
         self.decode.iter().find(|e| e.codec == codec)
     }
 
     /// Best encode entry for a codec (hardware preferred over software).
+    #[must_use]
     pub fn best_encode(&self, codec: VideoCodec) -> Option<&CodecEntry> {
         self.encode.iter().find(|e| e.codec == codec)
     }
@@ -371,6 +386,63 @@ pub fn probe_hardware() -> HardwareReport {
 /// sharding plans, or filtered queries not exposed by [`HardwareReport`].
 pub fn accelerator_registry() -> AcceleratorRegistry {
     AcceleratorRegistry::detect()
+}
+
+/// Create a cached hardware registry that re-probes at most every `ttl`.
+///
+/// Hardware detection is expensive (probes sysfs, spawns tools like
+/// `nvidia-smi`). Use this when calling from hot paths or repeated
+/// operations. The first call triggers detection; subsequent calls within
+/// `ttl` return the cached result.
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "hwaccel")]
+/// # {
+/// use std::time::Duration;
+/// let cache = tarang::hwaccel::cached_registry(Duration::from_secs(300));
+/// let reg = cache.get(); // detects on first call, cached after
+/// # }
+/// ```
+pub fn cached_registry(ttl: Duration) -> CachedRegistry {
+    CachedRegistry::new(ttl)
+}
+
+/// Create a lazy hardware registry that only detects on first access.
+///
+/// Unlike [`accelerator_registry`] which detects immediately, this defers
+/// detection until the first query. Useful when hardware info may never
+/// be needed (e.g. software-only decode paths).
+pub fn lazy_registry() -> LazyRegistry {
+    LazyRegistry::new()
+}
+
+/// Build a [`HardwareReport`] from an existing registry.
+///
+/// Use with [`cached_registry`] or [`lazy_registry`] to avoid redundant
+/// detection when you already have a registry handle.
+pub fn report_from_registry(registry: &AcceleratorRegistry) -> HardwareReport {
+    let accelerators: Vec<AcceleratorInfo> = registry
+        .all_profiles()
+        .iter()
+        .filter(|p| p.available)
+        .map(profile_to_info)
+        .collect();
+    let total_accel_memory = registry.total_accelerator_memory();
+    let total_system_memory = registry.total_memory();
+
+    HardwareReport {
+        accelerators,
+        total_accel_memory,
+        total_system_memory,
+    }
+}
+
+/// Retrieve any warnings from hardware detection (missing tools, parse errors, etc.).
+///
+/// Useful for diagnostics — e.g. "nvidia-smi not found" or "vulkaninfo
+/// returned unexpected output".
+pub fn detection_warnings(registry: &AcceleratorRegistry) -> Vec<String> {
+    registry.warnings().iter().map(|w| w.to_string()).collect()
 }
 
 #[cfg(test)]
@@ -588,5 +660,39 @@ mod tests {
     fn codec_backend_kind_display() {
         assert_eq!(CodecBackendKind::Software.to_string(), "software");
         assert_eq!(CodecBackendKind::Vaapi.to_string(), "vaapi");
+        assert_eq!(CodecBackendKind::Gpu.to_string(), "gpu");
+    }
+
+    #[test]
+    fn cached_registry_returns_consistent_results() {
+        let cache = cached_registry(Duration::from_secs(60));
+        let r1 = cache.get();
+        let r2 = cache.get();
+        // Same detection, same profile count
+        assert_eq!(r1.all_profiles().len(), r2.all_profiles().len());
+    }
+
+    #[test]
+    fn lazy_registry_defers_detection() {
+        let lazy = lazy_registry();
+        // No detection has happened yet — probed_profiles triggers it
+        let profiles = lazy.probed_profiles();
+        // Should have at least CPU
+        assert!(!profiles.is_empty());
+    }
+
+    #[test]
+    fn report_from_existing_registry() {
+        let reg = AcceleratorRegistry::detect();
+        let report = report_from_registry(&reg);
+        assert!(report.total_system_memory > 0);
+    }
+
+    #[test]
+    fn detection_warnings_returns_vec() {
+        let reg = AcceleratorRegistry::detect();
+        let warnings = detection_warnings(&reg);
+        // Warnings may or may not exist — just confirm no panic
+        let _ = warnings;
     }
 }

@@ -13,14 +13,14 @@ fn make_sine_f32(sample_rate: u32, channels: u16, num_frames: usize) -> AudioBuf
         let s = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
         data.extend_from_slice(&s.to_le_bytes());
     }
-    AudioBuffer {
-        data: Bytes::from(data),
-        sample_format: SampleFormat::F32,
+    AudioBuffer::new(
+        Bytes::from(data),
+        SampleFormat::F32,
         channels,
         sample_rate,
         num_frames,
-        timestamp: Duration::ZERO,
-    }
+        Duration::ZERO,
+    )
 }
 
 fn bench_resample_linear(c: &mut Criterion) {

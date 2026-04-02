@@ -1,4 +1,4 @@
-//! Audio file probing via symphonia
+//! Audio file probing via shravan
 //!
 //! # Example
 //! ```rust,ignore
@@ -14,94 +14,50 @@ use crate::core::{
     TarangError,
 };
 use std::collections::HashMap;
+use std::io::Read;
 
-/// Probe an audio file and return metadata using symphonia
-pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
-    use symphonia::core::formats::FormatOptions;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
+/// Probe an audio file and return metadata using shravan
+pub fn probe_audio(mut reader: std::fs::File) -> Result<MediaInfo> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data).map_err(TarangError::Io)?;
 
-    let mss = MediaSourceStream::new(Box::new(reader), Default::default());
-    let hint = Hint::new();
-    let format_opts = FormatOptions::default();
-    let meta_opts = MetadataOptions::default();
-
-    let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &format_opts, &meta_opts)
-        .map_err(|e| TarangError::DemuxError(format!("symphonia probe failed: {e}").into()))?;
-
-    let mut format = probed.format;
-    let mut metadata_log = probed.metadata;
-
-    // Extract metadata tags from both the probe metadata log and the format reader
-    let mut tags = HashMap::new();
-    if let Some(meta) = metadata_log.get()
-        && let Some(rev) = meta.current()
-    {
-        extract_tags(rev, &mut tags);
-    }
-    if let Some(rev) = format.metadata().current() {
-        extract_tags(rev, &mut tags);
+    if data.is_empty() {
+        return Err(TarangError::DemuxError("empty file".into()));
     }
 
-    // Detect container format from symphonia's codec registry name
-    let container = {
-        let name = format.default_track().map(|t| t.codec_params.codec);
-        // Symphonia doesn't directly expose container format, but we can infer
-        // from the format reader's track codec types and the probe result.
-        // For now, map based on the first track's codec.
-        match name {
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_FLAC => ContainerFormat::Flac,
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_VORBIS => ContainerFormat::Ogg,
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_OPUS => ContainerFormat::Ogg,
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_MP3 => ContainerFormat::Mp3,
-            Some(c)
-                if c == symphonia::core::codecs::CODEC_TYPE_PCM_S16LE
-                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S16BE
-                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S24LE
-                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_S32LE
-                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_F32LE
-                    || c == symphonia::core::codecs::CODEC_TYPE_PCM_F64LE =>
-            {
-                ContainerFormat::Wav
-            }
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_AAC => ContainerFormat::Mp4,
-            Some(c) if c == symphonia::core::codecs::CODEC_TYPE_ALAC => ContainerFormat::Mp4,
-            _ => ContainerFormat::Mp4, // fallback
-        }
+    let audio_format = shravan::format::detect_format(&data)
+        .map_err(|e| TarangError::DemuxError(format!("shravan probe failed: {e}").into()))?;
+
+    let container = map_format_to_container(audio_format);
+    let codec = map_shravan_format(audio_format);
+
+    let (info, _samples) = shravan::codec::open(&data)
+        .map_err(|e| TarangError::DemuxError(format!("shravan decode failed: {e}").into()))?;
+
+    // Extract metadata tags
+    let tags = extract_tags_from_data(&data);
+
+    let total_samples = info.total_samples;
+    let duration = if total_samples > 0 && info.sample_rate > 0 {
+        Some(std::time::Duration::from_secs_f64(
+            total_samples as f64 / info.sample_rate as f64,
+        ))
+    } else {
+        None
     };
 
-    let mut streams = Vec::new();
+    let bitrate = (info.bit_depth as u32)
+        .checked_mul(info.sample_rate)
+        .and_then(|b| b.checked_mul(info.channels as u32));
 
-    for track in format.tracks() {
-        let params = &track.codec_params;
-        let codec = map_symphonia_codec(params.codec);
-        let Some(codec) = codec else { continue };
-
-        let sample_rate = params.sample_rate.unwrap_or(44100);
-        let channels = params.channels.map(|c| c.count() as u16).unwrap_or(2);
-
-        let duration = params
-            .n_frames
-            .map(|n| std::time::Duration::from_secs_f64(n as f64 / sample_rate as f64));
-
-        streams.push(StreamInfo::Audio(AudioStreamInfo {
-            codec,
-            sample_rate,
-            channels,
-            sample_format: SampleFormat::F32,
-            bitrate: params
-                .bits_per_coded_sample
-                .and_then(|b| sample_rate.checked_mul(channels as u32)?.checked_mul(b)),
-            duration,
-        }));
-    }
-
-    let duration = streams.iter().find_map(|s| match s {
-        StreamInfo::Audio(a) => a.duration,
-        _ => None,
-    });
+    let streams = vec![StreamInfo::Audio(AudioStreamInfo {
+        codec,
+        sample_rate: info.sample_rate,
+        channels: info.channels,
+        sample_format: SampleFormat::F32,
+        bitrate,
+        duration,
+    })];
 
     let title = tags.get("title").cloned();
     let artist = tags.get("artist").cloned();
@@ -120,33 +76,64 @@ pub fn probe_audio(reader: std::fs::File) -> Result<MediaInfo> {
     })
 }
 
-/// Extract metadata tags from a symphonia metadata revision into a HashMap.
-fn extract_tags(rev: &symphonia::core::meta::MetadataRevision, tags: &mut HashMap<String, String>) {
-    use symphonia::core::meta::StandardTagKey;
+/// Map shravan `AudioFormat` to our `AudioCodec` enum.
+pub(crate) fn map_shravan_format(fmt: shravan::format::AudioFormat) -> AudioCodec {
+    match fmt {
+        shravan::format::AudioFormat::Wav => AudioCodec::Pcm,
+        shravan::format::AudioFormat::Flac => AudioCodec::Flac,
+        shravan::format::AudioFormat::Ogg => AudioCodec::Vorbis,
+        shravan::format::AudioFormat::Mp3 => AudioCodec::Mp3,
+        shravan::format::AudioFormat::Opus => AudioCodec::Opus,
+        shravan::format::AudioFormat::Aiff => AudioCodec::Pcm,
+        shravan::format::AudioFormat::RawPcm => AudioCodec::Pcm,
+        _ => AudioCodec::Pcm,
+    }
+}
 
-    for tag in rev.tags() {
-        let value = tag.value.to_string();
-        if value.is_empty() {
-            continue;
+/// Map shravan `AudioFormat` to our `ContainerFormat` enum.
+fn map_format_to_container(fmt: shravan::format::AudioFormat) -> ContainerFormat {
+    match fmt {
+        shravan::format::AudioFormat::Wav => ContainerFormat::Wav,
+        shravan::format::AudioFormat::Flac => ContainerFormat::Flac,
+        shravan::format::AudioFormat::Ogg => ContainerFormat::Ogg,
+        shravan::format::AudioFormat::Mp3 => ContainerFormat::Mp3,
+        shravan::format::AudioFormat::Opus => ContainerFormat::Ogg,
+        shravan::format::AudioFormat::Aiff => ContainerFormat::Wav,
+        shravan::format::AudioFormat::RawPcm => ContainerFormat::Wav,
+        _ => ContainerFormat::Mp4,
+    }
+}
+
+/// Extract metadata tags from raw audio data using shravan's tag parsers.
+fn extract_tags_from_data(data: &[u8]) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+
+    // Try ID3v2 tags (MP3 files)
+    if let Ok(meta) = shravan::tag::read_id3v2(data) {
+        if let Some(v) = &meta.title {
+            tags.insert("title".to_string(), v.clone());
         }
-
-        // Map standard tag keys to well-known names
-        if let Some(std_key) = tag.std_key {
-            let key = match std_key {
-                StandardTagKey::TrackTitle => "title",
-                StandardTagKey::Artist => "artist",
-                StandardTagKey::Album => "album",
-                StandardTagKey::TrackNumber => "tracknumber",
-                StandardTagKey::Date => "date",
-                StandardTagKey::Genre => "genre",
-                StandardTagKey::Composer => "composer",
-                StandardTagKey::AlbumArtist => "album_artist",
-                StandardTagKey::Comment => "comment",
-                _ => continue,
-            };
-            tags.insert(key.to_string(), value);
+        if let Some(v) = &meta.artist {
+            tags.insert("artist".to_string(), v.clone());
+        }
+        if let Some(v) = &meta.album {
+            tags.insert("album".to_string(), v.clone());
+        }
+        if let Some(v) = &meta.track_number {
+            tags.insert("tracknumber".to_string(), v.clone());
+        }
+        if let Some(v) = &meta.year {
+            tags.insert("date".to_string(), v.clone());
+        }
+        if let Some(v) = &meta.genre {
+            tags.insert("genre".to_string(), v.clone());
+        }
+        if let Some(v) = &meta.comment {
+            tags.insert("comment".to_string(), v.clone());
         }
     }
+
+    tags
 }
 
 /// Create a minimal WAV file in memory for testing.
@@ -182,24 +169,6 @@ fn make_test_wav(num_samples: u32, sample_rate: u32, channels: u16) -> Vec<u8> {
         }
     }
     buf
-}
-
-/// Map a symphonia codec type to our AudioCodec enum
-pub(crate) fn map_symphonia_codec(codec: symphonia::core::codecs::CodecType) -> Option<AudioCodec> {
-    use symphonia::core::codecs::*;
-    match codec {
-        CODEC_TYPE_FLAC => Some(AudioCodec::Flac),
-        CODEC_TYPE_MP3 => Some(AudioCodec::Mp3),
-        CODEC_TYPE_VORBIS => Some(AudioCodec::Vorbis),
-        CODEC_TYPE_AAC => Some(AudioCodec::Aac),
-        CODEC_TYPE_ALAC => Some(AudioCodec::Alac),
-        CODEC_TYPE_OPUS => Some(AudioCodec::Opus),
-        CODEC_TYPE_PCM_S16LE | CODEC_TYPE_PCM_S16BE | CODEC_TYPE_PCM_S24LE
-        | CODEC_TYPE_PCM_S32LE | CODEC_TYPE_PCM_F32LE | CODEC_TYPE_PCM_F64LE => {
-            Some(AudioCodec::Pcm)
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -297,57 +266,59 @@ mod tests {
     }
 
     #[test]
-    fn map_codec_flac() {
-        use symphonia::core::codecs::*;
-        assert_eq!(map_symphonia_codec(CODEC_TYPE_FLAC), Some(AudioCodec::Flac));
-    }
-
-    #[test]
-    fn map_codec_mp3() {
-        use symphonia::core::codecs::*;
-        assert_eq!(map_symphonia_codec(CODEC_TYPE_MP3), Some(AudioCodec::Mp3));
-    }
-
-    #[test]
-    fn map_codec_vorbis() {
-        use symphonia::core::codecs::*;
+    fn map_format_wav() {
         assert_eq!(
-            map_symphonia_codec(CODEC_TYPE_VORBIS),
-            Some(AudioCodec::Vorbis)
+            map_shravan_format(shravan::format::AudioFormat::Wav),
+            AudioCodec::Pcm
         );
     }
 
     #[test]
-    fn map_codec_aac() {
-        use symphonia::core::codecs::*;
-        assert_eq!(map_symphonia_codec(CODEC_TYPE_AAC), Some(AudioCodec::Aac));
+    fn map_format_flac() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::Flac),
+            AudioCodec::Flac
+        );
     }
 
     #[test]
-    fn map_codec_opus() {
-        use symphonia::core::codecs::*;
-        assert_eq!(map_symphonia_codec(CODEC_TYPE_OPUS), Some(AudioCodec::Opus));
+    fn map_format_mp3() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::Mp3),
+            AudioCodec::Mp3
+        );
     }
 
     #[test]
-    fn map_codec_pcm_variants() {
-        use symphonia::core::codecs::*;
-        for codec in [
-            CODEC_TYPE_PCM_S16LE,
-            CODEC_TYPE_PCM_S16BE,
-            CODEC_TYPE_PCM_S24LE,
-            CODEC_TYPE_PCM_S32LE,
-            CODEC_TYPE_PCM_F32LE,
-            CODEC_TYPE_PCM_F64LE,
-        ] {
-            assert_eq!(map_symphonia_codec(codec), Some(AudioCodec::Pcm));
-        }
+    fn map_format_ogg() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::Ogg),
+            AudioCodec::Vorbis
+        );
     }
 
     #[test]
-    fn map_codec_unknown_returns_none() {
-        use symphonia::core::codecs::CODEC_TYPE_NULL;
-        assert_eq!(map_symphonia_codec(CODEC_TYPE_NULL), None);
+    fn map_format_opus() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::Opus),
+            AudioCodec::Opus
+        );
+    }
+
+    #[test]
+    fn map_format_aiff() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::Aiff),
+            AudioCodec::Pcm
+        );
+    }
+
+    #[test]
+    fn map_format_raw_pcm() {
+        assert_eq!(
+            map_shravan_format(shravan::format::AudioFormat::RawPcm),
+            AudioCodec::Pcm
+        );
     }
 
     #[test]
@@ -372,83 +343,109 @@ mod tests {
     }
 
     #[test]
-    fn extract_tags_populates_hashmap() {
-        use symphonia::core::meta::{MetadataBuilder, StandardTagKey, Tag, Value};
-
-        let mut builder = MetadataBuilder::new();
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::TrackTitle),
-            "TITLE",
-            Value::from("Test Song"),
-        ));
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::Artist),
-            "ARTIST",
-            Value::from("Test Artist"),
-        ));
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::Album),
-            "ALBUM",
-            Value::from("Test Album"),
-        ));
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::Genre),
-            "GENRE",
-            Value::from("Rock"),
-        ));
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::TrackNumber),
-            "TRACKNUMBER",
-            Value::from("3"),
-        ));
-
-        let rev = builder.metadata();
-        let mut tags = HashMap::new();
-        super::extract_tags(&rev, &mut tags);
-
-        assert_eq!(tags.get("title").unwrap(), "Test Song");
-        assert_eq!(tags.get("artist").unwrap(), "Test Artist");
-        assert_eq!(tags.get("album").unwrap(), "Test Album");
-        assert_eq!(tags.get("genre").unwrap(), "Rock");
-        assert_eq!(tags.get("tracknumber").unwrap(), "3");
+    fn map_container_wav() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Wav),
+            ContainerFormat::Wav
+        );
     }
 
     #[test]
-    fn extract_tags_skips_empty_values() {
-        use symphonia::core::meta::{MetadataBuilder, StandardTagKey, Tag, Value};
-
-        let mut builder = MetadataBuilder::new();
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::TrackTitle),
-            "TITLE",
-            Value::from(""),
-        ));
-        builder.add_tag(Tag::new(
-            Some(StandardTagKey::Artist),
-            "ARTIST",
-            Value::from("Valid Artist"),
-        ));
-
-        let rev = builder.metadata();
-        let mut tags = HashMap::new();
-        super::extract_tags(&rev, &mut tags);
-
-        assert!(!tags.contains_key("title"));
-        assert_eq!(tags.get("artist").unwrap(), "Valid Artist");
+    fn map_container_flac() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Flac),
+            ContainerFormat::Flac
+        );
     }
 
     #[test]
-    fn extract_tags_skips_unknown_standard_keys() {
-        use symphonia::core::meta::{MetadataBuilder, Tag, Value};
+    fn map_container_ogg() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Ogg),
+            ContainerFormat::Ogg
+        );
+    }
 
-        let mut builder = MetadataBuilder::new();
-        // Tag with no standard key
-        builder.add_tag(Tag::new(None, "CUSTOM_TAG", Value::from("custom value")));
+    #[test]
+    fn map_container_mp3() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Mp3),
+            ContainerFormat::Mp3
+        );
+    }
 
-        let rev = builder.metadata();
-        let mut tags = HashMap::new();
-        super::extract_tags(&rev, &mut tags);
+    #[test]
+    fn map_container_opus() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Opus),
+            ContainerFormat::Ogg
+        );
+    }
 
+    #[test]
+    fn map_container_aiff() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::Aiff),
+            ContainerFormat::Wav
+        );
+    }
+
+    #[test]
+    fn map_container_raw_pcm() {
+        assert_eq!(
+            map_format_to_container(shravan::format::AudioFormat::RawPcm),
+            ContainerFormat::Wav
+        );
+    }
+
+    #[test]
+    fn probe_wav_bitrate_computed() {
+        // 44100 Hz, 16-bit, 2 channels => bitrate = 44100 * 16 * 2 = 1411200
+        let wav = make_test_wav(4410, 44100, 2);
+        let file = wav_to_tempfile(&wav);
+        let info = probe_audio(file).unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        // shravan reports bit_depth and we compute bitrate from it
+        if let Some(br) = audio[0].bitrate {
+            assert!(br > 0);
+        }
+    }
+
+    #[test]
+    fn probe_wav_format_is_f32() {
+        let wav = make_test_wav(1000, 44100, 1);
+        let file = wav_to_tempfile(&wav);
+        let info = probe_audio(file).unwrap();
+
+        let audio = info.audio_streams().collect::<Vec<_>>();
+        // After shravan decode, sample format should be F32
+        assert_eq!(audio[0].sample_format, SampleFormat::F32);
+    }
+
+    #[test]
+    fn probe_wav_multiple_have_different_uuids() {
+        let wav1 = make_test_wav(100, 44100, 1);
+        let wav2 = make_test_wav(200, 44100, 1);
+        let file1 = wav_to_tempfile(&wav1);
+        let file2 = wav_to_tempfile(&wav2);
+        let info1 = probe_audio(file1).unwrap();
+        let info2 = probe_audio(file2).unwrap();
+        // UUIDs should be different (v4 random)
+        assert_ne!(info1.id, info2.id);
+    }
+
+    #[test]
+    fn extract_tags_from_non_id3_data() {
+        // Random bytes should produce empty tags
+        let data = vec![0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89];
+        let tags = extract_tags_from_data(&data);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn extract_tags_from_empty_data() {
+        let tags = extract_tags_from_data(&[]);
         assert!(tags.is_empty());
     }
 }

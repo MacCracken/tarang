@@ -2,7 +2,7 @@
 //!
 //! Tarang provides container parsing, audio/video decoding, media processing,
 //! and AI-powered content analysis as a single Rust crate. It replaces ffmpeg
-//! with a Rust-owned pipeline: pure Rust audio decoding via symphonia, pure Rust
+//! with a Rust-owned pipeline: pure Rust audio decoding via shravan, pure Rust
 //! container demuxing/muxing, thin C FFI wrappers for video codecs, and LLM
 //! integration through the AGNOS agent ecosystem.
 //!
@@ -12,12 +12,12 @@
 //!
 //! | Codec | Decode | Encode | Backend |
 //! |-------|--------|--------|---------|
-//! | MP3 | yes | - | symphonia (pure Rust) |
-//! | FLAC | yes | yes | symphonia / pure Rust encoder |
-//! | Vorbis | yes | - | symphonia |
-//! | Opus | yes | yes | symphonia / libopus FFI (`opus-enc`) |
-//! | AAC | yes | yes* | symphonia / fdk-aac FFI (`aac-enc`) |
-//! | ALAC | yes | - | symphonia |
+//! | MP3 | yes | - | shravan (pure Rust) |
+//! | FLAC | yes | yes | shravan / pure Rust encoder |
+//! | Vorbis | yes | - | shravan |
+//! | Opus | yes | yes | shravan / libopus FFI (`opus-enc`) |
+//! | AAC | yes* | yes* | fdk-aac FFI (`aac-dec` / `aac-enc`) |
+//! | ALAC | - | - | — |
 //! | PCM | yes | yes | pure Rust (16/24/32-bit) |
 //!
 //! ### Video codecs (feature-gated)
@@ -121,7 +121,7 @@
 //! | `aac-enc` | AAC encoding via fdk-aac |
 //! | `aac-dec` | AAC decoding via fdk-aac |
 //!
-//! Default features: none. Audio decoding (symphonia) and all container
+//! Default features: none. Audio decoding (shravan) and all container
 //! demuxing/muxing are always available.
 //!
 //! ## CLI

@@ -178,28 +178,21 @@ fn resample_same_rate_passthrough() {
 
 #[test]
 fn resample_empty_buffer() {
-    let buf = AudioBuffer {
-        data: Bytes::new(),
-        sample_format: SampleFormat::F32,
-        channels: 1,
-        sample_rate: 44100,
-        num_frames: 0,
-        timestamp: Duration::ZERO,
-    };
+    let buf = AudioBuffer::new(Bytes::new(), SampleFormat::F32, 1, 44100, 0, Duration::ZERO);
     let result = tarang::audio::resample(&buf, 48000);
     assert!(result.is_err());
 }
 
 #[test]
 fn mix_zero_channels() {
-    let buf = AudioBuffer {
-        data: Bytes::from(vec![0u8; 400]),
-        sample_format: SampleFormat::F32,
-        channels: 0,
-        sample_rate: 44100,
-        num_frames: 100,
-        timestamp: Duration::ZERO,
-    };
+    let buf = AudioBuffer::new(
+        Bytes::from(vec![0u8; 400]),
+        SampleFormat::F32,
+        0,
+        44100,
+        100,
+        Duration::ZERO,
+    );
     let result = tarang::audio::mix_channels(&buf, tarang::audio::ChannelLayout::Mono);
     assert!(result.is_err());
 }
@@ -218,14 +211,7 @@ fn mix_mono_to_mono_passthrough() {
 
 #[test]
 fn fingerprint_empty_buffer() {
-    let buf = AudioBuffer {
-        data: Bytes::new(),
-        sample_format: SampleFormat::F32,
-        channels: 1,
-        sample_rate: 44100,
-        num_frames: 0,
-        timestamp: Duration::ZERO,
-    };
+    let buf = AudioBuffer::new(Bytes::new(), SampleFormat::F32, 1, 44100, 0, Duration::ZERO);
     let fp = tarang::ai::compute_fingerprint(&buf, &Default::default()).unwrap();
     assert!(fp.hashes.is_empty());
 }
@@ -234,13 +220,7 @@ fn fingerprint_empty_buffer() {
 fn scene_detector_zero_dimension_frames() {
     let mut detector = tarang::ai::SceneDetector::new(Default::default());
 
-    let frame = VideoFrame {
-        data: Bytes::new(),
-        width: 0,
-        height: 0,
-        pixel_format: PixelFormat::Yuv420p,
-        timestamp: Duration::ZERO,
-    };
+    let frame = VideoFrame::new(Bytes::new(), PixelFormat::Yuv420p, 0, 0, Duration::ZERO);
 
     // Should not panic, should return None
     assert!(detector.feed_frame(&frame).is_none());
@@ -248,13 +228,7 @@ fn scene_detector_zero_dimension_frames() {
 
 #[test]
 fn luminance_variance_empty_frame() {
-    let frame = VideoFrame {
-        data: Bytes::new(),
-        width: 0,
-        height: 0,
-        pixel_format: PixelFormat::Yuv420p,
-        timestamp: Duration::ZERO,
-    };
+    let frame = VideoFrame::new(Bytes::new(), PixelFormat::Yuv420p, 0, 0, Duration::ZERO);
     let var = tarang::ai::luminance_variance(&frame);
     // Should not panic; variance of empty frame is 0
     assert!(var >= 0.0);
@@ -264,17 +238,7 @@ fn luminance_variance_empty_frame() {
 fn analyze_media_minimal_info() {
     use tarang::core::{ContainerFormat, MediaInfo};
 
-    let info = MediaInfo {
-        id: uuid::Uuid::new_v4(),
-        format: ContainerFormat::Wav,
-        streams: vec![],
-        duration: None,
-        file_size: None,
-        title: None,
-        artist: None,
-        album: None,
-        metadata: std::collections::HashMap::new(),
-    };
+    let info = MediaInfo::new(ContainerFormat::Wav, vec![]);
 
     // Should not panic even with no streams
     let analysis = tarang::ai::analyze_media(&info);
@@ -342,14 +306,14 @@ fn make_audio_buffer(sample_rate: u32, channels: u16, num_frames: usize) -> Audi
         let s = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
         data.extend_from_slice(&s.to_le_bytes());
     }
-    AudioBuffer {
-        data: Bytes::from(data),
-        sample_format: SampleFormat::F32,
+    AudioBuffer::new(
+        Bytes::from(data),
+        SampleFormat::F32,
         channels,
         sample_rate,
         num_frames,
-        timestamp: Duration::ZERO,
-    }
+        Duration::ZERO,
+    )
 }
 
 fn make_valid_wav(sample_rate: u32, channels: u16, num_samples: usize) -> Vec<u8> {

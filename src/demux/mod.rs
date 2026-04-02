@@ -34,14 +34,33 @@ use crate::core::{ContainerFormat, Result, TarangError};
 use bytes::Bytes;
 use std::time::Duration;
 
-/// A raw packet extracted from a container
+/// A raw packet extracted from a container.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Packet {
+    /// Index of the stream this packet belongs to (0-based).
     pub stream_index: usize,
+    /// Compressed or raw packet data.
     pub data: Bytes,
+    /// Presentation timestamp.
     pub timestamp: Duration,
+    /// Duration of this packet, if known.
     pub duration: Option<Duration>,
+    /// Whether this packet is a keyframe (random access point).
     pub is_keyframe: bool,
+}
+
+impl Packet {
+    /// Create a new packet.
+    pub fn new(stream_index: usize, data: Bytes, timestamp: Duration) -> Self {
+        Self {
+            stream_index,
+            data,
+            timestamp,
+            duration: None,
+            is_keyframe: false,
+        }
+    }
 }
 
 /// Trait for container demuxers

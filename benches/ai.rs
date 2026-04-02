@@ -15,14 +15,14 @@ fn make_sine_f32(sample_rate: u32, num_frames: usize) -> AudioBuffer {
         let s = (t * 440.0 * std::f32::consts::TAU).sin() * 0.5;
         data.extend_from_slice(&s.to_le_bytes());
     }
-    AudioBuffer {
-        data: Bytes::from(data),
-        sample_format: SampleFormat::F32,
-        channels: 1,
+    AudioBuffer::new(
+        Bytes::from(data),
+        SampleFormat::F32,
+        1,
         sample_rate,
         num_frames,
-        timestamp: Duration::ZERO,
-    }
+        Duration::ZERO,
+    )
 }
 
 fn make_yuv_frame(width: u32, height: u32, y_value: u8, ts_ms: u64) -> VideoFrame {
@@ -32,13 +32,13 @@ fn make_yuv_frame(width: u32, height: u32, y_value: u8, ts_ms: u64) -> VideoFram
     let chroma_size = chroma_w * chroma_h;
     let mut data = vec![y_value; y_size];
     data.extend(vec![128u8; chroma_size * 2]);
-    VideoFrame {
-        data: Bytes::from(data),
+    VideoFrame::new(
+        Bytes::from(data),
+        PixelFormat::Yuv420p,
         width,
         height,
-        pixel_format: PixelFormat::Yuv420p,
-        timestamp: Duration::from_millis(ts_ms),
-    }
+        Duration::from_millis(ts_ms),
+    )
 }
 
 fn bench_fingerprint(c: &mut Criterion) {
@@ -98,10 +98,9 @@ fn bench_luminance_variance(c: &mut Criterion) {
 }
 
 fn bench_analyze_media(c: &mut Criterion) {
-    let info = MediaInfo {
-        id: uuid::Uuid::new_v4(),
-        format: ContainerFormat::Mp4,
-        streams: vec![
+    let mut info = MediaInfo::new(
+        ContainerFormat::Mp4,
+        vec![
             StreamInfo::Audio(AudioStreamInfo {
                 codec: AudioCodec::Aac,
                 sample_rate: 44100,
@@ -120,13 +119,10 @@ fn bench_analyze_media(c: &mut Criterion) {
                 duration: Some(Duration::from_secs(120)),
             }),
         ],
-        duration: Some(Duration::from_secs(120)),
-        file_size: Some(50_000_000),
-        title: Some("Test".to_string()),
-        artist: None,
-        album: None,
-        metadata: std::collections::HashMap::new(),
-    };
+    );
+    info.duration = Some(Duration::from_secs(120));
+    info.file_size = Some(50_000_000);
+    info.title = Some("Test".to_string());
 
     c.bench_function("analyze_media_2min_h264_aac", |b| {
         b.iter(|| ai::analyze_media(black_box(&info)))

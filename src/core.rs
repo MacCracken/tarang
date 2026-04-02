@@ -10,14 +10,14 @@
 //!
 //! // Construct an audio buffer with 1024 silent stereo frames
 //! let data = vec![0u8; 1024 * 2 * 4]; // 1024 frames × 2 channels × 4 bytes (F32)
-//! let buf = AudioBuffer {
-//!     data: Bytes::from(data),
-//!     sample_format: SampleFormat::F32,
-//!     channels: 2,
-//!     sample_rate: 44100,
-//!     num_frames: 1024,
-//!     timestamp: Duration::ZERO,
-//! };
+//! let buf = AudioBuffer::new(
+//!     Bytes::from(data),
+//!     SampleFormat::F32,
+//!     2,
+//!     44100,
+//!     1024,
+//!     Duration::ZERO,
+//! );
 //! assert_eq!(buf.channels, 2);
 //! ```
 
@@ -249,22 +249,46 @@ pub enum StreamInfo {
     Subtitle { language: Option<String> },
 }
 
-/// Metadata about a media file
+/// Metadata about a media file.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaInfo {
+    /// Unique identifier for this media info instance.
     pub id: Uuid,
+    /// Container format (MP4, MKV, WAV, etc.).
     pub format: ContainerFormat,
+    /// Audio, video, and subtitle streams found in the container.
     pub streams: Vec<StreamInfo>,
+    /// Total duration of the longest stream, if known.
     pub duration: Option<Duration>,
+    /// File size in bytes, if available.
     pub file_size: Option<u64>,
+    /// Track title from metadata tags.
     pub title: Option<String>,
+    /// Artist name from metadata tags.
     pub artist: Option<String>,
+    /// Album name from metadata tags.
     pub album: Option<String>,
-    /// Arbitrary metadata tags (ID3, Vorbis comments, etc.)
+    /// Arbitrary metadata tags (ID3, Vorbis comments, etc.).
     pub metadata: HashMap<String, String>,
 }
 
 impl MediaInfo {
+    /// Create a new media info instance.
+    pub fn new(format: ContainerFormat, streams: Vec<StreamInfo>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            format,
+            streams,
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+            metadata: HashMap::new(),
+        }
+    }
+
     pub fn audio_streams(&self) -> impl Iterator<Item = &AudioStreamInfo> {
         self.streams.iter().filter_map(|s| match s {
             StreamInfo::Audio(a) => Some(a),
@@ -279,12 +303,14 @@ impl MediaInfo {
         })
     }
 
+    #[must_use]
     pub fn has_video(&self) -> bool {
         self.streams
             .iter()
             .any(|s| matches!(s, StreamInfo::Video(_)))
     }
 
+    #[must_use]
     pub fn has_audio(&self) -> bool {
         self.streams
             .iter()
@@ -296,6 +322,7 @@ impl MediaInfo {
 ///
 /// Audio data is stored as interleaved samples: for stereo audio with
 /// N frames, `data` contains `[L0, R0, L1, R1, ..., LN, RN]` as F32.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct AudioBuffer {
     /// Raw sample data as bytes (interpret as interleaved F32).
@@ -313,6 +340,25 @@ pub struct AudioBuffer {
 }
 
 impl AudioBuffer {
+    /// Create a new audio buffer.
+    pub fn new(
+        data: Bytes,
+        sample_format: SampleFormat,
+        channels: u16,
+        sample_rate: u32,
+        num_frames: usize,
+        timestamp: Duration,
+    ) -> Self {
+        Self {
+            data,
+            sample_format,
+            channels,
+            sample_rate,
+            num_frames,
+            timestamp,
+        }
+    }
+
     /// Convert sample format (e.g. F32 → I16 for PCM output).
     ///
     /// Currently all decoded audio is F32. This method converts to I16 or I32
@@ -402,6 +448,7 @@ pub fn validate_video_dimensions(width: u32, height: u32) -> Result<()> {
 ///
 /// For YUV420p: data layout is Y plane (w*h), U plane (w/2 * h/2), V plane (w/2 * h/2).
 /// For RGB24: data layout is `[R, G, B, R, G, B, ...]` row by row.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
     /// Raw pixel data.
@@ -417,6 +464,23 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
+    /// Create a new video frame.
+    pub fn new(
+        data: Bytes,
+        pixel_format: PixelFormat,
+        width: u32,
+        height: u32,
+        timestamp: Duration,
+    ) -> Self {
+        Self {
+            data,
+            pixel_format,
+            width,
+            height,
+            timestamp,
+        }
+    }
+
     /// Convert this frame to a different pixel format.
     ///
     /// Delegates to [`crate::video::convert::convert_pixel_format`].
@@ -961,5 +1025,381 @@ mod tests {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
         let tarang_err: TarangError = io_err.into();
         assert!(tarang_err.to_string().contains("file missing"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AudioBuffer::convert_to — F32 to I16, I32, F64, identity, error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn convert_f32_to_i16() {
+        // Build a small F32 buffer with known values
+        let mut data = Vec::new();
+        data.extend_from_slice(&1.0f32.to_le_bytes()); // max positive
+        data.extend_from_slice(&(-1.0f32).to_le_bytes()); // max negative
+        data.extend_from_slice(&0.0f32.to_le_bytes()); // zero
+        data.extend_from_slice(&0.5f32.to_le_bytes()); // half
+
+        let buf = AudioBuffer::new(
+            Bytes::from(data),
+            SampleFormat::F32,
+            1,
+            44100,
+            4,
+            Duration::ZERO,
+        );
+
+        let converted = buf.convert_to(SampleFormat::I16).unwrap();
+        assert_eq!(converted.sample_format, SampleFormat::I16);
+        assert_eq!(converted.channels, 1);
+        assert_eq!(converted.sample_rate, 44100);
+        assert_eq!(converted.num_frames, 4);
+        // 4 samples * 2 bytes per I16 = 8 bytes
+        assert_eq!(converted.data.len(), 8);
+
+        let s0 = i16::from_le_bytes([converted.data[0], converted.data[1]]);
+        let s1 = i16::from_le_bytes([converted.data[2], converted.data[3]]);
+        let s2 = i16::from_le_bytes([converted.data[4], converted.data[5]]);
+        let s3 = i16::from_le_bytes([converted.data[6], converted.data[7]]);
+        assert_eq!(s0, 32767); // 1.0 * 32767
+        assert_eq!(s1, -32767); // -1.0 * 32767
+        assert_eq!(s2, 0);
+        assert!((s3 - 16383).abs() <= 1); // 0.5 * 32767 ≈ 16383
+    }
+
+    #[test]
+    fn convert_f32_to_i32() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1.0f32.to_le_bytes());
+        data.extend_from_slice(&0.0f32.to_le_bytes());
+
+        let buf = AudioBuffer::new(
+            Bytes::from(data),
+            SampleFormat::F32,
+            1,
+            48000,
+            2,
+            Duration::from_millis(100),
+        );
+
+        let converted = buf.convert_to(SampleFormat::I32).unwrap();
+        assert_eq!(converted.sample_format, SampleFormat::I32);
+        assert_eq!(converted.data.len(), 8); // 2 samples * 4 bytes
+        assert_eq!(converted.timestamp, Duration::from_millis(100));
+
+        let s0 = i32::from_le_bytes([
+            converted.data[0],
+            converted.data[1],
+            converted.data[2],
+            converted.data[3],
+        ]);
+        assert_eq!(s0, 2147483647); // 1.0 * i32::MAX
+    }
+
+    #[test]
+    fn convert_f32_to_f64() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0.25f32.to_le_bytes());
+        data.extend_from_slice(&(-0.75f32).to_le_bytes());
+
+        let buf = AudioBuffer::new(
+            Bytes::from(data),
+            SampleFormat::F32,
+            1,
+            44100,
+            2,
+            Duration::ZERO,
+        );
+
+        let converted = buf.convert_to(SampleFormat::F64).unwrap();
+        assert_eq!(converted.sample_format, SampleFormat::F64);
+        assert_eq!(converted.data.len(), 16); // 2 samples * 8 bytes
+
+        let s0 = f64::from_le_bytes(converted.data[0..8].try_into().unwrap());
+        let s1 = f64::from_le_bytes(converted.data[8..16].try_into().unwrap());
+        assert!((s0 - 0.25).abs() < 0.001);
+        assert!((s1 - (-0.75)).abs() < 0.001);
+    }
+
+    #[test]
+    fn convert_f32_to_f32_identity() {
+        let data = vec![0u8; 16]; // 4 F32 samples
+        let buf = AudioBuffer::new(
+            Bytes::from(data.clone()),
+            SampleFormat::F32,
+            2,
+            44100,
+            2,
+            Duration::ZERO,
+        );
+
+        let converted = buf.convert_to(SampleFormat::F32).unwrap();
+        assert_eq!(converted.sample_format, SampleFormat::F32);
+        assert_eq!(converted.data.as_ref(), data.as_slice());
+    }
+
+    #[test]
+    fn convert_non_f32_source_errors() {
+        let buf = AudioBuffer::new(
+            Bytes::from(vec![0u8; 8]),
+            SampleFormat::I16,
+            1,
+            44100,
+            4,
+            Duration::ZERO,
+        );
+
+        let result = buf.convert_to(SampleFormat::I32);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("only F32 source"));
+    }
+
+    #[test]
+    fn convert_f32_clamps_values() {
+        // Values > 1.0 and < -1.0 should be clamped
+        let mut data = Vec::new();
+        data.extend_from_slice(&2.0f32.to_le_bytes());
+        data.extend_from_slice(&(-3.0f32).to_le_bytes());
+
+        let buf = AudioBuffer::new(
+            Bytes::from(data),
+            SampleFormat::F32,
+            1,
+            44100,
+            2,
+            Duration::ZERO,
+        );
+
+        let converted = buf.convert_to(SampleFormat::I16).unwrap();
+        let s0 = i16::from_le_bytes([converted.data[0], converted.data[1]]);
+        let s1 = i16::from_le_bytes([converted.data[2], converted.data[3]]);
+        assert_eq!(s0, 32767); // clamped to 1.0
+        assert_eq!(s1, -32767); // clamped to -1.0
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_video_dimensions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_dimensions_valid() {
+        assert!(crate::core::validate_video_dimensions(1920, 1080).is_ok());
+        assert!(crate::core::validate_video_dimensions(2, 2).is_ok());
+        assert!(crate::core::validate_video_dimensions(3840, 2160).is_ok());
+    }
+
+    #[test]
+    fn validate_dimensions_zero() {
+        assert!(crate::core::validate_video_dimensions(0, 1080).is_err());
+        assert!(crate::core::validate_video_dimensions(1920, 0).is_err());
+        assert!(crate::core::validate_video_dimensions(0, 0).is_err());
+    }
+
+    #[test]
+    fn validate_dimensions_odd() {
+        let result = crate::core::validate_video_dimensions(1921, 1080);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("even"));
+
+        let result = crate::core::validate_video_dimensions(1920, 1081);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // yuv420p_frame_size edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn yuv420p_frame_size_standard() {
+        // 1920x1080: Y=1920*1080, U=960*540, V=960*540
+        let size = crate::core::yuv420p_frame_size(1920, 1080);
+        let expected = 1920 * 1080 + 2 * (960 * 540);
+        assert_eq!(size, expected);
+    }
+
+    #[test]
+    fn yuv420p_frame_size_odd_dimensions() {
+        // Odd dimensions use ceiling division for chroma
+        let size = crate::core::yuv420p_frame_size(3, 3);
+        // Y = 3*3 = 9, chroma_w = ceil(3/2) = 2, chroma_h = ceil(3/2) = 2
+        // U + V = 2 * (2*2) = 8
+        assert_eq!(size, 9 + 8);
+    }
+
+    #[test]
+    fn yuv420p_frame_size_one_by_one() {
+        let size = crate::core::yuv420p_frame_size(1, 1);
+        // Y = 1, chroma_w = 1, chroma_h = 1, U+V = 2
+        assert_eq!(size, 3);
+    }
+
+    #[test]
+    fn yuv420p_frame_size_zero() {
+        assert_eq!(crate::core::yuv420p_frame_size(0, 0), 0);
+        assert_eq!(crate::core::yuv420p_frame_size(0, 100), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // MediaInfo::new and VideoFrame::new constructors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn media_info_new_constructor() {
+        let streams = vec![StreamInfo::Audio(AudioStreamInfo {
+            codec: AudioCodec::Opus,
+            sample_rate: 48000,
+            channels: 2,
+            sample_format: SampleFormat::F32,
+            bitrate: None,
+            duration: None,
+        })];
+        let info = MediaInfo::new(ContainerFormat::Ogg, streams);
+        assert_eq!(info.format, ContainerFormat::Ogg);
+        assert!(info.has_audio());
+        assert!(!info.has_video());
+        assert!(info.duration.is_none());
+        assert!(info.file_size.is_none());
+        assert!(info.title.is_none());
+        assert!(!info.id.is_nil());
+    }
+
+    #[test]
+    fn video_frame_new_constructor() {
+        let size = crate::core::yuv420p_frame_size(640, 480);
+        let frame = VideoFrame::new(
+            Bytes::from(vec![0u8; size]),
+            PixelFormat::Yuv420p,
+            640,
+            480,
+            Duration::from_millis(33),
+        );
+        assert_eq!(frame.width, 640);
+        assert_eq!(frame.height, 480);
+        assert_eq!(frame.pixel_format, PixelFormat::Yuv420p);
+        assert_eq!(frame.timestamp, Duration::from_millis(33));
+        assert_eq!(frame.data.len(), size);
+    }
+
+    // -----------------------------------------------------------------------
+    // ContainerFormat::from_magic — WebM detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn magic_bytes_webm() {
+        // EBML header with "webm" DocType
+        let mut bytes = vec![0x1A, 0x45, 0xDF, 0xA3];
+        // Pad to at least 12 bytes, with "webm" appearing within first 64 bytes
+        bytes.extend_from_slice(b"webm");
+        bytes.extend_from_slice(&[0u8; 8]); // pad to >=12
+        assert_eq!(
+            ContainerFormat::from_magic(&bytes),
+            Some(ContainerFormat::WebM)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // StreamInfo serialization roundtrip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn stream_info_serialization() {
+        let si = StreamInfo::Audio(AudioStreamInfo {
+            codec: AudioCodec::Flac,
+            sample_rate: 96000,
+            channels: 2,
+            sample_format: SampleFormat::I32,
+            bitrate: Some(2_000_000),
+            duration: Some(Duration::from_secs(300)),
+        });
+        let json = serde_json::to_string(&si).unwrap();
+        let parsed: StreamInfo = serde_json::from_str(&json).unwrap();
+        if let StreamInfo::Audio(a) = &parsed {
+            assert_eq!(a.codec, AudioCodec::Flac);
+            assert_eq!(a.sample_rate, 96000);
+        } else {
+            panic!("expected Audio stream");
+        }
+    }
+
+    #[test]
+    fn stream_info_subtitle_serialization() {
+        let si = StreamInfo::Subtitle {
+            language: Some("ja".into()),
+        };
+        let json = serde_json::to_string(&si).unwrap();
+        let parsed: StreamInfo = serde_json::from_str(&json).unwrap();
+        if let StreamInfo::Subtitle { language } = &parsed {
+            assert_eq!(language.as_deref(), Some("ja"));
+        } else {
+            panic!("expected Subtitle stream");
+        }
+    }
+
+    #[test]
+    fn stream_info_video_serialization() {
+        let si = StreamInfo::Video(VideoStreamInfo {
+            codec: VideoCodec::Vp9,
+            width: 3840,
+            height: 2160,
+            pixel_format: PixelFormat::Yuv420p,
+            frame_rate: 60.0,
+            bitrate: Some(20_000_000),
+            duration: Some(Duration::from_secs(600)),
+        });
+        let json = serde_json::to_string(&si).unwrap();
+        let parsed: StreamInfo = serde_json::from_str(&json).unwrap();
+        if let StreamInfo::Video(v) = &parsed {
+            assert_eq!(v.codec, VideoCodec::Vp9);
+            assert_eq!(v.width, 3840);
+            assert_eq!(v.frame_rate, 60.0);
+        } else {
+            panic!("expected Video stream");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AudioBuffer::new preserves all fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn audio_buffer_new_all_fields() {
+        let buf = AudioBuffer::new(
+            Bytes::from(vec![0u8; 256]),
+            SampleFormat::I16,
+            6,
+            48000,
+            21,
+            Duration::from_millis(500),
+        );
+        assert_eq!(buf.sample_format, SampleFormat::I16);
+        assert_eq!(buf.channels, 6);
+        assert_eq!(buf.sample_rate, 48000);
+        assert_eq!(buf.num_frames, 21);
+        assert_eq!(buf.timestamp, Duration::from_millis(500));
+        assert_eq!(buf.data.len(), 256);
+    }
+
+    // -----------------------------------------------------------------------
+    // MediaInfo with metadata tags
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn media_info_metadata_tags() {
+        let mut metadata = HashMap::new();
+        metadata.insert("genre".to_string(), "Rock".to_string());
+        metadata.insert("year".to_string(), "2024".to_string());
+
+        let mut info = MediaInfo::new(ContainerFormat::Mp3, vec![]);
+        info.metadata = metadata;
+        info.title = Some("My Song".into());
+        info.artist = Some("My Artist".into());
+        info.album = Some("My Album".into());
+
+        assert_eq!(info.title.as_deref(), Some("My Song"));
+        assert_eq!(info.artist.as_deref(), Some("My Artist"));
+        assert_eq!(info.album.as_deref(), Some("My Album"));
+        assert_eq!(info.metadata.get("genre").unwrap(), "Rock");
+        assert_eq!(info.metadata.len(), 2);
     }
 }

@@ -1,6 +1,6 @@
 //! AAC decoder via fdk-aac FFI
 //!
-//! Optional alternative to symphonia's built-in AAC decoder.
+//! Optional alternative AAC decoder for formats not covered by shravan.
 //! May offer better quality for HE-AAC and HE-AACv2 profiles.
 //! Requires the `aac-dec` feature and the `libfdk-aac` system library
 //! (LGPL-2.1).

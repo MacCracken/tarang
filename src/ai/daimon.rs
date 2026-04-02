@@ -1197,4 +1197,251 @@ Hope that helps!"#;
         };
         assert!(DaimonClient::new(config).is_err());
     }
+
+    #[test]
+    fn test_hoosh_llm_invalid_endpoint() {
+        let config = HooshLlmConfig {
+            endpoint: "ftp://invalid".to_string(),
+            api_key: None,
+            model: "test".into(),
+            timeout_secs: 30,
+        };
+        assert!(HooshLlmClient::new(config).is_err());
+
+        let config = HooshLlmConfig {
+            endpoint: String::new(),
+            api_key: None,
+            model: "test".into(),
+            timeout_secs: 30,
+        };
+        assert!(HooshLlmClient::new(config).is_err());
+
+        let config = HooshLlmConfig {
+            endpoint: "http://localhost:8088".to_string(),
+            api_key: None,
+            model: "test".into(),
+            timeout_secs: 0,
+        };
+        assert!(HooshLlmClient::new(config).is_err());
+
+        let config = HooshLlmConfig {
+            endpoint: "https://llm.example.com".to_string(),
+            api_key: Some("key123".into()),
+            model: "llama3".into(),
+            timeout_secs: 60,
+        };
+        assert!(HooshLlmClient::new(config).is_ok());
+    }
+
+    #[test]
+    fn test_daimon_auth_header() {
+        // With API key
+        let config = DaimonConfig {
+            endpoint: "http://localhost:8090".to_string(),
+            api_key: Some("test-key-123".to_string()),
+            timeout_secs: 30,
+        };
+        let client = DaimonClient::new(config).unwrap();
+        let auth = client.auth_header();
+        assert_eq!(auth, Some("Bearer test-key-123".to_string()));
+
+        // Without API key
+        let config = DaimonConfig {
+            endpoint: "http://localhost:8090".to_string(),
+            api_key: None,
+            timeout_secs: 30,
+        };
+        let client = DaimonClient::new(config).unwrap();
+        assert!(client.auth_header().is_none());
+    }
+
+    #[test]
+    fn format_rag_metadata_with_album() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Flac,
+            streams: vec![StreamInfo::Audio(AudioStreamInfo {
+                codec: AudioCodec::Flac,
+                sample_rate: 96000,
+                channels: 2,
+                sample_format: SampleFormat::F32,
+                bitrate: None,
+                duration: Some(Duration::from_secs(240)),
+            })],
+            duration: Some(Duration::from_secs(240)),
+            file_size: None,
+            title: Some("Symphony No. 5".into()),
+            artist: Some("Beethoven".into()),
+            album: Some("Complete Symphonies".into()),
+            metadata: std::collections::HashMap::new(),
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ai::ContentType::Music,
+            quality_score: 95.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec!["classical".to_string()],
+        };
+
+        let text = format_metadata_for_rag("/music/beethoven.flac", &info, &analysis);
+        assert!(text.contains("Symphony No. 5"));
+        assert!(text.contains("Beethoven"));
+        assert!(text.contains("Complete Symphonies"));
+        assert!(text.contains("240.0s"));
+        assert!(text.contains("classical"));
+    }
+
+    #[test]
+    fn format_rag_metadata_no_optional_fields() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Mp4,
+            streams: vec![],
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+            metadata: std::collections::HashMap::new(),
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ai::ContentType::Unknown,
+            quality_score: 50.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+
+        let text = format_metadata_for_rag("/empty.mp4", &info, &analysis);
+        assert!(text.contains("MP4"));
+        assert!(text.contains("unknown"));
+        // Should NOT contain Duration, Title, Artist, Album, Tags, Recommendation lines
+        assert!(!text.contains("Duration"));
+        assert!(!text.contains("Title"));
+        assert!(!text.contains("Tags"));
+        assert!(!text.contains("Recommendation"));
+    }
+
+    #[test]
+    fn build_prompt_no_optional_fields() {
+        let info = MediaInfo {
+            id: Uuid::new_v4(),
+            format: ContainerFormat::Wav,
+            streams: vec![],
+            duration: None,
+            file_size: None,
+            title: None,
+            artist: None,
+            album: None,
+            metadata: std::collections::HashMap::new(),
+        };
+        let analysis = MediaAnalysis {
+            content_type: crate::ai::ContentType::Speech,
+            quality_score: 60.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+
+        let prompt = build_description_prompt(&info, &analysis);
+        assert!(prompt.contains("speech"));
+        assert!(prompt.contains("JSON"));
+        // Should not contain title/artist since they're None
+        assert!(!prompt.contains("Title:"));
+        assert!(!prompt.contains("Artist:"));
+    }
+
+    #[test]
+    fn daimon_config_with_custom_values() {
+        let config = DaimonConfig {
+            endpoint: "https://prod.example.com:9090".to_string(),
+            api_key: Some("secret".into()),
+            timeout_secs: 120,
+        };
+        assert_eq!(config.endpoint, "https://prod.example.com:9090");
+        assert_eq!(config.api_key, Some("secret".into()));
+        assert_eq!(config.timeout_secs, 120);
+    }
+
+    #[test]
+    fn hoosh_llm_config_with_custom_values() {
+        let config = HooshLlmConfig {
+            endpoint: "https://llm.prod.example.com".to_string(),
+            api_key: Some("llm-key".into()),
+            model: "gpt-4".to_string(),
+            timeout_secs: 120,
+        };
+        assert_eq!(config.model, "gpt-4");
+        assert_eq!(config.timeout_secs, 120);
+    }
+
+    #[test]
+    fn content_description_all_none_fields() {
+        let desc = ContentDescription {
+            summary: "Test summary".to_string(),
+            genre: None,
+            mood: None,
+            tags: vec![],
+            content_rating: None,
+        };
+        let json = serde_json::to_string(&desc).unwrap();
+        let parsed: ContentDescription = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.summary, "Test summary");
+        assert!(parsed.genre.is_none());
+        assert!(parsed.mood.is_none());
+        assert!(parsed.tags.is_empty());
+        assert!(parsed.content_rating.is_none());
+    }
+
+    #[test]
+    fn similar_media_debug() {
+        let sm = SimilarMedia {
+            path: "/test.mp3".to_string(),
+            score: 0.5,
+            metadata: serde_json::json!({}),
+        };
+        let debug = format!("{sm:?}");
+        assert!(debug.contains("test.mp3"));
+    }
+
+    #[test]
+    fn rag_result_debug() {
+        let r = RagResult {
+            text: "some result".to_string(),
+            relevance: 0.75,
+        };
+        let debug = format!("{r:?}");
+        assert!(debug.contains("some result"));
+    }
+
+    #[test]
+    fn parse_json_with_nested_tags() {
+        let json = r#"{"summary":"Complex media","genre":"experimental","mood":"dark","tags":["ambient","noise","electronic","distorted","harsh"],"content_rating":"R"}"#;
+        let analysis = MediaAnalysis {
+            content_type: crate::ai::ContentType::Music,
+            quality_score: 70.0,
+            codec_recommendation: None,
+            estimated_complexity: 0.0,
+            tags: vec![],
+        };
+        let desc = parse_description_response(json, &analysis).unwrap();
+        assert_eq!(desc.tags.len(), 5);
+        assert_eq!(desc.content_rating, Some("R".into()));
+    }
+
+    #[test]
+    fn daimon_config_debug_impl() {
+        let config = DaimonConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("DaimonConfig"));
+        assert!(debug.contains("8090"));
+    }
+
+    #[test]
+    fn hoosh_llm_config_debug_impl() {
+        let config = HooshLlmConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("HooshLlmConfig"));
+        assert!(debug.contains("8088"));
+    }
 }

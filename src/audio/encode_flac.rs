@@ -1245,52 +1245,10 @@ mod tests {
         assert_eq!(precision_24, 15, "Precision capped at 15 even for 24-bit");
     }
 
-    /// Decode FLAC bytes back to interleaved f32 samples using symphonia.
+    /// Decode FLAC bytes back to interleaved f32 samples using shravan.
     fn decode_flac_bytes(data: &[u8]) -> Vec<f32> {
-        use std::io::Cursor;
-        use symphonia::core::audio::SampleBuffer;
-        use symphonia::core::formats::FormatOptions;
-        use symphonia::core::io::MediaSourceStream;
-        use symphonia::core::meta::MetadataOptions;
-        use symphonia::core::probe::Hint;
-
-        let cursor = Cursor::new(data.to_vec());
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
-
-        let mut hint = Hint::new();
-        hint.with_extension("flac");
-
-        let probed = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
-            )
-            .expect("failed to probe FLAC stream");
-
-        let mut format = probed.format;
-        let track = format.default_track().expect("no default track").clone();
-        let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &Default::default())
-            .expect("failed to create decoder");
-
-        let mut all_samples = Vec::new();
-        while let Ok(packet) = format.next_packet() {
-            if packet.track_id() != track.id {
-                continue;
-            }
-            let decoded = match decoder.decode(&packet) {
-                Ok(d) => d,
-                Err(_) => break,
-            };
-            let spec = *decoded.spec();
-            let num_frames = decoded.frames();
-            let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-            sample_buf.copy_interleaved_ref(decoded);
-            all_samples.extend_from_slice(sample_buf.samples());
-        }
-        all_samples
+        let (_info, samples) = shravan::codec::open(data).expect("failed to decode FLAC stream");
+        samples
     }
 
     /// Helper: encode f32 samples to FLAC bytes via FlacEncoder.
@@ -1437,7 +1395,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Edge-case tests with symphonia roundtrip verification
+    // Edge-case tests with shravan roundtrip verification
     // -----------------------------------------------------------------------
 
     /// Like `encode_to_flac_bytes` but allows specifying bits_per_sample.
@@ -1499,7 +1457,7 @@ mod tests {
             "STREAMINFO should report 24 bits per sample"
         );
 
-        // Roundtrip decode with symphonia
+        // Roundtrip decode with shravan
         let decoded = decode_flac_bytes(&flac_bytes);
         assert_eq!(decoded.len(), samples.len());
 
@@ -1592,7 +1550,7 @@ mod tests {
     fn test_flac_multi_block() {
         // Encode a buffer spanning multiple FLAC frames (>4096 samples per channel).
         // Use an exact multiple of block size for clean roundtrip (the encoder
-        // writes frame_number=0 for all frames, so symphonia may miscount with
+        // writes frame_number=0 for all frames, so shravan may miscount with
         // partial trailing blocks).
         let num_samples = 4096 * 3; // 12288 samples -> exactly 3 blocks
         let channels = 1u16;

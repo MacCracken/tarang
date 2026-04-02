@@ -1,7 +1,7 @@
 //! tarang — AI-native Rust media framework for AGNOS
 //!
 //! Tarang (Sanskrit: wave) provides media decoding with a Rust-owned pipeline,
-//! pure Rust audio decoding via symphonia, and thin FFI wrappers for video codecs.
+//! pure Rust audio decoding via shravan, and thin FFI wrappers for video codecs.
 
 mod mcp;
 
@@ -157,7 +157,7 @@ fn cmd_analyze(path: &str) -> Result<()> {
 }
 
 fn cmd_codecs() {
-    println!("Audio codecs (pure Rust via symphonia):");
+    println!("Audio codecs (pure Rust via shravan):");
     for codec in tarang::audio::supported_codecs() {
         println!("  {codec}");
     }

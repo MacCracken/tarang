@@ -765,4 +765,179 @@ mod tests {
         assert!((timestamps[2] - 2.0).abs() < 0.001);
         assert!((timestamps[3] - 3.0).abs() < 0.001);
     }
+
+    #[test]
+    fn whisper_model_equality() {
+        assert_eq!(WhisperModel::Tiny, WhisperModel::Tiny);
+        assert_ne!(WhisperModel::Tiny, WhisperModel::Base);
+        assert_ne!(WhisperModel::Large, WhisperModel::LargeV3);
+    }
+
+    #[test]
+    fn whisper_model_debug() {
+        assert!(format!("{:?}", WhisperModel::Tiny).contains("Tiny"));
+        assert!(format!("{:?}", WhisperModel::LargeV3).contains("LargeV3"));
+    }
+
+    #[test]
+    fn prepare_mono_preserves_timestamp() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 1024 * 4]),
+            sample_format: SampleFormat::F32,
+            channels: 1,
+            sample_rate: 16000,
+            num_frames: 1024,
+            timestamp: Duration::from_millis(500),
+        };
+        let result = prepare_audio_for_transcription(&buf);
+        assert_eq!(result.timestamp, Duration::from_millis(500));
+        assert_eq!(result.sample_rate, 16000);
+    }
+
+    #[test]
+    fn encode_wav_i16_passthrough() {
+        // I16 samples should pass through without conversion
+        let data = vec![0x00u8, 0x40, 0x00, 0x40]; // two identical i16 samples
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::I16,
+            channels: 1,
+            sample_rate: 16000,
+            num_frames: 2,
+            timestamp: Duration::ZERO,
+        };
+        let wav = encode_wav_bytes(&buf).unwrap();
+        // Data size should be 4 bytes (2 * 2)
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 4);
+    }
+
+    #[test]
+    fn encode_wav_i32_conversion() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0x7FFF0000i32.to_le_bytes());
+        data.extend_from_slice(&0i32.to_le_bytes());
+
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::I32,
+            channels: 1,
+            sample_rate: 16000,
+            num_frames: 2,
+            timestamp: Duration::ZERO,
+        };
+        let wav = encode_wav_bytes(&buf).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        // data size = 4 bytes (2 samples * 2 bytes PCM16)
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 4);
+    }
+
+    #[test]
+    fn encode_wav_f64_unsupported() {
+        let buf = AudioBuffer {
+            data: Bytes::from(vec![0u8; 64]),
+            sample_format: SampleFormat::F64,
+            channels: 1,
+            sample_rate: 16000,
+            num_frames: 8,
+            timestamp: Duration::ZERO,
+        };
+        assert!(encode_wav_bytes(&buf).is_err());
+    }
+
+    #[test]
+    fn prepare_six_channel_f32() {
+        let num_frames = 100;
+        let channels = 6u16;
+        let mut data = Vec::with_capacity(num_frames * channels as usize * 4);
+        for _ in 0..num_frames {
+            for ch in 0..channels {
+                let val = (ch as f32) * 0.1; // 0.0, 0.1, 0.2, 0.3, 0.4, 0.5
+                data.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+        let buf = AudioBuffer {
+            data: Bytes::from(data),
+            sample_format: SampleFormat::F32,
+            channels,
+            sample_rate: 48000,
+            num_frames,
+            timestamp: Duration::ZERO,
+        };
+        let mono = prepare_audio_for_transcription(&buf);
+        assert_eq!(mono.channels, 1);
+        assert_eq!(mono.num_frames, 100);
+        // Average of (0.0 + 0.1 + 0.2 + 0.3 + 0.4 + 0.5) / 6 = 0.25
+        let first = f32::from_le_bytes([mono.data[0], mono.data[1], mono.data[2], mono.data[3]]);
+        assert!((first - 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn hoosh_config_clone() {
+        let config = HooshConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.endpoint, config.endpoint);
+        assert_eq!(cloned.model, config.model);
+        assert_eq!(cloned.max_wav_bytes, config.max_wav_bytes);
+        assert_eq!(cloned.chunk_duration_secs, config.chunk_duration_secs);
+    }
+
+    #[test]
+    fn hoosh_config_debug() {
+        let config = HooshConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("HooshConfig"));
+        assert!(debug.contains("Base"));
+    }
+
+    #[test]
+    fn transcription_result_empty() {
+        let result = TranscriptionResult {
+            text: String::new(),
+            language: "en".to_string(),
+            confidence: 0.0,
+            segments: vec![],
+        };
+        assert!(result.text.is_empty());
+        assert!(result.segments.is_empty());
+    }
+
+    #[test]
+    fn transcription_segment_serde() {
+        use crate::ai::TranscriptionSegment;
+        let seg = TranscriptionSegment {
+            start: 1.5,
+            end: 3.0,
+            text: "hello".to_string(),
+            confidence: 0.9,
+        };
+        let json = serde_json::to_string(&seg).unwrap();
+        let parsed: TranscriptionSegment = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.text, "hello");
+        assert!((parsed.start - 1.5).abs() < 0.001);
+        assert!((parsed.end - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn encode_wav_zero_frames() {
+        let buf = AudioBuffer {
+            data: Bytes::new(),
+            sample_format: SampleFormat::F32,
+            channels: 1,
+            sample_rate: 16000,
+            num_frames: 0,
+            timestamp: Duration::ZERO,
+        };
+        let wav = encode_wav_bytes(&buf).unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn config_with_max_wav_bytes_zero() {
+        let config = HooshConfig::default().with_max_wav_bytes(0);
+        assert_eq!(config.max_wav_bytes, 0);
+    }
 }

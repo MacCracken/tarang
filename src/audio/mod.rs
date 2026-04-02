@@ -1,7 +1,7 @@
 //! tarang-audio — Audio decoding for the Tarang media framework
 //!
-//! Pure Rust audio decoding powered by symphonia.
-//! Supports MP3, FLAC, WAV, OGG Vorbis, AAC, ALAC, and PCM.
+//! Pure Rust audio decoding powered by shravan.
+//! Supports MP3, FLAC, WAV, OGG Vorbis, Opus, AIFF, and PCM.
 //!
 //! ```rust,ignore
 //! use tarang::audio::{FileDecoder, resample};
@@ -51,7 +51,7 @@ pub use resample::{resample, resample_sinc};
 
 use crate::core::{AudioCodec, AudioStreamInfo, Result, TarangError};
 
-/// Audio codec metadata (lightweight, no symphonia state)
+/// Audio codec metadata (lightweight, no decoder state)
 pub struct AudioCodecInfo {
     codec: AudioCodec,
     sample_rate: u32,

@@ -59,8 +59,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # CLI
 clap = { version = "4", features = ["derive"] }
 
-# Audio decoding (pure Rust)
-symphonia = { version = "0.5", features = ["all"] }
+# Audio codec engine (AGNOS)
+shravan = { version = "1", features = ["full"] }
 
 # AI / analysis
 rustfft = "6"

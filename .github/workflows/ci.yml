@@ -213,7 +213,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repo: [jalwa, tazama, shruti]
+        repo: [jalwa, tazama, shruti, kiran]
     steps:
       - uses: actions/checkout@v4
         with:

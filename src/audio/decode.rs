@@ -1,6 +1,6 @@
-//! Full audio decode pipeline via symphonia
+//! Full audio decode pipeline via shravan
 //!
-//! `FileDecoder` wraps symphonia's format reader + codec decoder to produce
+//! `FileDecoder` wraps shravan's codec decoder to produce
 //! interleaved F32 `AudioBuffer`s from any supported audio file.
 //!
 //! # Example
@@ -16,106 +16,59 @@
 
 use crate::core::{AudioBuffer, AudioCodec, Result, SampleFormat, TarangError};
 use bytes::Bytes;
+use std::io::Read;
 use std::time::Duration;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
-use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
 
-use super::probe::map_symphonia_codec;
+use super::probe::map_shravan_format;
 
-/// Full audio file decoder. Owns symphonia's format reader and codec decoder,
-/// producing decoded `AudioBuffer`s frame by frame.
+/// Default frames per `next_buffer()` call.
+const DEFAULT_CHUNK_SIZE: usize = 4096;
+
+/// Full audio file decoder. Owns decoded samples from shravan,
+/// producing `AudioBuffer`s chunk by chunk.
 pub struct FileDecoder {
-    format: Box<dyn FormatReader>,
-    decoder: Box<dyn symphonia::core::codecs::Decoder>,
-    track_id: u32,
+    samples: Vec<f32>,
+    format: shravan::format::FormatInfo,
     codec: AudioCodec,
-    sample_rate: u32,
-    channels: u16,
-    /// Running sample count for timestamp calculation
-    samples_decoded: u64,
+    position: usize,
+    chunk_size: usize,
 }
 
 impl FileDecoder {
-    /// Open an audio file for decoding.
+    /// Open an audio source for decoding.
     ///
-    /// Accepts any `MediaSource` (File, Cursor, network stream, etc.).
-    /// Optionally provide a file extension hint to speed up format detection.
-    pub fn open(
-        source: Box<dyn symphonia::core::io::MediaSource>,
-        extension_hint: Option<&str>,
-    ) -> Result<Self> {
-        tracing::debug!(hint = ?extension_hint, "opening audio source for decoding");
-        let mss = MediaSourceStream::new(source, Default::default());
+    /// Accepts any `Read + Send` source (File, Cursor, network stream, etc.).
+    /// Optionally provide a file extension hint (currently unused by shravan,
+    /// kept for API compatibility).
+    pub fn open(mut source: Box<dyn Read + Send>, _extension_hint: Option<&str>) -> Result<Self> {
+        tracing::debug!("opening audio source for decoding");
 
-        let mut hint = Hint::new();
-        if let Some(ext) = extension_hint {
-            hint.with_extension(ext);
-        }
+        let mut data = Vec::new();
+        source.read_to_end(&mut data).map_err(TarangError::Io)?;
 
-        let probed = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
-            )
-            .map_err(|e| TarangError::DemuxError(format!("failed to probe audio: {e}").into()))?;
+        let (info, samples) = shravan::codec::open(&data)
+            .map_err(|e| TarangError::DemuxError(format!("failed to decode audio: {e}").into()))?;
 
-        let format = probed.format;
-
-        // Find the first audio track
-        let track = format
-            .tracks()
-            .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-            .ok_or_else(|| TarangError::DemuxError("no audio track found".into()))?;
-
-        let track_id = track.id;
-        let params = &track.codec_params;
-
-        let codec = map_symphonia_codec(params.codec).ok_or_else(|| {
-            TarangError::UnsupportedCodec(format!("symphonia codec {:?}", params.codec).into())
-        })?;
-
-        let sample_rate = params.sample_rate.unwrap_or(44100);
-        if sample_rate == 0 {
+        if info.sample_rate == 0 {
             return Err(TarangError::DecodeError(
                 "codec reports sample rate 0".into(),
             ));
         }
-        let channels = match params.channels {
-            Some(c) => {
-                let count = c.count();
-                if count > u16::MAX as usize {
-                    return Err(TarangError::DecodeError(
-                        format!("channel count {count} exceeds u16::MAX").into(),
-                    ));
-                }
-                count as u16
-            }
-            None => 2,
-        };
 
-        let decoder = symphonia::default::get_codecs()
-            .make(params, &DecoderOptions::default())
-            .map_err(|e| {
-                TarangError::DecodeError(format!("failed to create decoder: {e}").into())
-            })?;
+        if info.channels == 0 {
+            return Err(TarangError::DecodeError("invalid channel count 0".into()));
+        }
+
+        let audio_format =
+            shravan::format::detect_format(&data).unwrap_or(shravan::format::AudioFormat::RawPcm);
+        let codec = map_shravan_format(audio_format);
 
         Ok(Self {
-            format,
-            decoder,
-            track_id,
+            samples,
+            format: info,
             codec,
-            sample_rate,
-            channels,
-            samples_decoded: 0,
+            position: 0,
+            chunk_size: DEFAULT_CHUNK_SIZE,
         })
     }
 
@@ -123,8 +76,7 @@ impl FileDecoder {
     pub fn open_path(path: &std::path::Path) -> Result<Self> {
         tracing::debug!(path = %path.display(), "opening audio file");
         let file = std::fs::File::open(path).map_err(TarangError::Io)?;
-        let ext = path.extension().and_then(|e| e.to_str());
-        Self::open(Box::new(file), ext)
+        Self::open(Box::new(file), path.extension().and_then(|e| e.to_str()))
     }
 
     /// The detected audio codec.
@@ -134,113 +86,61 @@ impl FileDecoder {
 
     /// Sample rate of the decoded audio.
     pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
+        self.format.sample_rate
     }
 
     /// Number of channels.
     pub fn channels(&self) -> u16 {
-        self.channels
+        self.format.channels
     }
 
     /// Decode the next frame, returning an `AudioBuffer` with interleaved F32 samples.
     /// Returns `Err(TarangError::EndOfStream)` when the file is fully decoded.
     pub fn next_buffer(&mut self) -> Result<AudioBuffer> {
-        loop {
-            let packet = match self.format.next_packet() {
-                Ok(p) => p,
-                Err(SymphoniaError::IoError(ref e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    return Err(TarangError::EndOfStream);
-                }
-                Err(SymphoniaError::ResetRequired) => {
-                    // Decoder needs reset (e.g. after seek)
-                    self.decoder.reset();
-                    continue;
-                }
-                Err(e) => {
-                    return Err(TarangError::DemuxError(
-                        format!("failed to read packet: {e}").into(),
-                    ));
-                }
-            };
+        let channels = self.format.channels as usize;
+        let sr = self.format.sample_rate;
 
-            // Skip packets from other tracks
-            if packet.track_id() != self.track_id {
-                continue;
-            }
-
-            let decoded = match self.decoder.decode(&packet) {
-                Ok(buf) => buf,
-                Err(SymphoniaError::DecodeError(e)) => {
-                    tracing::warn!(error = %e, "decode error, skipping frame");
-                    continue;
-                }
-                Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
-                    continue;
-                }
-                Err(e) => {
-                    return Err(TarangError::DecodeError(
-                        format!("decode failed: {e}").into(),
-                    ));
-                }
-            };
-
-            let spec = *decoded.spec();
-            let num_frames = decoded.frames();
-            if num_frames == 0 {
-                continue;
-            }
-
-            let num_channels = spec.channels.count();
-            let sr = spec.rate;
-
-            // Convert to interleaved F32
-            let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-            sample_buf.copy_interleaved_ref(decoded);
-            let samples = sample_buf.samples();
-
-            let timestamp = Duration::from_secs_f64(self.samples_decoded as f64 / sr as f64);
-
-            self.samples_decoded += num_frames as u64;
-
-            // Update cached format info from actual decoded data
-            self.sample_rate = sr;
-            self.channels = num_channels as u16;
-
-            return Ok(AudioBuffer {
-                data: Bytes::copy_from_slice(bytemuck_f32_to_bytes(samples)),
-                sample_format: SampleFormat::F32,
-                channels: num_channels as u16,
-                sample_rate: sr,
-                num_frames,
-                timestamp,
-            });
+        if self.position >= self.samples.len() {
+            return Err(TarangError::EndOfStream);
         }
+
+        let chunk_values = self.chunk_size * channels;
+        let remaining = self.samples.len() - self.position;
+        let take = chunk_values.min(remaining);
+        // Align to channel boundary
+        let take = take - (take % channels);
+
+        if take == 0 {
+            return Err(TarangError::EndOfStream);
+        }
+
+        let slice = &self.samples[self.position..self.position + take];
+        let num_frames = take / channels;
+
+        let timestamp = Duration::from_secs_f64((self.position / channels) as f64 / sr as f64);
+
+        self.position += take;
+
+        Ok(AudioBuffer {
+            data: Bytes::copy_from_slice(bytemuck_f32_to_bytes(slice)),
+            sample_format: SampleFormat::F32,
+            channels: channels as u16,
+            sample_rate: sr,
+            num_frames,
+            timestamp,
+        })
     }
 
     /// Seek to the given timestamp. The next call to `next_buffer` will produce
     /// audio from approximately this position.
     pub fn seek(&mut self, timestamp: Duration) -> Result<()> {
-        let time = Time::from(timestamp.as_secs_f64());
+        let channels = self.format.channels as usize;
+        let sr = self.format.sample_rate;
 
-        self.format
-            .seek(
-                SeekMode::Coarse,
-                SeekTo::Time {
-                    time,
-                    track_id: Some(self.track_id),
-                },
-            )
-            .map_err(|e| TarangError::DemuxError(format!("seek failed: {e}").into()))?;
+        let frame_offset = (timestamp.as_secs_f64() * sr as f64) as usize;
+        let sample_offset = frame_offset * channels;
 
-        // Reset decoder state after seek
-        self.decoder.reset();
-
-        // Update sample count estimate for timestamps
-        self.samples_decoded = (timestamp.as_secs_f64() * self.sample_rate as f64) as u64;
-
+        self.position = sample_offset.min(self.samples.len());
         Ok(())
     }
 
@@ -248,60 +148,59 @@ impl FileDecoder {
     /// Useful for short files or when you need all samples in memory.
     pub fn decode_all(&mut self) -> Result<AudioBuffer> {
         tracing::debug!("decoding entire audio stream");
-        let mut all_data: Vec<f32> = Vec::new();
-        let mut total_samples = 0usize;
-        let mut sr = self.sample_rate;
-        let mut ch = self.channels;
 
-        const MAX_DECODED_BYTES: usize = 536_870_912; // 512 MB as f32 values
+        let channels = self.format.channels as usize;
+        let sr = self.format.sample_rate;
 
-        loop {
-            match self.next_buffer() {
-                Ok(buf) => {
-                    sr = buf.sample_rate;
-                    ch = buf.channels;
-                    total_samples += buf.num_frames;
-                    // buf.data is f32 samples as bytes
-                    let floats: &[f32] = bytemuck_bytes_to_f32(&buf.data);
-                    all_data.extend_from_slice(floats);
-
-                    if all_data.len() * std::mem::size_of::<f32>() > MAX_DECODED_BYTES {
-                        return Err(TarangError::DecodeError(
-                            format!(
-                                "decoded audio exceeds 512MB limit ({} bytes)",
-                                all_data.len() * std::mem::size_of::<f32>()
-                            )
-                            .into(),
-                        ));
-                    }
-                }
-                Err(TarangError::EndOfStream) => break,
-                Err(e) => return Err(e),
-            }
-        }
-
-        if total_samples == 0 {
+        if self.samples.is_empty() {
             return Err(TarangError::DecodeError("no audio decoded".into()));
         }
 
+        let remaining = &self.samples[self.position..];
+        let total_values = remaining.len();
+        // Align to channel boundary
+        let total_values = total_values - (total_values % channels);
+
+        if total_values == 0 {
+            return Err(TarangError::DecodeError("no audio decoded".into()));
+        }
+
+        const MAX_DECODED_BYTES: usize = 536_870_912; // 512 MB
+        if total_values * std::mem::size_of::<f32>() > MAX_DECODED_BYTES {
+            return Err(TarangError::DecodeError(
+                format!(
+                    "decoded audio exceeds 512MB limit ({} bytes)",
+                    total_values * std::mem::size_of::<f32>()
+                )
+                .into(),
+            ));
+        }
+
+        let slice = &self.samples[self.position..self.position + total_values];
+        let num_frames = total_values / channels;
+
         tracing::debug!(
-            total_samples = total_samples,
-            total_bytes = all_data.len() * std::mem::size_of::<f32>(),
+            total_samples = num_frames,
+            total_bytes = total_values * std::mem::size_of::<f32>(),
             "decode_all complete"
         );
 
+        self.position = self.samples.len();
+
         Ok(AudioBuffer {
-            data: Bytes::copy_from_slice(bytemuck_f32_to_bytes(&all_data)),
+            data: Bytes::copy_from_slice(bytemuck_f32_to_bytes(slice)),
             sample_format: SampleFormat::F32,
-            channels: ch,
+            channels: channels as u16,
             sample_rate: sr,
-            num_frames: total_samples,
+            num_frames,
             timestamp: Duration::ZERO,
         })
     }
 }
 
-use super::sample::{bytes_to_f32 as bytemuck_bytes_to_f32, f32_to_bytes as bytemuck_f32_to_bytes};
+#[cfg(test)]
+use super::sample::bytes_to_f32 as bytemuck_bytes_to_f32;
+use super::sample::f32_to_bytes as bytemuck_f32_to_bytes;
 
 #[cfg(test)]
 mod tests {
@@ -500,12 +399,8 @@ mod tests {
 
     #[test]
     fn test_decode_zero_sample_rate_rejected() {
-        // Symphonia panics on WAV files with sample_rate=0 during probing,
-        // so we verify our validation would catch it by testing the code path
-        // indirectly: if symphonia ever reported sample_rate=Some(0), our
-        // check at line 75 would return Err. We verify this by confirming
-        // that a WAV with sample_rate=0 is not accepted (either symphonia
-        // panics or our code rejects it).
+        // A WAV with sample_rate=0 should be rejected by either shravan or our
+        // validation check.
         let num_samples: u32 = 100;
         let channels: u16 = 1;
         let bits: u16 = 16;
@@ -532,19 +427,9 @@ mod tests {
         buf.extend_from_slice(&vec![0u8; data_size as usize]);
 
         let cursor = Cursor::new(buf);
-        // Symphonia may panic on sample_rate=0 during probing; catch that.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            FileDecoder::open(Box::new(cursor), Some("wav"))
-        }));
-        match result {
-            Ok(Ok(_)) => panic!("decoder should reject sample_rate=0, got Ok"),
-            Ok(Err(_)) => {
-                // Our validation caught it — good
-            }
-            Err(_) => {
-                // Symphonia panicked — sample_rate=0 is not accepted either way
-            }
-        }
+        let result = FileDecoder::open(Box::new(cursor), Some("wav"));
+        // Either shravan rejects it or our validation catches sample_rate=0
+        assert!(result.is_err(), "decoder should reject sample_rate=0");
     }
 
     #[test]
@@ -562,13 +447,11 @@ mod tests {
 
     #[test]
     fn test_decode_channel_overflow_rejected() {
-        // The channel overflow check at line 83 guards against count > u16::MAX.
-        // We cannot easily mock symphonia to report > 65535 channels, but we can
-        // verify the guard exists by testing with a malformed WAV that has an
-        // absurd channel count. Symphonia may reject this before our code does,
-        // but either way it should not succeed.
+        // High channel count WAV — shravan may reject this, or it succeeds
+        // with a valid u16 channel count. Either way it must not produce
+        // a decoder with an invalid state.
         let num_samples: u32 = 100;
-        let channels: u16 = 255; // High channel count (symphonia may reject)
+        let channels: u16 = 255;
         let bits: u16 = 16;
         let sample_rate: u32 = 44100;
         let data_size = num_samples * channels as u32 * (bits as u32 / 8);
@@ -593,11 +476,8 @@ mod tests {
         buf.extend_from_slice(&vec![0u8; data_size as usize]);
 
         let cursor = Cursor::new(buf);
-        // Either symphonia or our code should reject this; it must not silently
-        // produce a decoder claiming > u16::MAX channels.
         match FileDecoder::open(Box::new(cursor), Some("wav")) {
             Ok(dec) => {
-                // If symphonia accepts it, our code must have clamped channels to a valid u16
                 assert!(dec.channels() > 0);
             }
             Err(_) => {
@@ -643,7 +523,7 @@ mod tests {
         let buf_mid = decoder.next_buffer().unwrap();
         let ts_mid = buf_mid.timestamp;
 
-        // After seeking to 0.5s, timestamp should be >= 0.4s (allow coarse seeking tolerance)
+        // After seeking to 0.5s, timestamp should be >= 0.4s (allow tolerance)
         assert!(
             ts_mid.as_secs_f64() >= 0.4,
             "after seeking to 0.5s, timestamp was {:?} (expected >= 0.4s)",
