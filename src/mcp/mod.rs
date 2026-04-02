@@ -187,28 +187,28 @@ pub async fn cmd_mcp() -> Result<()> {
 
         // Check if it's an async tool call — need special handling since
         // bote's sync Dispatcher can't run async handlers.
-        if let Ok(request) = serde_json::from_str::<serde_json::Value>(&line) {
-            if request["method"].as_str() == Some("tools/call") {
-                let tool_name = request["params"]["name"].as_str().unwrap_or("");
-                if matches!(
-                    tool_name,
-                    "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe"
-                ) {
-                    let id = &request["id"];
-                    let args = &request["params"]["arguments"];
-                    let result = handle_async_tool_call(tool_name, args).await;
-                    let response = serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": result
-                    });
-                    let stdout = std::io::stdout();
-                    let mut writer = std::io::BufWriter::new(stdout.lock());
-                    serde_json::to_writer(&mut writer, &response)?;
-                    writeln!(writer)?;
-                    writer.flush()?;
-                    continue;
-                }
+        if let Ok(request) = serde_json::from_str::<serde_json::Value>(&line)
+            && request["method"].as_str() == Some("tools/call")
+        {
+            let tool_name = request["params"]["name"].as_str().unwrap_or("");
+            if matches!(
+                tool_name,
+                "tarang_fingerprint_index" | "tarang_search_similar" | "tarang_describe"
+            ) {
+                let id = &request["id"];
+                let args = &request["params"]["arguments"];
+                let result = handle_async_tool_call(tool_name, args).await;
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": result
+                });
+                let stdout = std::io::stdout();
+                let mut writer = std::io::BufWriter::new(stdout.lock());
+                serde_json::to_writer(&mut writer, &response)?;
+                writeln!(writer)?;
+                writer.flush()?;
+                continue;
             }
         }
 

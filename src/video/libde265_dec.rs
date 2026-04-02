@@ -94,8 +94,8 @@ impl LibDe265Decoder {
     pub fn next_frame(&mut self) -> Option<VideoFrame> {
         let image = self.output.next_picture()?;
 
-        let w = image.width(libde265_rs::Channel::Y) as u32;
-        let h = image.height(libde265_rs::Channel::Y) as u32;
+        let w = image.width(libde265_rs::Channel::Y);
+        let h = image.height(libde265_rs::Channel::Y);
         let pts_us = image.pts();
         let timestamp = Duration::from_micros(pts_us.max(0) as u64);
 
@@ -104,8 +104,8 @@ impl LibDe265Decoder {
         let (cb_plane, cb_stride) = image.plane(libde265_rs::Channel::Cb);
         let (cr_plane, cr_stride) = image.plane(libde265_rs::Channel::Cr);
 
-        let chroma_w = (w as usize + 1) / 2;
-        let chroma_h = (h as usize + 1) / 2;
+        let chroma_w = (w as usize).div_ceil(2);
+        let chroma_h = (h as usize).div_ceil(2);
         let y_size = w as usize * h as usize;
         let uv_size = chroma_w * chroma_h;
 
@@ -169,12 +169,7 @@ mod tests {
         let mut dec = LibDe265Decoder::new().unwrap();
         dec.flush().unwrap();
         // Drive decoder
-        loop {
-            match dec.decode() {
-                Ok(true) => continue,
-                _ => break,
-            }
-        }
+        while let Ok(true) = dec.decode() {}
         assert!(dec.next_frame().is_none());
     }
 

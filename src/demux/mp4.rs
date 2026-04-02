@@ -1334,8 +1334,8 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
             current_ts: 0,
         });
 
-        self.info = Some(info);
-        Ok(self.info.as_ref().unwrap().clone())
+        self.info = Some(info.clone());
+        Ok(info)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

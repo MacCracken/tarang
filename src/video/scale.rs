@@ -16,6 +16,7 @@ use bytes::Bytes;
 use image::{GrayImage, ImageBuffer, RgbImage};
 
 /// Scaling filter algorithm.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleFilter {
     /// Nearest-neighbor (fastest, blocky).

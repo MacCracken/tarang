@@ -55,6 +55,11 @@ pub fn compute_fingerprint(
     buf: &AudioBuffer,
     config: &FingerprintConfig,
 ) -> Result<AudioFingerprint> {
+    tracing::debug!(
+        frames = buf.num_frames,
+        sr = buf.sample_rate,
+        "computing audio fingerprint"
+    );
     let samples = super::audio_utils::extract_mono_f32(buf)?;
 
     if samples.len() < config.frame_size {

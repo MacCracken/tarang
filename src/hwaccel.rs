@@ -116,6 +116,7 @@ impl fmt::Display for HardwareReport {
 // ---------------------------------------------------------------------------
 
 /// How a codec backend is accelerated.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecBackendKind {
     /// Software decoder/encoder compiled via feature flag.

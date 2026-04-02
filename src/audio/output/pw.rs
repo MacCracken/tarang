@@ -162,12 +162,15 @@ impl AudioOutput for PipeWireOutput {
         self.config = Some(*config);
 
         // Wait for PipeWire thread to signal readiness (up to 2s)
-        let guard = self.signal.ready.lock().unwrap();
+        let guard =
+            self.signal.ready.lock().map_err(|e| {
+                TarangError::Pipeline(format!("PipeWire mutex poisoned: {e}").into())
+            })?;
         let (guard, timeout) = self
             .signal
             .condvar
             .wait_timeout_while(guard, Duration::from_secs(2), |ready| !*ready)
-            .unwrap();
+            .map_err(|e| TarangError::Pipeline(format!("PipeWire condvar poisoned: {e}").into()))?;
         drop(guard);
         if timeout.timed_out() {
             tracing::warn!("PipeWire init did not signal ready within 2s — proceeding anyway");

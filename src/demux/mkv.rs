@@ -702,9 +702,8 @@ impl<R: Read + Seek> Demuxer for MkvDemuxer<R> {
             "MKV probe complete"
         );
 
-        let ret = info.clone();
-        self.info = Some(info);
-        Ok(ret)
+        self.info = Some(info.clone());
+        Ok(info)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

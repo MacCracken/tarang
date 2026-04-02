@@ -50,6 +50,7 @@ impl FileDecoder {
         source: Box<dyn symphonia::core::io::MediaSource>,
         extension_hint: Option<&str>,
     ) -> Result<Self> {
+        tracing::debug!(hint = ?extension_hint, "opening audio source for decoding");
         let mss = MediaSourceStream::new(source, Default::default());
 
         let mut hint = Hint::new();
@@ -120,6 +121,7 @@ impl FileDecoder {
 
     /// Open from a file path (convenience).
     pub fn open_path(path: &std::path::Path) -> Result<Self> {
+        tracing::debug!(path = %path.display(), "opening audio file");
         let file = std::fs::File::open(path).map_err(TarangError::Io)?;
         let ext = path.extension().and_then(|e| e.to_str());
         Self::open(Box::new(file), ext)
@@ -245,6 +247,7 @@ impl FileDecoder {
     /// Decode the entire file into a single contiguous buffer.
     /// Useful for short files or when you need all samples in memory.
     pub fn decode_all(&mut self) -> Result<AudioBuffer> {
+        tracing::debug!("decoding entire audio stream");
         let mut all_data: Vec<f32> = Vec::new();
         let mut total_samples = 0usize;
         let mut sr = self.sample_rate;

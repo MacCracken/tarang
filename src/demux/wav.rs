@@ -162,9 +162,8 @@ impl<R: Read + Seek> Demuxer for WavDemuxer<R> {
             metadata: std::collections::HashMap::new(),
         };
 
-        let ret = info.clone();
-        self.info = Some(info);
-        Ok(ret)
+        self.info = Some(info.clone());
+        Ok(info)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

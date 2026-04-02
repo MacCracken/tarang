@@ -28,6 +28,7 @@ pub enum ThumbnailFormat {
 }
 
 /// Strategy for scoring thumbnail candidates.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbnailStrategy {
     /// Score by luminance variance (existing behavior).

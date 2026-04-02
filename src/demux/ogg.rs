@@ -537,15 +537,14 @@ impl<R: Read + Seek> Demuxer for OggDemuxer<R> {
             metadata: std::collections::HashMap::new(),
         };
 
-        let ret = info.clone();
-        self.info = Some(info);
+        self.info = Some(info.clone());
 
         // Seek back to start of data (after BOS pages) for packet reading
         self.reader
             .seek(std::io::SeekFrom::Start(0))
             .map_err(|e| TarangError::DemuxError(format!("seek error: {e}").into()))?;
 
-        Ok(ret)
+        Ok(info)
     }
 
     fn next_packet(&mut self) -> Result<Packet> {

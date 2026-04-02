@@ -13,9 +13,9 @@ categories = ["multimedia", "multimedia::audio", "multimedia::video", "multimedi
 
 [features]
 default = []
-full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "aac-dec", "hwaccel"]
+full = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "vaapi", "opus-enc", "aac-enc", "aac-dec", "hwaccel", "gpu"]
 # All codecs except platform-specific hw accel (vaapi, pipewire excluded)
-portable = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "opus-enc", "aac-enc", "aac-dec", "hwaccel"]
+portable = ["dav1d", "vpx", "vpx-enc", "rav1e", "openh264", "openh264-enc", "opus-enc", "aac-enc", "aac-dec", "hwaccel", "gpu"]
 # Video
 dav1d = ["dep:dav1d"]
 vpx = ["dep:env-libvpx-sys"]
@@ -26,6 +26,8 @@ openh264-enc = ["dep:openh264"]
 vaapi = ["dep:cros-libva"]
 # H.265 software decode (LGPL — see WARNING in src/video/libde265_dec.rs)
 h265-decode = ["dep:libde265-rs"]
+# GPU compute pipeline
+gpu = ["dep:mabda"]
 # Hardware detection
 hwaccel = ["dep:ai-hwaccel"]
 # Audio
@@ -37,7 +39,7 @@ aac-dec = ["dep:fdk-aac"]
 
 [dependencies]
 # Core
-bote = { path = "../bote" }
+bote = "0.90"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -76,7 +78,8 @@ env-libvpx-sys = { version = "5.1", features = ["generate"], optional = true }
 rav1e = { version = "0.8", features = ["asm"], optional = true }
 openh264 = { version = "0.9", optional = true }
 
-ai-hwaccel = { version = "0.21.3", optional = true, default-features = false, features = ["vulkan"] }
+ai-hwaccel = { version = "1", optional = true, default-features = false, features = ["vulkan"] }
+mabda = { version = "1", optional = true }
 # WARNING: libde265-rs is LGPL-3.0. Not included in `full` feature.
 # Enable `h265-decode` only if your project's license is GPL-compatible.
 # To remove: delete this dep, the feature, src/video/libde265_dec.rs, and
