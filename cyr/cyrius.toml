@@ -1,0 +1,10 @@
+[package]
+name = "tarang"
+version = "2.0.0"
+description = "tarang — AI-native media framework (Cyrius port)"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/tarang"
+
+[build]
+src = "src/main.cyr"
+output = "build/tarang"

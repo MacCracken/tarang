@@ -1,0 +1,56 @@
+# math.cyr — extended math functions for f64
+# Usage: include "lib/math.cyr"
+# Requires: (uses f64 builtins directly, no other includes)
+#
+# Provides: sinh, cosh, tanh, pow, clamp, min_f64, max_f64
+# All functions operate on f64 bit patterns.
+
+# Constants (f64 bit patterns)
+var F64_ONE = 4607182418800017408;
+var F64_TWO = 4611686018427387904;
+
+# sinh(x) = (exp(x) - exp(-x)) / 2
+fn f64_sinh(x) {
+    var ex = f64_exp(x);
+    var enx = f64_exp(f64_neg(x));
+    return f64_div(f64_sub(ex, enx), F64_TWO);
+}
+
+# cosh(x) = (exp(x) + exp(-x)) / 2
+fn f64_cosh(x) {
+    var ex = f64_exp(x);
+    var enx = f64_exp(f64_neg(x));
+    return f64_div(f64_add(ex, enx), F64_TWO);
+}
+
+# tanh(x) = sinh(x) / cosh(x)
+fn f64_tanh(x) {
+    var ex = f64_exp(x);
+    var enx = f64_exp(f64_neg(x));
+    var s = f64_sub(ex, enx);
+    var c = f64_add(ex, enx);
+    return f64_div(s, c);
+}
+
+# pow(base, exp) = exp(exp * ln(base))
+fn f64_pow(base, exp) {
+    return f64_exp(f64_mul(exp, f64_ln(base)));
+}
+
+# clamp(x, lo, hi) — clamp x to [lo, hi]
+fn f64_clamp(x, lo, hi) {
+    if (f64_lt(x, lo) == 1) { return lo; }
+    if (f64_gt(x, hi) == 1) { return hi; }
+    return x;
+}
+
+# min/max for f64
+fn f64_min(a, b) {
+    if (f64_lt(a, b) == 1) { return a; }
+    return b;
+}
+# Return the larger of two f64 values
+fn f64_max(a, b) {
+    if (f64_gt(a, b) == 1) { return a; }
+    return b;
+}

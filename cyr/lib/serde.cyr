@@ -1,0 +1,128 @@
+# serde.cyr — Serialization support for shravan types
+# #derive(Serialize) auto-generates _to_json/_from_json for structs.
+# Manual helpers for enum types.
+
+#derive(Serialize)
+struct ShrFormatInfo { fmt; rate; ch; depth; dur; samples; }
+
+fn AudioFormat_to_json(val, sb) {
+    str_builder_add_cstr(sb, "{\"value\": ");
+    str_builder_add_int(sb, val);
+    str_builder_add_cstr(sb, ", \"name\": \"");
+    str_builder_add_cstr(sb, format_name(val));
+    str_builder_add_cstr(sb, "\"}");
+    return 0;
+}
+
+fn AudioFormat_from_json(pairs) {
+    return json_get_int(pairs, str_new("value", 5));
+}
+
+fn PcmFormat_to_json(val, sb) {
+    str_builder_add_cstr(sb, "{\"value\": ");
+    str_builder_add_int(sb, val);
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn PcmFormat_from_json(pairs) {
+    return json_get_int(pairs, str_new("value", 5));
+}
+
+fn ShravanErr_to_json(val, sb) {
+    str_builder_add_cstr(sb, "{\"value\": ");
+    str_builder_add_int(sb, val);
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn ShravanErr_from_json(pairs) {
+    return json_get_int(pairs, str_new("value", 5));
+}
+
+fn test_serde_format_info() {
+    syscall(1, 1, "test: serde FormatInfo roundtrip\n", 33);
+    var fi_ptr = alloc(48);
+    store64(fi_ptr, FMT_WAV); store64(fi_ptr+8, 44100); store64(fi_ptr+16, 2);
+    store64(fi_ptr+24, 16); store64(fi_ptr+32, f64_from(10)); store64(fi_ptr+40, 441000);
+    var sb = str_builder_new();
+    ShrFormatInfo_to_json(fi_ptr, sb);
+    var json_str = str_builder_build(sb);
+    var pairs = json_parse(json_str);
+    var recovered = ShrFormatInfo_from_json(pairs);
+    assert_eq(load64(recovered), FMT_WAV, "serde fi fmt");
+    assert_eq(load64(recovered+8), 44100, "serde fi rate");
+    assert_eq(load64(recovered+16), 2, "serde fi ch");
+    assert_eq(load64(recovered+24), 16, "serde fi depth");
+    assert_eq(load64(recovered+40), 441000, "serde fi samples");
+    return 0;
+}
+
+fn test_serde_enums() {
+    syscall(1, 1, "test: serde enum roundtrip\n", 27);
+    var sb1 = str_builder_new();
+    AudioFormat_to_json(FMT_FLAC, sb1);
+    var json1 = str_builder_build(sb1);
+    var pairs1 = json_parse(json1);
+    var af = AudioFormat_from_json(pairs1);
+    assert_eq(af, FMT_FLAC, "serde AudioFormat roundtrip");
+    var sb2 = str_builder_new();
+    PcmFormat_to_json(PCM_I24, sb2);
+    var json2 = str_builder_build(sb2);
+    var pairs2 = json_parse(json2);
+    var pf = PcmFormat_from_json(pairs2);
+    assert_eq(pf, PCM_I24, "serde PcmFormat roundtrip");
+    var sb3 = str_builder_new();
+    ShravanErr_to_json(ERR_DECODE, sb3);
+    var json3 = str_builder_build(sb3);
+    var pairs3 = json_parse(json3);
+    var ef = ShravanErr_from_json(pairs3);
+    assert_eq(ef, ERR_DECODE, "serde ShravanErr roundtrip");
+    return 0;
+}
+
+fn test_wav_f32_roundtrip() {
+    syscall(1, 1, "test: wav f32 ieee roundtrip\n", 29);
+    var samples = vec_new();
+    vec_push(samples, F64_ZERO);
+    vec_push(samples, F64_HALF);
+    vec_push(samples, F64_NEG_HALF);
+    vec_push(samples, F64_ONE);
+    var wav_buf = alloc(65536);
+    var wav_sz = wav_encode(samples, 44100, 1, PCM_F32, wav_buf);
+    assert(is_ok(wav_sz) == 1, "wav f32 encode ok");
+    var result = wav_decode(wav_buf, wav_sz);
+    assert(is_ok(result) == 1, "wav f32 decode ok");
+    var fi = decode_result_info(result);
+    assert_eq(fmtinfo_format(fi), FMT_WAV, "wav f32 format");
+    assert_eq(fmtinfo_bit_depth(fi), 32, "wav f32 depth");
+    assert_eq(vec_len(decode_result_samples(result)), 4, "wav f32 count");
+    return 0;
+}
+
+fn test_aiff_8bit() {
+    syscall(1, 1, "test: aiff 8-bit\n", 18);
+    var samples = vec_new();
+    vec_push(samples, F64_ZERO); vec_push(samples, F64_HALF); vec_push(samples, F64_NEG_HALF);
+    var abuf = alloc(65536);
+    var asz = aiff_encode(samples, 22050, 1, 8, abuf);
+    assert(is_ok(asz) == 1, "aiff 8bit encode ok");
+    var result = aiff_decode(abuf, asz);
+    assert(is_ok(result) == 1, "aiff 8bit decode ok");
+    assert_eq(fmtinfo_bit_depth(decode_result_info(result)), 8, "aiff 8bit depth");
+    return 0;
+}
+
+fn test_aiff_stereo() {
+    syscall(1, 1, "test: aiff stereo\n", 19);
+    var samples = vec_new();
+    vec_push(samples, F64_HALF); vec_push(samples, F64_NEG_HALF);
+    vec_push(samples, F64_ZERO); vec_push(samples, F64_ONE);
+    var abuf = alloc(65536);
+    var asz = aiff_encode(samples, 44100, 2, 16, abuf);
+    assert(is_ok(asz) == 1, "aiff stereo encode ok");
+    var result = aiff_decode(abuf, asz);
+    assert(is_ok(result) == 1, "aiff stereo decode ok");
+    assert_eq(fmtinfo_channels(decode_result_info(result)), 2, "aiff stereo ch=2");
+    return 0;
+}
