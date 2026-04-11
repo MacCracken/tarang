@@ -1,0 +1,203 @@
+# tarang/mux -- Container muxing (writing)
+#
+# WAV muxer: writes PCM data into RIFF/WAVE files.
+# OGG muxer: wraps codec packets in OGG pages (uses ogg.cyr).
+#
+# Works on file descriptors with write/lseek syscalls.
+
+# ================================================================
+# MuxConfig
+#   Layout: 32 bytes
+#     +0: codec (AudioCodec)
+#     +8: sample_rate
+#     +16: channels
+#     +24: bits_per_sample
+# ================================================================
+
+fn mux_config_new(codec, sr, ch, bps) {
+    var c = alloc(32);
+    store64(c, codec);
+    store64(c + 8, sr);
+    store64(c + 16, ch);
+    store64(c + 24, bps);
+    return c;
+}
+
+# ================================================================
+# WAV Muxer
+#   Layout: 24 bytes
+#     +0: fd
+#     +8: config ptr
+#     +16: data_bytes_written
+# ================================================================
+
+fn wav_muxer_new(fd, config) {
+    var m = alloc(24);
+    store64(m, fd);
+    store64(m + 8, config);
+    store64(m + 16, 0);
+    return m;
+}
+
+fn wav_mux_write_header(m) {
+    var fd = load64(m);
+    var cfg = load64(m + 8);
+    var sr = load64(cfg + 8);
+    var ch = load64(cfg + 16);
+    var bps = load64(cfg + 24);
+    var byte_rate = sr * ch * (bps / 8);
+    var block_align = ch * (bps / 8);
+
+    var hdr = alloc(44);
+    memset(hdr, 0, 44);
+
+    # RIFF header
+    memcpy(hdr, "RIFF", 4);
+    write_u32_le(hdr, 4, 0);  # placeholder -- patched in finalize
+    memcpy(hdr + 8, "WAVE", 4);
+
+    # fmt chunk
+    memcpy(hdr + 12, "fmt ", 4);
+    write_u32_le(hdr, 16, 16);     # chunk size
+    write_u16_le(hdr, 20, 1);      # PCM format
+    write_u16_le(hdr, 22, ch);
+    write_u32_le(hdr, 24, sr);
+    write_u32_le(hdr, 28, byte_rate);
+    write_u16_le(hdr, 32, block_align);
+    write_u16_le(hdr, 34, bps);
+
+    # data chunk
+    memcpy(hdr + 36, "data", 4);
+    write_u32_le(hdr, 40, 0);      # placeholder
+
+    syscall(1, fd, hdr, 44);
+    return 0;
+}
+
+fn wav_mux_write_packet(m, data, len) {
+    var fd = load64(m);
+    syscall(1, fd, data, len);
+    var written = load64(m + 16);
+    store64(m + 16, written + len);
+    return 0;
+}
+
+fn wav_mux_finalize(m) {
+    var fd = load64(m);
+    var data_written = load64(m + 16);
+
+    # Patch RIFF size at offset 4
+    var riff_size = 36 + data_written;
+    var buf = alloc(4);
+    write_u32_le(buf, 0, riff_size);
+    wav_lseek(fd, 4, SEEK_SET);
+    syscall(1, fd, buf, 4);
+
+    # Patch data chunk size at offset 40
+    write_u32_le(buf, 0, data_written);
+    wav_lseek(fd, 40, SEEK_SET);
+    syscall(1, fd, buf, 4);
+
+    return 0;
+}
+
+# ================================================================
+# OGG Muxer -- wraps packets in OGG pages
+#   Layout: 32 bytes
+#     +0: fd
+#     +8: config ptr
+#     +16: serial
+#     +24: page_sequence
+# ================================================================
+
+fn ogg_muxer_new(fd, config) {
+    var m = alloc(32);
+    store64(m, fd);
+    store64(m + 8, config);
+    # Semi-random serial from pid
+    var pid_buf = alloc(8);
+    var pid = syscall(39, 0, 0, 0);  # SYS_GETPID
+    store64(m + 16, pid * 31 + 0x74617261);  # tarang signature
+    store64(m + 24, 0);
+    return m;
+}
+
+fn ogg_mux_write_header(m) {
+    var fd = load64(m);
+    var cfg = load64(m + 8);
+    var codec = load64(cfg);
+    var serial = load64(m + 16);
+    var sr = load64(cfg + 8);
+    var ch = load64(cfg + 16);
+
+    if (codec == AUDIO_OPUS) {
+        # OpusHead packet (19 bytes)
+        var oh = alloc(19);
+        memset(oh, 0, 19);
+        memcpy(oh, "OpusHead", 8);
+        store8(oh + 8, 1);   # version
+        store8(oh + 9, ch);  # channels
+        write_u16_le(oh, 10, 0);   # pre_skip
+        write_u32_le(oh, 12, sr);  # input sample rate
+        write_u16_le(oh, 16, 0);   # output gain
+        store8(oh + 18, 0);        # channel mapping
+
+        var page = ogg_build_page(0x02, 0, serial, 0, oh, 19);
+        var page_data = str_data(page);
+        var page_len = str_len(page);
+        syscall(1, fd, page_data, page_len);
+        store64(m + 24, 1);
+
+        # OpusTags (minimal: 23 bytes)
+        var ot_len = 8 + 4 + 7 + 4;  # "OpusTags" + vendor_len + "tarang" + 0 comments
+        var ot = alloc(ot_len);
+        memset(ot, 0, ot_len);
+        memcpy(ot, "OpusTags", 8);
+        write_u32_le(ot, 8, 6);   # vendor string length
+        memcpy(ot + 12, "tarang", 6);
+        write_u32_le(ot, 18, 0);  # 0 user comments
+
+        var page2 = ogg_build_page(0x00, 0, serial, 1, ot, ot_len);
+        syscall(1, fd, str_data(page2), str_len(page2));
+        store64(m + 24, 2);
+    }
+    elif (codec == AUDIO_VORBIS) {
+        # Vorbis identification header (30 bytes)
+        var vh = alloc(30);
+        memset(vh, 0, 30);
+        store8(vh, 0x01);          # packet type: identification
+        memcpy(vh + 1, "vorbis", 6);
+        write_u32_le(vh, 7, 0);   # version
+        store8(vh + 11, ch);
+        write_u32_le(vh, 12, sr);
+        # bitrates all zero
+
+        var page = ogg_build_page(0x02, 0, serial, 0, vh, 30);
+        syscall(1, fd, str_data(page), str_len(page));
+        store64(m + 24, 1);
+    }
+
+    return 0;
+}
+
+fn ogg_mux_write_packet(m, data, len) {
+    var fd = load64(m);
+    var serial = load64(m + 16);
+    var page_seq = load64(m + 24);
+
+    var page = ogg_build_page(0x00, 0, serial, page_seq, data, len);
+    syscall(1, fd, str_data(page), str_len(page));
+    store64(m + 24, page_seq + 1);
+    return 0;
+}
+
+fn ogg_mux_finalize(m) {
+    var fd = load64(m);
+    var serial = load64(m + 16);
+    var page_seq = load64(m + 24);
+    var empty = alloc(0);
+
+    var page = ogg_build_page(0x04, 0, serial, page_seq, empty, 0);
+    syscall(1, fd, str_data(page), str_len(page));
+    return 0;
+}

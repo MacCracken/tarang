@@ -39,6 +39,10 @@ include "src/demux_ogg.cyr"
 include "src/demux_mp4.cyr"
 include "src/demux_mkv.cyr"
 include "src/audio.cyr"
+#ifdef MUX_CLI_ENABLED
+include "src/mux.cyr"
+include "src/cli.cyr"
+#endif
 #ifdef AI_ENABLED
 include "src/ai_fingerprint.cyr"
 include "src/ai_scene.cyr"
@@ -849,6 +853,125 @@ fn test_audio_gain() {
     return 0;
 }
 
+#ifdef MUX_CLI_ENABLED
+# ================================================================
+# Tests -- WAV Muxer
+# ================================================================
+
+fn test_wav_muxer() {
+    var path = "/tmp/tarang_mux_test.wav";
+    var fd = syscall(2, path, 577, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC
+    assert(fd >= 0, "mux wav open");
+
+    var cfg = mux_config_new(AUDIO_PCM, 44100, 2, 16);
+    var m = wav_muxer_new(fd, cfg);
+
+    wav_mux_write_header(m);
+
+    # Write 1000 samples of silence (2ch * 2bytes = 4000 bytes)
+    var data = alloc(4000);
+    memset(data, 0, 4000);
+    wav_mux_write_packet(m, data, 4000);
+
+    wav_mux_finalize(m);
+    syscall(3, fd);
+
+    # Read it back with our demuxer
+    var rfd = syscall(2, path, 0, 0);
+    assert(rfd >= 0, "mux wav reopen");
+    var d = wav_demuxer_new(rfd);
+    var mi = wav_probe(d);
+    assert(tarang_is_err(mi) == 0, "mux wav probe ok");
+    assert_eq(media_info_format(mi), FMT_WAV, "mux wav format");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_sample_rate(a), 44100, "mux wav sr");
+    assert_eq(audio_stream_channels(a), 2, "mux wav ch");
+
+    # Read packets and verify total bytes
+    var total = 0;
+    while (1 == 1) {
+        var p = wav_next_packet(d);
+        if (tarang_is_err(p) == 1) { break; }
+        total = total + packet_data_len(p);
+    }
+    assert_eq(total, 4000, "mux wav roundtrip bytes");
+
+    syscall(3, rfd);
+    return 0;
+}
+
+# ================================================================
+# Tests -- OGG Muxer
+# ================================================================
+
+fn test_ogg_muxer() {
+    var path = "/tmp/tarang_mux_test.ogg";
+    var fd = syscall(2, path, 577, 0x1A4);
+    assert(fd >= 0, "mux ogg open");
+
+    var cfg = mux_config_new(AUDIO_OPUS, 48000, 2, 16);
+    var m = ogg_muxer_new(fd, cfg);
+
+    ogg_mux_write_header(m);
+
+    # Write 3 dummy packets
+    var pkt = alloc(64);
+    memset(pkt, 0xFC, 64);
+    ogg_mux_write_packet(m, pkt, 64);
+    ogg_mux_write_packet(m, pkt, 64);
+    ogg_mux_write_packet(m, pkt, 64);
+
+    ogg_mux_finalize(m);
+    syscall(3, fd);
+
+    # Read back with OGG demuxer
+    var rfd = syscall(2, path, 0, 0);
+    assert(rfd >= 0, "mux ogg reopen");
+    var d = ogg_demuxer_new(rfd);
+    var mi = ogg_demux_probe(d);
+    assert(tarang_is_err(mi) == 0, "mux ogg probe ok");
+    assert_eq(media_info_format(mi), FMT_OGG, "mux ogg format");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_codec(a), AUDIO_OPUS, "mux ogg codec opus");
+    assert_eq(audio_stream_channels(a), 2, "mux ogg ch");
+    assert_eq(audio_stream_sample_rate(a), 48000, "mux ogg sr");
+
+    # Read data packets
+    var count = 0;
+    while (1 == 1) {
+        var p = ogg_demux_next_packet(d);
+        if (tarang_is_err(p) == 1) { break; }
+        assert_eq(packet_data_len(p), 64, "mux ogg pkt size");
+        count = count + 1;
+    }
+    assert(count >= 1, "mux ogg read pkts");
+
+    syscall(3, rfd);
+    return 0;
+}
+
+# ================================================================
+# Tests -- CLI
+# ================================================================
+
+fn test_cli_version() {
+    assert(streq(TARANG_VERSION, "2.0.0") == 1, "cli version");
+    return 0;
+}
+
+fn test_cli_codecs() {
+    # Just verify the function doesn't crash
+    # (output goes to stdout, we just test it runs)
+    # We'll suppress by not calling -- instead test the codec names
+    assert(streq(AudioCodec_name(AUDIO_PCM), "PCM") == 1, "cli codec pcm");
+    assert(streq(AudioCodec_name(AUDIO_OPUS), "Opus") == 1, "cli codec opus");
+    assert(streq(ContainerFormat_name(FMT_WAV), "WAV") == 1, "cli fmt wav");
+    assert(streq(ContainerFormat_name(FMT_OGG), "OGG") == 1, "cli fmt ogg");
+    return 0;
+}
+
+#endif
+
 # ================================================================
 # Tests -- AI Fingerprint (gated behind -D AI_ENABLED)
 # ================================================================
@@ -1027,6 +1150,13 @@ test_mkv_invalid();
 test_audio_mix();
 test_audio_loudness();
 test_audio_gain();
+
+#ifdef MUX_CLI_ENABLED
+test_wav_muxer();
+test_ogg_muxer();
+test_cli_version();
+test_cli_codecs();
+#endif
 
 #ifdef AI_ENABLED
 test_fingerprint();
