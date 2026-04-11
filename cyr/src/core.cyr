@@ -1,0 +1,631 @@
+# tarang/core — Core types for the Tarang media framework
+#
+# Defines codecs, container formats, media buffers, stream metadata,
+# error codes, and helper functions used across all Tarang modules.
+#
+# Design decisions:
+#   - All audio samples are f64 internally (Cyrius native, matches shravan)
+#   - Packed Result: Ok returns value >= 0, Err sets bit 63 (value < 0)
+#   - Error codes are integer enums
+#   - Structs are heap-allocated via alloc() with accessor functions
+#   - Vec used for stream lists, metadata stored in hashmap
+
+# ================================================================
+# Audio Codecs
+# ================================================================
+
+enum AudioCodec {
+    AUDIO_PCM = 0;
+    AUDIO_MP3 = 1;
+    AUDIO_AAC = 2;
+    AUDIO_FLAC = 3;
+    AUDIO_VORBIS = 4;
+    AUDIO_OPUS = 5;
+    AUDIO_ALAC = 6;
+    AUDIO_WMA = 7;
+}
+
+fn AudioCodec_name(codec) {
+    if (codec == AUDIO_PCM) { return "PCM"; }
+    if (codec == AUDIO_MP3) { return "MP3"; }
+    if (codec == AUDIO_AAC) { return "AAC"; }
+    if (codec == AUDIO_FLAC) { return "FLAC"; }
+    if (codec == AUDIO_VORBIS) { return "Vorbis"; }
+    if (codec == AUDIO_OPUS) { return "Opus"; }
+    if (codec == AUDIO_ALAC) { return "ALAC"; }
+    if (codec == AUDIO_WMA) { return "WMA"; }
+    return "Unknown";
+}
+
+fn AudioCodec_print(codec) {
+    var name = AudioCodec_name(codec);
+    syscall(1, 1, name, strlen(name));
+    return 0;
+}
+
+# ================================================================
+# Video Codecs
+# ================================================================
+
+enum VideoCodec {
+    VIDEO_H264 = 0;
+    VIDEO_H265 = 1;
+    VIDEO_VP8 = 2;
+    VIDEO_VP9 = 3;
+    VIDEO_AV1 = 4;
+    VIDEO_THEORA = 5;
+}
+
+fn VideoCodec_name(codec) {
+    if (codec == VIDEO_H264) { return "H.264"; }
+    if (codec == VIDEO_H265) { return "H.265"; }
+    if (codec == VIDEO_VP8) { return "VP8"; }
+    if (codec == VIDEO_VP9) { return "VP9"; }
+    if (codec == VIDEO_AV1) { return "AV1"; }
+    if (codec == VIDEO_THEORA) { return "Theora"; }
+    return "Unknown";
+}
+
+fn VideoCodec_print(codec) {
+    var name = VideoCodec_name(codec);
+    syscall(1, 1, name, strlen(name));
+    return 0;
+}
+
+# ================================================================
+# Subtitle Codec (tag only)
+# ================================================================
+
+enum SubtitleCodec {
+    SUB_TEXT = 0;
+    SUB_SSA = 1;
+    SUB_WEBVTT = 2;
+}
+
+# ================================================================
+# Container Formats
+# ================================================================
+
+enum ContainerFormat {
+    FMT_MP4 = 0;
+    FMT_MKV = 1;
+    FMT_WEBM = 2;
+    FMT_OGG = 3;
+    FMT_WAV = 4;
+    FMT_FLAC = 5;
+    FMT_MP3 = 6;
+    FMT_AVI = 7;
+}
+
+fn ContainerFormat_name(fmt) {
+    if (fmt == FMT_MP4) { return "MP4"; }
+    if (fmt == FMT_MKV) { return "Matroska"; }
+    if (fmt == FMT_WEBM) { return "WebM"; }
+    if (fmt == FMT_OGG) { return "OGG"; }
+    if (fmt == FMT_WAV) { return "WAV"; }
+    if (fmt == FMT_FLAC) { return "FLAC"; }
+    if (fmt == FMT_MP3) { return "MP3"; }
+    if (fmt == FMT_AVI) { return "AVI"; }
+    return "Unknown";
+}
+
+fn ContainerFormat_print(fmt) {
+    var name = ContainerFormat_name(fmt);
+    syscall(1, 1, name, strlen(name));
+    return 0;
+}
+
+# Detect container format from magic bytes.
+# data: pointer to buffer, len: buffer length
+# Returns format enum value or -1 if unknown.
+fn container_from_magic(data, len) {
+    if (len < 12) { return 0 - 1; }
+
+    # ftyp box for MP4 — bytes[4..8] == "ftyp"
+    if (load8(data + 4) == 0x66) {
+        if (load8(data + 5) == 0x74) {
+            if (load8(data + 6) == 0x79) {
+                if (load8(data + 7) == 0x70) {
+                    return FMT_MP4;
+                }
+            }
+        }
+    }
+
+    # EBML header for MKV/WebM: 0x1A 0x45 0xDF 0xA3
+    if (load8(data) == 0x1A) {
+        if (load8(data + 1) == 0x45) {
+            if (load8(data + 2) == 0xDF) {
+                if (load8(data + 3) == 0xA3) {
+                    # Search for "webm" DocType in first 64 bytes
+                    var limit = len;
+                    if (limit > 64) { limit = 64; }
+                    var wi = 0;
+                    while (wi < limit - 3) {
+                        if (load8(data + wi) == 0x77) {
+                            if (load8(data + wi + 1) == 0x65) {
+                                if (load8(data + wi + 2) == 0x62) {
+                                    if (load8(data + wi + 3) == 0x6D) {
+                                        return FMT_WEBM;
+                                    }
+                                }
+                            }
+                        }
+                        wi = wi + 1;
+                    }
+                    return FMT_MKV;
+                }
+            }
+        }
+    }
+
+    # OggS
+    if (memeq(data, "OggS", 4) == 1) { return FMT_OGG; }
+
+    # RIFF....WAVE
+    if (memeq(data, "RIFF", 4) == 1) {
+        if (memeq(data + 8, "WAVE", 4) == 1) { return FMT_WAV; }
+        if (memeq(data + 8, "AVI ", 4) == 1) { return FMT_AVI; }
+    }
+
+    # fLaC
+    if (memeq(data, "fLaC", 4) == 1) { return FMT_FLAC; }
+
+    # ID3 tag (MP3)
+    if (memeq(data, "ID3", 3) == 1) { return FMT_MP3; }
+
+    # MP3 sync word: 0xFF 0xE0 mask
+    if (len >= 2) {
+        if (load8(data) == 0xFF) {
+            if ((load8(data + 1) & 0xE0) == 0xE0) {
+                return FMT_MP3;
+            }
+        }
+    }
+
+    return 0 - 1;
+}
+
+# ================================================================
+# Sample Formats
+# ================================================================
+
+enum SampleFormat {
+    SAMPLE_I16 = 0;
+    SAMPLE_I32 = 1;
+    SAMPLE_F32 = 2;
+    SAMPLE_F64 = 3;
+}
+
+fn SampleFormat_bytes(fmt) {
+    if (fmt == SAMPLE_I16) { return 2; }
+    if (fmt == SAMPLE_I32) { return 4; }
+    if (fmt == SAMPLE_F32) { return 4; }
+    if (fmt == SAMPLE_F64) { return 8; }
+    return 0;
+}
+
+fn SampleFormat_name(fmt) {
+    if (fmt == SAMPLE_I16) { return "I16"; }
+    if (fmt == SAMPLE_I32) { return "I32"; }
+    if (fmt == SAMPLE_F32) { return "F32"; }
+    if (fmt == SAMPLE_F64) { return "F64"; }
+    return "Unknown";
+}
+
+# ================================================================
+# Pixel Formats
+# ================================================================
+
+enum PixelFormat {
+    PIX_YUV420P = 0;
+    PIX_YUV422P = 1;
+    PIX_YUV444P = 2;
+    PIX_RGB24 = 3;
+    PIX_RGBA32 = 4;
+    PIX_NV12 = 5;
+}
+
+fn PixelFormat_name(fmt) {
+    if (fmt == PIX_YUV420P) { return "YUV420p"; }
+    if (fmt == PIX_YUV422P) { return "YUV422p"; }
+    if (fmt == PIX_YUV444P) { return "YUV444p"; }
+    if (fmt == PIX_RGB24) { return "RGB24"; }
+    if (fmt == PIX_RGBA32) { return "RGBA32"; }
+    if (fmt == PIX_NV12) { return "NV12"; }
+    return "Unknown";
+}
+
+# ================================================================
+# Channel Layouts
+# ================================================================
+
+enum ChannelLayout {
+    CH_MONO = 1;
+    CH_STEREO = 2;
+    CH_SURROUND_51 = 6;
+    CH_SURROUND_71 = 8;
+}
+
+# ================================================================
+# Pipeline State
+# ================================================================
+
+enum PipelineState {
+    PIPE_IDLE = 0;
+    PIPE_OPENING = 1;
+    PIPE_PLAYING = 2;
+    PIPE_PAUSED = 3;
+    PIPE_SEEKING = 4;
+    PIPE_ERROR = 5;
+    PIPE_FINISHED = 6;
+}
+
+fn PipelineState_name(state) {
+    if (state == PIPE_IDLE) { return "Idle"; }
+    if (state == PIPE_OPENING) { return "Opening"; }
+    if (state == PIPE_PLAYING) { return "Playing"; }
+    if (state == PIPE_PAUSED) { return "Paused"; }
+    if (state == PIPE_SEEKING) { return "Seeking"; }
+    if (state == PIPE_ERROR) { return "Error"; }
+    if (state == PIPE_FINISHED) { return "Finished"; }
+    return "Unknown";
+}
+
+# ================================================================
+# Error Codes — packed Result pattern (same as shravan)
+#   Ok: return value >= 0
+#   Err: value < 0 (bit 63 set)
+# ================================================================
+
+enum TarangErr {
+    ERR_NONE = 0;
+    ERR_UNSUPPORTED_CODEC = 1;
+    ERR_UNSUPPORTED_FORMAT = 2;
+    ERR_DECODE = 3;
+    ERR_DEMUX = 4;
+    ERR_IO = 5;
+    ERR_END_OF_STREAM = 6;
+    ERR_ENCODE = 7;
+    ERR_MUX = 8;
+    ERR_CONFIG = 9;
+    ERR_PIPELINE = 10;
+    ERR_HWACCEL = 11;
+    ERR_AI = 12;
+    ERR_NETWORK = 13;
+    ERR_IMAGE = 14;
+}
+
+fn tarang_err(code) { return 0 - code; }
+fn tarang_is_err(r) { if (r < 0) { return 1; } return 0; }
+fn tarang_err_code(r) { return 0 - r; }
+
+fn TarangErr_name(code) {
+    if (code == ERR_UNSUPPORTED_CODEC) { return "unsupported codec"; }
+    if (code == ERR_UNSUPPORTED_FORMAT) { return "unsupported format"; }
+    if (code == ERR_DECODE) { return "decode error"; }
+    if (code == ERR_DEMUX) { return "demux error"; }
+    if (code == ERR_IO) { return "I/O error"; }
+    if (code == ERR_END_OF_STREAM) { return "end of stream"; }
+    if (code == ERR_ENCODE) { return "encode error"; }
+    if (code == ERR_MUX) { return "mux error"; }
+    if (code == ERR_CONFIG) { return "configuration error"; }
+    if (code == ERR_PIPELINE) { return "pipeline error"; }
+    if (code == ERR_HWACCEL) { return "hardware acceleration error"; }
+    if (code == ERR_AI) { return "AI feature error"; }
+    if (code == ERR_NETWORK) { return "network error"; }
+    if (code == ERR_IMAGE) { return "image error"; }
+    return "unknown error";
+}
+
+# ================================================================
+# AudioStreamInfo — audio stream metadata from probing/demuxing
+#   Layout: 48 bytes
+#     +0:  codec (AudioCodec)
+#     +8:  sample_rate (Hz)
+#     +16: channels
+#     +24: sample_format (SampleFormat)
+#     +32: bitrate (bps, 0 if unknown)
+#     +40: duration_ns (nanoseconds, 0 if unknown)
+# ================================================================
+
+fn audio_stream_new(codec, sr, ch, sfmt, bitrate, dur_ns) {
+    var s = alloc(48);
+    store64(s,      codec);
+    store64(s + 8,  sr);
+    store64(s + 16, ch);
+    store64(s + 24, sfmt);
+    store64(s + 32, bitrate);
+    store64(s + 40, dur_ns);
+    return s;
+}
+
+fn audio_stream_codec(s)       { return load64(s); }
+fn audio_stream_sample_rate(s) { return load64(s + 8); }
+fn audio_stream_channels(s)    { return load64(s + 16); }
+fn audio_stream_sample_fmt(s)  { return load64(s + 24); }
+fn audio_stream_bitrate(s)     { return load64(s + 32); }
+fn audio_stream_duration_ns(s) { return load64(s + 40); }
+
+# ================================================================
+# VideoStreamInfo — video stream metadata from probing/demuxing
+#   Layout: 56 bytes
+#     +0:  codec (VideoCodec)
+#     +8:  width
+#     +16: height
+#     +24: pixel_format (PixelFormat)
+#     +32: frame_rate (f64 bit pattern)
+#     +40: bitrate (bps, 0 if unknown)
+#     +48: duration_ns (nanoseconds, 0 if unknown)
+# ================================================================
+
+fn video_stream_new(codec, w, h, pfmt, frame_rate, bitrate, dur_ns) {
+    var s = alloc(56);
+    store64(s,      codec);
+    store64(s + 8,  w);
+    store64(s + 16, h);
+    store64(s + 24, pfmt);
+    store64(s + 32, frame_rate);
+    store64(s + 40, bitrate);
+    store64(s + 48, dur_ns);
+    return s;
+}
+
+fn video_stream_codec(s)       { return load64(s); }
+fn video_stream_width(s)       { return load64(s + 8); }
+fn video_stream_height(s)      { return load64(s + 16); }
+fn video_stream_pixel_fmt(s)   { return load64(s + 24); }
+fn video_stream_frame_rate(s)  { return load64(s + 32); }
+fn video_stream_bitrate(s)     { return load64(s + 40); }
+fn video_stream_duration_ns(s) { return load64(s + 48); }
+
+# ================================================================
+# StreamInfo — tagged union for audio/video/subtitle streams
+#   Layout: 16 bytes
+#     +0: tag (STREAM_AUDIO=0, STREAM_VIDEO=1, STREAM_SUBTITLE=2)
+#     +8: ptr (pointer to AudioStreamInfo, VideoStreamInfo, or language Str)
+# ================================================================
+
+enum StreamTag {
+    STREAM_AUDIO = 0;
+    STREAM_VIDEO = 1;
+    STREAM_SUBTITLE = 2;
+}
+
+fn stream_audio(info_ptr) {
+    var s = alloc(16);
+    store64(s, STREAM_AUDIO);
+    store64(s + 8, info_ptr);
+    return s;
+}
+
+fn stream_video(info_ptr) {
+    var s = alloc(16);
+    store64(s, STREAM_VIDEO);
+    store64(s + 8, info_ptr);
+    return s;
+}
+
+fn stream_subtitle(lang_str) {
+    var s = alloc(16);
+    store64(s, STREAM_SUBTITLE);
+    store64(s + 8, lang_str);
+    return s;
+}
+
+fn stream_tag(s)  { return load64(s); }
+fn stream_ptr(s)  { return load64(s + 8); }
+
+fn stream_is_audio(s) { return load64(s) == STREAM_AUDIO; }
+fn stream_is_video(s) { return load64(s) == STREAM_VIDEO; }
+
+# ================================================================
+# MediaInfo — metadata about a media file
+#   Layout: 80 bytes
+#     +0:  format (ContainerFormat)
+#     +8:  streams (vec ptr)
+#     +16: duration_ns (0 if unknown)
+#     +24: file_size (0 if unknown)
+#     +32: title (Str ptr, 0 if none)
+#     +40: artist (Str ptr, 0 if none)
+#     +48: album (Str ptr, 0 if none)
+#     +56: metadata (hashmap ptr)
+#     +64: id (simple counter, no uuid dep)
+# ================================================================
+
+var _media_info_id_counter = 0;
+
+fn media_info_new(format, streams_vec) {
+    _media_info_id_counter = _media_info_id_counter + 1;
+    var mi = alloc(72);
+    store64(mi,      format);
+    store64(mi + 8,  streams_vec);
+    store64(mi + 16, 0);
+    store64(mi + 24, 0);
+    store64(mi + 32, 0);
+    store64(mi + 40, 0);
+    store64(mi + 48, 0);
+    store64(mi + 56, map_new());
+    store64(mi + 64, _media_info_id_counter);
+    return mi;
+}
+
+fn media_info_format(mi)      { return load64(mi); }
+fn media_info_streams(mi)     { return load64(mi + 8); }
+fn media_info_duration_ns(mi) { return load64(mi + 16); }
+fn media_info_file_size(mi)   { return load64(mi + 24); }
+fn media_info_title(mi)       { return load64(mi + 32); }
+fn media_info_artist(mi)      { return load64(mi + 40); }
+fn media_info_album(mi)       { return load64(mi + 48); }
+fn media_info_metadata(mi)    { return load64(mi + 56); }
+fn media_info_id(mi)          { return load64(mi + 64); }
+
+fn media_info_set_duration_ns(mi, ns) { store64(mi + 16, ns); return 0; }
+fn media_info_set_file_size(mi, sz)   { store64(mi + 24, sz); return 0; }
+fn media_info_set_title(mi, s)        { store64(mi + 32, s); return 0; }
+fn media_info_set_artist(mi, s)       { store64(mi + 40, s); return 0; }
+fn media_info_set_album(mi, s)        { store64(mi + 48, s); return 0; }
+
+fn media_info_has_audio(mi) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_audio(s) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn media_info_has_video(mi) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_video(s) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn media_info_audio_count(mi) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var count = 0;
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_audio(s) == 1) { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn media_info_video_count(mi) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var count = 0;
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_video(s) == 1) { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+
+# Get nth audio stream (0-indexed), returns ptr or 0
+fn media_info_audio_stream(mi, n) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var count = 0;
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_audio(s) == 1) {
+            if (count == n) { return stream_ptr(s); }
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Get nth video stream (0-indexed), returns ptr or 0
+fn media_info_video_stream(mi, n) {
+    var streams = load64(mi + 8);
+    var len = vec_len(streams);
+    var count = 0;
+    var i = 0;
+    while (i < len) {
+        var s = vec_get(streams, i);
+        if (stream_is_video(s) == 1) {
+            if (count == n) { return stream_ptr(s); }
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# AudioBuffer — decoded audio samples (interleaved f64)
+#   Layout: 48 bytes
+#     +0:  data (pointer to sample data)
+#     +8:  data_len (byte length of data)
+#     +16: sample_format (SampleFormat)
+#     +24: channels
+#     +32: sample_rate (Hz)
+#     +40: num_frames
+# ================================================================
+
+fn audio_buf_new(data, data_len, sfmt, ch, sr, frames) {
+    var ab = alloc(48);
+    store64(ab,      data);
+    store64(ab + 8,  data_len);
+    store64(ab + 16, sfmt);
+    store64(ab + 24, ch);
+    store64(ab + 32, sr);
+    store64(ab + 40, frames);
+    return ab;
+}
+
+fn audio_buf_data(ab)        { return load64(ab); }
+fn audio_buf_data_len(ab)    { return load64(ab + 8); }
+fn audio_buf_sample_fmt(ab)  { return load64(ab + 16); }
+fn audio_buf_channels(ab)    { return load64(ab + 24); }
+fn audio_buf_sample_rate(ab) { return load64(ab + 32); }
+fn audio_buf_num_frames(ab)  { return load64(ab + 40); }
+
+# ================================================================
+# VideoFrame — decoded video frame (raw pixel data)
+#   Layout: 40 bytes
+#     +0:  data (pointer to pixel data)
+#     +8:  data_len (byte length)
+#     +16: pixel_format (PixelFormat)
+#     +24: width
+#     +32: height
+# ================================================================
+
+fn video_frame_new(data, data_len, pfmt, w, h) {
+    var vf = alloc(40);
+    store64(vf,      data);
+    store64(vf + 8,  data_len);
+    store64(vf + 16, pfmt);
+    store64(vf + 24, w);
+    store64(vf + 32, h);
+    return vf;
+}
+
+fn video_frame_data(vf)       { return load64(vf); }
+fn video_frame_data_len(vf)   { return load64(vf + 8); }
+fn video_frame_pixel_fmt(vf)  { return load64(vf + 16); }
+fn video_frame_width(vf)      { return load64(vf + 24); }
+fn video_frame_height(vf)     { return load64(vf + 32); }
+
+# ================================================================
+# Utility Functions
+# ================================================================
+
+# Compute byte size of a YUV420p frame.
+# Uses ceiling division for chroma planes (correct for odd sizes).
+fn yuv420p_frame_size(w, h) {
+    if (w == 0) { return 0; }
+    if (h == 0) { return 0; }
+    var y_size = w * h;
+    var chroma_w = (w + 1) / 2;
+    var chroma_h = (h + 1) / 2;
+    return y_size + 2 * chroma_w * chroma_h;
+}
+
+# Validate video encoder dimensions (must be non-zero and even).
+# Returns 0 on success, negative error code on failure.
+fn validate_video_dimensions(w, h) {
+    if (w == 0) { return tarang_err(ERR_CONFIG); }
+    if (h == 0) { return tarang_err(ERR_CONFIG); }
+    if (w % 2 != 0) { return tarang_err(ERR_CONFIG); }
+    if (h % 2 != 0) { return tarang_err(ERR_CONFIG); }
+    return 0;
+}

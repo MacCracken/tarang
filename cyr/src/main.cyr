@@ -1,0 +1,332 @@
+# tarang — AI-native media framework (Cyrius port)
+#
+# Phase 1: core types, enums, error codes, structs, magic detection
+#
+# Design decisions:
+#   - All audio samples are f64 internally (matches shravan v2.0.0)
+#   - Packed Result: Ok >= 0, Err < 0 (bit 63 set)
+#   - Structs are heap-allocated with accessor functions
+#   - Vec for stream lists, hashmap for metadata tags
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/io.cyr"
+include "lib/args.cyr"
+include "lib/assert.cyr"
+include "lib/tagged.cyr"
+include "lib/math.cyr"
+include "lib/hashmap.cyr"
+
+include "src/core.cyr"
+
+# ================================================================
+# Tests — Enums & Names
+# ================================================================
+
+fn test_enums() {
+    # Audio codecs
+    assert(streq(AudioCodec_name(AUDIO_PCM), "PCM") == 1, "AudioCodec PCM");
+    assert(streq(AudioCodec_name(AUDIO_MP3), "MP3") == 1, "AudioCodec MP3");
+    assert(streq(AudioCodec_name(AUDIO_AAC), "AAC") == 1, "AudioCodec AAC");
+    assert(streq(AudioCodec_name(AUDIO_FLAC), "FLAC") == 1, "AudioCodec FLAC");
+    assert(streq(AudioCodec_name(AUDIO_VORBIS), "Vorbis") == 1, "AudioCodec Vorbis");
+    assert(streq(AudioCodec_name(AUDIO_OPUS), "Opus") == 1, "AudioCodec Opus");
+    assert(streq(AudioCodec_name(AUDIO_ALAC), "ALAC") == 1, "AudioCodec ALAC");
+    assert(streq(AudioCodec_name(AUDIO_WMA), "WMA") == 1, "AudioCodec WMA");
+
+    # Video codecs
+    assert(streq(VideoCodec_name(VIDEO_H264), "H.264") == 1, "VideoCodec H.264");
+    assert(streq(VideoCodec_name(VIDEO_H265), "H.265") == 1, "VideoCodec H.265");
+    assert(streq(VideoCodec_name(VIDEO_VP8), "VP8") == 1, "VideoCodec VP8");
+    assert(streq(VideoCodec_name(VIDEO_VP9), "VP9") == 1, "VideoCodec VP9");
+    assert(streq(VideoCodec_name(VIDEO_AV1), "AV1") == 1, "VideoCodec AV1");
+    assert(streq(VideoCodec_name(VIDEO_THEORA), "Theora") == 1, "VideoCodec Theora");
+
+    # Container formats
+    assert(streq(ContainerFormat_name(FMT_MP4), "MP4") == 1, "Fmt MP4");
+    assert(streq(ContainerFormat_name(FMT_MKV), "Matroska") == 1, "Fmt Matroska");
+    assert(streq(ContainerFormat_name(FMT_WEBM), "WebM") == 1, "Fmt WebM");
+    assert(streq(ContainerFormat_name(FMT_OGG), "OGG") == 1, "Fmt OGG");
+    assert(streq(ContainerFormat_name(FMT_WAV), "WAV") == 1, "Fmt WAV");
+    assert(streq(ContainerFormat_name(FMT_FLAC), "FLAC") == 1, "Fmt FLAC");
+    assert(streq(ContainerFormat_name(FMT_MP3), "MP3") == 1, "Fmt MP3");
+    assert(streq(ContainerFormat_name(FMT_AVI), "AVI") == 1, "Fmt AVI");
+
+    # Sample format sizes
+    assert_eq(SampleFormat_bytes(SAMPLE_I16), 2, "I16 bytes");
+    assert_eq(SampleFormat_bytes(SAMPLE_I32), 4, "I32 bytes");
+    assert_eq(SampleFormat_bytes(SAMPLE_F32), 4, "F32 bytes");
+    assert_eq(SampleFormat_bytes(SAMPLE_F64), 8, "F64 bytes");
+
+    # Pixel format names
+    assert(streq(PixelFormat_name(PIX_YUV420P), "YUV420p") == 1, "Pix YUV420p");
+    assert(streq(PixelFormat_name(PIX_RGB24), "RGB24") == 1, "Pix RGB24");
+    assert(streq(PixelFormat_name(PIX_NV12), "NV12") == 1, "Pix NV12");
+
+    # Pipeline state
+    assert(streq(PipelineState_name(PIPE_IDLE), "Idle") == 1, "pipe idle");
+    assert(streq(PipelineState_name(PIPE_PLAYING), "Playing") == 1, "pipe playing");
+    assert(streq(PipelineState_name(PIPE_PAUSED), "Paused") == 1, "pipe paused");
+    assert(streq(PipelineState_name(PIPE_FINISHED), "Finished") == 1, "pipe finished");
+    return 0;
+}
+
+# ================================================================
+# Tests — Error Codes
+# ================================================================
+
+fn test_errors() {
+    var e = tarang_err(ERR_DECODE);
+    assert_eq(tarang_is_err(e), 1, "err is_err");
+    assert_eq(tarang_err_code(e), ERR_DECODE, "err code");
+    assert_eq(tarang_is_err(0), 0, "0 not err");
+    assert_eq(tarang_is_err(42), 0, "42 not err");
+
+    assert(streq(TarangErr_name(ERR_UNSUPPORTED_CODEC), "unsupported codec") == 1, "err unsupported codec");
+    assert(streq(TarangErr_name(ERR_UNSUPPORTED_FORMAT), "unsupported format") == 1, "err unsupported fmt");
+    assert(streq(TarangErr_name(ERR_DECODE), "decode error") == 1, "err decode");
+    assert(streq(TarangErr_name(ERR_DEMUX), "demux error") == 1, "err demux");
+    assert(streq(TarangErr_name(ERR_IO), "I/O error") == 1, "err io");
+    assert(streq(TarangErr_name(ERR_END_OF_STREAM), "end of stream") == 1, "err eos");
+    assert(streq(TarangErr_name(ERR_ENCODE), "encode error") == 1, "err encode");
+    assert(streq(TarangErr_name(ERR_MUX), "mux error") == 1, "err mux");
+    assert(streq(TarangErr_name(ERR_CONFIG), "configuration error") == 1, "err config");
+    assert(streq(TarangErr_name(ERR_PIPELINE), "pipeline error") == 1, "err pipeline");
+    assert(streq(TarangErr_name(ERR_HWACCEL), "hardware acceleration error") == 1, "err hwaccel");
+    assert(streq(TarangErr_name(ERR_AI), "AI feature error") == 1, "err ai");
+    assert(streq(TarangErr_name(ERR_NETWORK), "network error") == 1, "err network");
+    assert(streq(TarangErr_name(ERR_IMAGE), "image error") == 1, "err image");
+    return 0;
+}
+
+# ================================================================
+# Tests — Magic Byte Detection
+# ================================================================
+
+fn test_magic() {
+    var buf = alloc(16);
+
+    # MP4
+    memset(buf, 0, 16);
+    store8(buf + 4, 0x66); store8(buf + 5, 0x74); store8(buf + 6, 0x79); store8(buf + 7, 0x70);
+    assert_eq(container_from_magic(buf, 16), FMT_MP4, "magic mp4");
+
+    # OGG
+    memset(buf, 0, 16);
+    store8(buf, 0x4F); store8(buf + 1, 0x67); store8(buf + 2, 0x67); store8(buf + 3, 0x53);
+    assert_eq(container_from_magic(buf, 16), FMT_OGG, "magic ogg");
+
+    # WAV
+    memset(buf, 0, 16);
+    store8(buf, 0x52); store8(buf + 1, 0x49); store8(buf + 2, 0x46); store8(buf + 3, 0x46);
+    store8(buf + 8, 0x57); store8(buf + 9, 0x41); store8(buf + 10, 0x56); store8(buf + 11, 0x45);
+    assert_eq(container_from_magic(buf, 16), FMT_WAV, "magic wav");
+
+    # FLAC
+    memset(buf, 0, 16);
+    store8(buf, 0x66); store8(buf + 1, 0x4C); store8(buf + 2, 0x61); store8(buf + 3, 0x43);
+    assert_eq(container_from_magic(buf, 16), FMT_FLAC, "magic flac");
+
+    # MKV
+    memset(buf, 0, 16);
+    store8(buf, 0x1A); store8(buf + 1, 0x45); store8(buf + 2, 0xDF); store8(buf + 3, 0xA3);
+    assert_eq(container_from_magic(buf, 16), FMT_MKV, "magic mkv");
+
+    # WebM
+    memset(buf, 0, 16);
+    store8(buf, 0x1A); store8(buf + 1, 0x45); store8(buf + 2, 0xDF); store8(buf + 3, 0xA3);
+    store8(buf + 4, 0x77); store8(buf + 5, 0x65); store8(buf + 6, 0x62); store8(buf + 7, 0x6D);
+    assert_eq(container_from_magic(buf, 16), FMT_WEBM, "magic webm");
+
+    # MP3 ID3
+    memset(buf, 0, 16);
+    store8(buf, 0x49); store8(buf + 1, 0x44); store8(buf + 2, 0x33);
+    assert_eq(container_from_magic(buf, 16), FMT_MP3, "magic mp3 id3");
+
+    # MP3 sync
+    memset(buf, 0, 16);
+    store8(buf, 0xFF); store8(buf + 1, 0xFB);
+    assert_eq(container_from_magic(buf, 16), FMT_MP3, "magic mp3 sync");
+
+    # AVI
+    memset(buf, 0, 16);
+    store8(buf, 0x52); store8(buf + 1, 0x49); store8(buf + 2, 0x46); store8(buf + 3, 0x46);
+    store8(buf + 8, 0x41); store8(buf + 9, 0x56); store8(buf + 10, 0x49); store8(buf + 11, 0x20);
+    assert_eq(container_from_magic(buf, 16), FMT_AVI, "magic avi");
+
+    # Too short
+    assert_eq(container_from_magic(buf, 4), 0 - 1, "magic too short");
+
+    # Unknown
+    memset(buf, 0, 16);
+    assert_eq(container_from_magic(buf, 16), 0 - 1, "magic unknown");
+
+    return 0;
+}
+
+# ================================================================
+# Tests — Structs & Stream Info
+# ================================================================
+
+fn test_structs() {
+    # AudioStreamInfo
+    var as1 = audio_stream_new(AUDIO_AAC, 48000, 2, SAMPLE_F32, 128000, 0);
+    assert_eq(audio_stream_codec(as1), AUDIO_AAC, "astream codec");
+    assert_eq(audio_stream_sample_rate(as1), 48000, "astream sr");
+    assert_eq(audio_stream_channels(as1), 2, "astream ch");
+    assert_eq(audio_stream_sample_fmt(as1), SAMPLE_F32, "astream sfmt");
+    assert_eq(audio_stream_bitrate(as1), 128000, "astream bitrate");
+    assert_eq(audio_stream_duration_ns(as1), 0, "astream dur");
+
+    # VideoStreamInfo
+    var fr = f64_from(30);
+    var vs1 = video_stream_new(VIDEO_H264, 1920, 1080, PIX_YUV420P, fr, 5000000, 0);
+    assert_eq(video_stream_codec(vs1), VIDEO_H264, "vstream codec");
+    assert_eq(video_stream_width(vs1), 1920, "vstream w");
+    assert_eq(video_stream_height(vs1), 1080, "vstream h");
+    assert_eq(video_stream_pixel_fmt(vs1), PIX_YUV420P, "vstream pfmt");
+    assert_eq(video_stream_bitrate(vs1), 5000000, "vstream bitrate");
+
+    # StreamInfo tags
+    var sa = stream_audio(as1);
+    var sv = stream_video(vs1);
+    var ss = stream_subtitle(str_from("en"));
+    assert_eq(stream_is_audio(sa), 1, "stream audio tag");
+    assert_eq(stream_is_video(sa), 0, "stream audio not video");
+    assert_eq(stream_is_video(sv), 1, "stream video tag");
+    assert_eq(stream_is_audio(sv), 0, "stream video not audio");
+    assert_eq(stream_tag(ss), STREAM_SUBTITLE, "stream sub tag");
+
+    # AudioBuffer
+    var data = alloc(4096);
+    memset(data, 0, 4096);
+    var ab = audio_buf_new(data, 4096, SAMPLE_F32, 2, 44100, 512);
+    assert_eq(audio_buf_num_frames(ab), 512, "abuf frames");
+    assert_eq(audio_buf_channels(ab), 2, "abuf channels");
+    assert_eq(audio_buf_data_len(ab), 4096, "abuf data_len");
+    assert_eq(audio_buf_sample_rate(ab), 44100, "abuf sr");
+    assert_eq(audio_buf_sample_fmt(ab), SAMPLE_F32, "abuf sfmt");
+
+    # VideoFrame
+    var sz = yuv420p_frame_size(640, 480);
+    var vdata = alloc(sz);
+    memset(vdata, 0, sz);
+    var vf = video_frame_new(vdata, sz, PIX_YUV420P, 640, 480);
+    assert_eq(video_frame_width(vf), 640, "vframe w");
+    assert_eq(video_frame_height(vf), 480, "vframe h");
+    assert_eq(video_frame_data_len(vf), sz, "vframe data_len");
+    assert_eq(video_frame_pixel_fmt(vf), PIX_YUV420P, "vframe pfmt");
+
+    return 0;
+}
+
+# ================================================================
+# Tests — MediaInfo
+# ================================================================
+
+fn test_media_info() {
+    # Full media info with video + audio + subtitle
+    var streams = vec_new();
+    var vs = video_stream_new(VIDEO_H264, 1920, 1080, PIX_YUV420P, f64_from(30), 5000000, 120000000000);
+    var as1 = audio_stream_new(AUDIO_AAC, 48000, 2, SAMPLE_F32, 128000, 120000000000);
+    vec_push(streams, stream_video(vs));
+    vec_push(streams, stream_audio(as1));
+    vec_push(streams, stream_subtitle(str_from("en")));
+
+    var mi = media_info_new(FMT_MP4, streams);
+    assert_eq(media_info_format(mi), FMT_MP4, "mi format");
+    assert_eq(media_info_has_video(mi), 1, "mi has_video");
+    assert_eq(media_info_has_audio(mi), 1, "mi has_audio");
+    assert_eq(media_info_video_count(mi), 1, "mi video_count");
+    assert_eq(media_info_audio_count(mi), 1, "mi audio_count");
+
+    var v0 = media_info_video_stream(mi, 0);
+    assert_eq(video_stream_width(v0), 1920, "mi vstream width");
+    var a0 = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_sample_rate(a0), 48000, "mi astream sr");
+
+    media_info_set_title(mi, str_from("Test Video"));
+    media_info_set_file_size(mi, 75000000);
+    assert_eq(media_info_file_size(mi), 75000000, "mi file_size");
+    assert(media_info_title(mi) != 0, "mi title set");
+    assert(media_info_id(mi) > 0, "mi id > 0");
+
+    # Audio-only
+    var streams2 = vec_new();
+    vec_push(streams2, stream_audio(audio_stream_new(AUDIO_FLAC, 44100, 2, SAMPLE_I16, 0, 300000000000)));
+    var mi2 = media_info_new(FMT_FLAC, streams2);
+    assert_eq(media_info_has_video(mi2), 0, "audio_only no video");
+    assert_eq(media_info_has_audio(mi2), 1, "audio_only has audio");
+
+    # No streams
+    var streams3 = vec_new();
+    var mi3 = media_info_new(FMT_MP4, streams3);
+    assert_eq(media_info_has_video(mi3), 0, "empty no video");
+    assert_eq(media_info_has_audio(mi3), 0, "empty no audio");
+
+    # Multiple audio streams
+    var streams4 = vec_new();
+    vec_push(streams4, stream_audio(audio_stream_new(AUDIO_AAC, 48000, 2, SAMPLE_F32, 128000, 0)));
+    vec_push(streams4, stream_audio(audio_stream_new(AUDIO_OPUS, 48000, 6, SAMPLE_F32, 320000, 0)));
+    vec_push(streams4, stream_video(video_stream_new(VIDEO_H265, 3840, 2160, PIX_YUV420P, f64_from(60), 0, 0)));
+    var mi4 = media_info_new(FMT_MKV, streams4);
+    assert_eq(media_info_audio_count(mi4), 2, "multi audio count");
+    assert_eq(media_info_video_count(mi4), 1, "multi video count");
+    var a1 = media_info_audio_stream(mi4, 1);
+    assert_eq(audio_stream_channels(a1), 6, "second audio 6ch");
+
+    # Subtitle only
+    var streams5 = vec_new();
+    vec_push(streams5, stream_subtitle(str_from("fr")));
+    var mi5 = media_info_new(FMT_MKV, streams5);
+    assert_eq(media_info_has_video(mi5), 0, "sub_only no video");
+    assert_eq(media_info_has_audio(mi5), 0, "sub_only no audio");
+
+    return 0;
+}
+
+# ================================================================
+# Tests — Utility Functions
+# ================================================================
+
+fn test_utils() {
+    # YUV420p frame size
+    assert_eq(yuv420p_frame_size(1920, 1080), 1920 * 1080 + 2 * 960 * 540, "yuv 1920x1080");
+    assert_eq(yuv420p_frame_size(3, 3), 17, "yuv 3x3");
+    assert_eq(yuv420p_frame_size(1, 1), 3, "yuv 1x1");
+    assert_eq(yuv420p_frame_size(0, 0), 0, "yuv 0x0");
+    assert_eq(yuv420p_frame_size(0, 100), 0, "yuv 0x100");
+
+    # Validate video dimensions
+    assert_eq(validate_video_dimensions(1920, 1080), 0, "valid 1920x1080");
+    assert_eq(validate_video_dimensions(2, 2), 0, "valid 2x2");
+    assert_eq(validate_video_dimensions(3840, 2160), 0, "valid 4K");
+    assert_eq(tarang_is_err(validate_video_dimensions(0, 1080)), 1, "invalid 0xN");
+    assert_eq(tarang_is_err(validate_video_dimensions(1920, 0)), 1, "invalid Nx0");
+    assert_eq(tarang_is_err(validate_video_dimensions(0, 0)), 1, "invalid 0x0");
+    assert_eq(tarang_is_err(validate_video_dimensions(1921, 1080)), 1, "invalid odd w");
+    assert_eq(tarang_is_err(validate_video_dimensions(1920, 1081)), 1, "invalid odd h");
+
+    return 0;
+}
+
+# ================================================================
+# Test Runner
+# ================================================================
+
+alloc_init();
+syscall(1, 1, "tarang core tests\n", 18);
+
+test_enums();
+test_errors();
+test_magic();
+test_structs();
+test_media_info();
+test_utils();
+
+assert_summary();
+if (_assert_fail > 0) { syscall(60, 1); }
+syscall(60, 0);
