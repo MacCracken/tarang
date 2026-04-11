@@ -39,6 +39,8 @@ include "src/demux_ogg.cyr"
 include "src/demux_mp4.cyr"
 include "src/demux_mkv.cyr"
 include "src/audio.cyr"
+include "src/ai_daimon.cyr"
+include "src/mcp.cyr"
 #ifdef MUX_CLI_ENABLED
 include "src/mux.cyr"
 include "src/cli.cyr"
@@ -853,6 +855,80 @@ fn test_audio_gain() {
     return 0;
 }
 
+# ================================================================
+# Tests -- Daimon + Analyze
+# ================================================================
+
+fn test_daimon() {
+    var cfg = daimon_config_default();
+    assert(cfg != 0, "daimon config");
+    var client = daimon_client_new(cfg);
+    assert(client != 0, "daimon client");
+
+    # Index returns 0 (stub)
+    var hashes = vec_new();
+    vec_push(hashes, 42);
+    var idx_r = daimon_index_fingerprint(client, str_from("test-001"), hashes, f64_from(1));
+    assert_eq(idx_r, 0, "daimon index stub");
+
+    # Search returns empty vec (stub)
+    var results = daimon_search_similar(client, hashes, 5);
+    assert_eq(vec_len(results), 0, "daimon search stub");
+
+    return 0;
+}
+
+fn test_analyze_media() {
+    # Audio-only: stereo FLAC
+    var st1 = vec_new();
+    vec_push(st1, stream_audio(audio_stream_new(AUDIO_FLAC, 44100, 2, SAMPLE_F32, 0, 0)));
+    var mi1 = media_info_new(FMT_FLAC, st1);
+    var a1 = analyze_media(mi1);
+    assert_eq(analysis_content_type(a1), CT_MUSIC, "analyze music");
+    assert(f64_gt(analysis_quality(a1), f64_from(50)) == 1, "analyze quality > 50");
+    var tags1 = analysis_tags(a1);
+    assert(vec_len(tags1) >= 1, "analyze has tags");
+
+    # Audio-only: mono speech
+    var st2 = vec_new();
+    vec_push(st2, stream_audio(audio_stream_new(AUDIO_MP3, 16000, 1, SAMPLE_F32, 0, 0)));
+    var mi2 = media_info_new(FMT_MP3, st2);
+    var a2 = analyze_media(mi2);
+    assert_eq(analysis_content_type(a2), CT_SPEECH, "analyze speech");
+
+    # Video + audio: movie
+    var st3 = vec_new();
+    vec_push(st3, stream_video(video_stream_new(VIDEO_H264, 1920, 1080, PIX_YUV420P, 0, 0, 0)));
+    vec_push(st3, stream_audio(audio_stream_new(AUDIO_AAC, 48000, 2, SAMPLE_F32, 0, 0)));
+    var mi3 = media_info_new(FMT_MP4, st3);
+    var a3 = analyze_media(mi3);
+    assert_eq(analysis_content_type(a3), CT_MOVIE, "analyze movie");
+
+    return 0;
+}
+
+# ================================================================
+# Tests -- MCP handlers
+# ================================================================
+
+fn test_mcp_handlers() {
+    # Test codecs handler
+    var codecs_result = mcp_handle_codecs();
+    assert(str_len(codecs_result) > 10, "mcp codecs result");
+
+    # Test JSON-RPC response building
+    var resp = mcp_json_result(1, str_from("hello"));
+    assert(str_len(resp) > 20, "mcp json result");
+
+    var err_resp = mcp_json_error(1, str_from("oops"));
+    assert(str_len(err_resp) > 20, "mcp json error");
+
+    # Test probe handler with a WAV file from muxer tests
+    # (only works if MUX_CLI_ENABLED created the file, so just test codecs)
+
+    return 0;
+}
+
 #ifdef MUX_CLI_ENABLED
 # ================================================================
 # Tests -- WAV Muxer
@@ -1150,6 +1226,10 @@ test_mkv_invalid();
 test_audio_mix();
 test_audio_loudness();
 test_audio_gain();
+
+test_daimon();
+test_analyze_media();
+test_mcp_handlers();
 
 #ifdef MUX_CLI_ENABLED
 test_wav_muxer();

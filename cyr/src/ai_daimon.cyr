@@ -1,0 +1,207 @@
+# tarang/ai/daimon -- Daimon (agent-runtime) integration
+#
+# Vector store: fingerprint indexing and similarity search
+# RAG: media metadata ingestion for natural-language queries
+# Uses http.cyr + json.cyr for HTTP/JSON communication
+#
+# Requires: DAIMON_URL environment variable (default: http://localhost:8090)
+
+# ================================================================
+# DaimonConfig
+#   Layout: 24 bytes
+#     +0: endpoint (Str)
+#     +8: api_key (Str, 0 if none)
+#     +16: timeout_secs
+# ================================================================
+
+fn daimon_config_new(endpoint, api_key, timeout) {
+    var c = alloc(24);
+    store64(c, endpoint);
+    store64(c + 8, api_key);
+    store64(c + 16, timeout);
+    return c;
+}
+
+fn daimon_config_default() {
+    return daimon_config_new(str_from("http://localhost:8090"), 0, 30);
+}
+
+# ================================================================
+# DaimonClient
+#   Layout: 16 bytes
+#     +0: config ptr
+#     +8: (reserved)
+# ================================================================
+
+fn daimon_client_new(config) {
+    var c = alloc(16);
+    store64(c, config);
+    store64(c + 8, 0);
+    return c;
+}
+
+# Index a fingerprint in the vector store.
+# Returns 0 on success, error code on failure.
+# media_id: Str, hashes: vec of u32, duration_secs: f64 bits
+fn daimon_index_fingerprint(client, media_id, hashes, duration_secs) {
+    var cfg = load64(client);
+    var endpoint = load64(cfg);
+
+    # Build JSON request body
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"collection\":\"tarang_fingerprints\",\"id\":\"");
+    str_builder_add(sb, media_id);
+    str_builder_add_cstr(sb, "\",\"vector\":[");
+
+    var num = vec_len(hashes);
+    var hi = 0;
+    while (hi < num) {
+        if (hi > 0) { str_builder_add_cstr(sb, ","); }
+        str_builder_add_int(sb, vec_get(hashes, hi));
+        hi = hi + 1;
+    }
+    str_builder_add_cstr(sb, "]}");
+    var body = str_builder_build(sb);
+
+    # POST to endpoint/vectors/upsert
+    # For now, just return success -- actual HTTP call requires net.cyr integration
+    # which is a stdlib dep we haven't included yet
+    return 0;
+}
+
+# Search for similar fingerprints.
+# query_hashes: vec of u32, top_k: number of results
+# Returns vec of {media_id: Str, score: f64} results
+fn daimon_search_similar(client, query_hashes, top_k) {
+    # Build query JSON and POST to endpoint/vectors/search
+    # Stub: returns empty vec until HTTP client is integrated
+    return vec_new();
+}
+
+# Ingest media metadata for RAG queries.
+fn daimon_ingest_metadata(client, media_id, media_info_ptr) {
+    # Stub: returns success until HTTP client integrated
+    return 0;
+}
+
+# Query media via natural language (RAG).
+fn daimon_query_media(client, query_str, top_k) {
+    # Stub: returns empty vec
+    return vec_new();
+}
+
+# ================================================================
+# Content classification -- analyze_media
+# ================================================================
+
+enum ContentType {
+    CT_MUSIC = 0;
+    CT_SPEECH = 1;
+    CT_PODCAST = 2;
+    CT_MOVIE = 3;
+    CT_CLIP = 4;
+    CT_SCREENCAST = 5;
+    CT_ANIMATION = 6;
+    CT_UNKNOWN = 7;
+}
+
+fn ContentType_name(ct) {
+    if (ct == CT_MUSIC) { return "music"; }
+    if (ct == CT_SPEECH) { return "speech"; }
+    if (ct == CT_PODCAST) { return "podcast"; }
+    if (ct == CT_MOVIE) { return "movie"; }
+    if (ct == CT_CLIP) { return "clip"; }
+    if (ct == CT_SCREENCAST) { return "screencast"; }
+    if (ct == CT_ANIMATION) { return "animation"; }
+    return "unknown";
+}
+
+# MediaAnalysis struct
+#   Layout: 32 bytes
+#     +0: content_type (ContentType)
+#     +8: quality_score (f64 bits, 0-100)
+#     +16: complexity (f64 bits, 0-100)
+#     +24: tags (vec of Str)
+
+fn media_analysis_new(ct, quality, complexity) {
+    var a = alloc(32);
+    store64(a, ct);
+    store64(a + 8, quality);
+    store64(a + 16, complexity);
+    store64(a + 24, vec_new());
+    return a;
+}
+
+fn analysis_content_type(a)  { return load64(a); }
+fn analysis_quality(a)       { return load64(a + 8); }
+fn analysis_complexity(a)    { return load64(a + 16); }
+fn analysis_tags(a)          { return load64(a + 24); }
+
+# Classify media content based on MediaInfo metadata.
+# Returns MediaAnalysis.
+fn analyze_media(mi) {
+    var has_video = media_info_has_video(mi);
+    var has_audio = media_info_has_audio(mi);
+    var ct = CT_UNKNOWN;
+    var quality = f64_from(50);
+    var complexity = f64_from(30);
+    var tag_vec = vec_new();
+
+    if (has_video == 1) {
+        if (has_audio == 1) {
+            ct = CT_MOVIE;
+            complexity = f64_from(60);
+        } else {
+            ct = CT_ANIMATION;
+        }
+        vec_push(tag_vec, str_from("video"));
+
+        var vs = media_info_video_stream(mi, 0);
+        if (vs != 0) {
+            var w = video_stream_width(vs);
+            if (w >= 3840) {
+                vec_push(tag_vec, str_from("4k"));
+                quality = f64_from(80);
+            }
+            elif (w >= 1920) {
+                vec_push(tag_vec, str_from("hd"));
+                quality = f64_from(70);
+            }
+        }
+    }
+    elif (has_audio == 1) {
+        var as_ptr = media_info_audio_stream(mi, 0);
+        if (as_ptr != 0) {
+            var codec = audio_stream_codec(as_ptr);
+            var ch = audio_stream_channels(as_ptr);
+            var sr = audio_stream_sample_rate(as_ptr);
+
+            if (ch >= 2) {
+                ct = CT_MUSIC;
+                vec_push(tag_vec, str_from("stereo"));
+            } else {
+                ct = CT_SPEECH;
+                vec_push(tag_vec, str_from("mono"));
+            }
+
+            if (sr >= 44100) {
+                vec_push(tag_vec, str_from("hifi"));
+                quality = f64_from(70);
+            }
+
+            if (codec == AUDIO_FLAC) {
+                vec_push(tag_vec, str_from("lossless"));
+                quality = f64_from(90);
+            }
+            elif (codec == AUDIO_MP3) {
+                vec_push(tag_vec, str_from("lossy"));
+                quality = f64_from(60);
+            }
+        }
+        vec_push(tag_vec, str_from("audio"));
+    }
+
+    var a = media_analysis_new(ct, quality, complexity);
+    store64(a + 24, tag_vec);
+    return a;
+}

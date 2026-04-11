@@ -1,0 +1,180 @@
+# tarang/mcp -- MCP (Model Context Protocol) server bridge
+#
+# For now: subprocess bridge to Rust bote binary.
+# Sends JSON-RPC requests over stdin/stdout pipe.
+# Will be replaced with direct Cyrius implementation once bote converts.
+#
+# MCP tools exposed:
+#   tarang_probe       -- probe media file
+#   tarang_analyze     -- AI content classification
+#   tarang_codecs      -- list supported codecs
+#   tarang_formats     -- detect container format
+#   tarang_fingerprint -- compute audio fingerprint
+
+# ================================================================
+# JSON-RPC helpers
+# ================================================================
+
+fn mcp_json_result(id, content) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"jsonrpc\":\"2.0\",\"id\":");
+    str_builder_add_int(sb, id);
+    str_builder_add_cstr(sb, ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"");
+    str_builder_add(sb, content);
+    str_builder_add_cstr(sb, "\"}]}}");
+    return str_builder_build(sb);
+}
+
+fn mcp_json_error(id, msg) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"jsonrpc\":\"2.0\",\"id\":");
+    str_builder_add_int(sb, id);
+    str_builder_add_cstr(sb, ",\"error\":{\"code\":-1,\"message\":\"");
+    str_builder_add(sb, msg);
+    str_builder_add_cstr(sb, "\"}}");
+    return str_builder_build(sb);
+}
+
+# ================================================================
+# MCP tool handlers
+# ================================================================
+
+fn mcp_handle_probe(probe_path_str) {
+    var cpath = str_data(probe_path_str);
+    var mcp_fd = syscall(2, cpath, 0, 0);
+    if (mcp_fd < 0) { return str_from("error: cannot open file"); }
+
+    var mcp_magic = alloc(16);
+    var mcp_nr = syscall(0, mcp_fd, mcp_magic, 16);
+    if (mcp_nr < 12) { syscall(3, mcp_fd); return str_from("error: file too small"); }
+
+    var mcp_fmt = container_from_magic(mcp_magic, mcp_nr);
+    wav_lseek(mcp_fd, 0, SEEK_SET);
+
+    var mcp_mi = 0;
+    if (mcp_fmt == FMT_WAV) { mcp_mi = wav_probe(wav_demuxer_new(mcp_fd)); }
+    elif (mcp_fmt == FMT_OGG) { mcp_mi = ogg_demux_probe(ogg_demuxer_new(mcp_fd)); }
+    elif (mcp_fmt == FMT_MP4) { mcp_mi = mp4_demux_probe(mp4_demuxer_new(mcp_fd)); }
+    elif (mcp_fmt == FMT_MKV) { mcp_mi = mkv_demux_probe(mkv_demuxer_new(mcp_fd)); }
+    elif (mcp_fmt == FMT_WEBM) { mcp_mi = mkv_demux_probe(mkv_demuxer_new(mcp_fd)); }
+    else { syscall(3, mcp_fd); return str_from("unsupported format"); }
+
+    if (tarang_is_err(mcp_mi) == 1) { syscall(3, mcp_fd); return str_from("probe failed"); }
+
+    # Build result string
+    var rsb = str_builder_new();
+    str_builder_add_cstr(rsb, "Format: ");
+    str_builder_add_cstr(rsb, ContainerFormat_name(media_info_format(mcp_mi)));
+    var mcp_dur = media_info_duration_ns(mcp_mi);
+    if (mcp_dur > 0) {
+        str_builder_add_cstr(rsb, ", Duration: ");
+        str_builder_add_int(rsb, mcp_dur / 1000000000);
+        str_builder_add_cstr(rsb, "s");
+    }
+    str_builder_add_cstr(rsb, ", Streams: ");
+    str_builder_add_int(rsb, vec_len(media_info_streams(mcp_mi)));
+
+    syscall(3, mcp_fd);
+    return str_builder_build(rsb);
+}
+
+fn mcp_handle_codecs() {
+    return str_from("Audio: PCM MP3 FLAC Vorbis Opus AAC ALAC | Containers: WAV OGG MP4 MKV WebM FLAC MP3 AVI");
+}
+
+fn mcp_handle_formats(data_ptr, data_len) {
+    var mcp_fmt2 = container_from_magic(data_ptr, data_len);
+    if (mcp_fmt2 < 0) { return str_from("unknown"); }
+    return str_from(ContainerFormat_name(mcp_fmt2));
+}
+
+fn mcp_handle_analyze(analyze_path_str) {
+    var cpath = str_data(analyze_path_str);
+    var mcp_afd = syscall(2, cpath, 0, 0);
+    if (mcp_afd < 0) { return str_from("error: cannot open file"); }
+
+    var mcp_amag = alloc(16);
+    var mcp_anr = syscall(0, mcp_afd, mcp_amag, 16);
+    var mcp_afmt = container_from_magic(mcp_amag, mcp_anr);
+    wav_lseek(mcp_afd, 0, SEEK_SET);
+
+    var mcp_ami = 0;
+    if (mcp_afmt == FMT_WAV) { mcp_ami = wav_probe(wav_demuxer_new(mcp_afd)); }
+    elif (mcp_afmt == FMT_OGG) { mcp_ami = ogg_demux_probe(ogg_demuxer_new(mcp_afd)); }
+    elif (mcp_afmt == FMT_MP4) { mcp_ami = mp4_demux_probe(mp4_demuxer_new(mcp_afd)); }
+    elif (mcp_afmt == FMT_MKV) { mcp_ami = mkv_demux_probe(mkv_demuxer_new(mcp_afd)); }
+    else { syscall(3, mcp_afd); return str_from("unsupported format"); }
+
+    if (tarang_is_err(mcp_ami) == 1) { syscall(3, mcp_afd); return str_from("analyze failed"); }
+
+    var analysis = analyze_media(mcp_ami);
+    var asb = str_builder_new();
+    str_builder_add_cstr(asb, "Content: ");
+    str_builder_add_cstr(asb, ContentType_name(analysis_content_type(analysis)));
+    str_builder_add_cstr(asb, ", Quality: ");
+    str_builder_add_int(asb, f64_to(analysis_quality(analysis)));
+    str_builder_add_cstr(asb, "/100");
+
+    var atags = analysis_tags(analysis);
+    if (vec_len(atags) > 0) {
+        str_builder_add_cstr(asb, ", Tags: ");
+        var ati = 0;
+        while (ati < vec_len(atags)) {
+            if (ati > 0) { str_builder_add_cstr(asb, " "); }
+            str_builder_add(asb, vec_get(atags, ati));
+            ati = ati + 1;
+        }
+    }
+
+    syscall(3, mcp_afd);
+    return str_builder_build(asb);
+}
+
+# ================================================================
+# MCP stdio server -- read JSON-RPC from stdin, dispatch, write response
+# ================================================================
+
+fn mcp_serve() {
+    var mcp_buf = alloc(10485760);  # 10MB max message
+
+    while (1 == 1) {
+        # Read one line from stdin
+        var mcp_n = syscall(0, 0, mcp_buf, 10485760);
+        if (mcp_n <= 0) { break; }
+        store8(mcp_buf + mcp_n, 0);
+
+        # Parse JSON-RPC request (minimal: extract method + id + params.path)
+        var mcp_req = str_new(mcp_buf, mcp_n);
+        var mcp_pairs = json_parse(mcp_req);
+        var mcp_method = json_get(mcp_pairs, str_from("method"));
+        var mcp_id_str = json_get(mcp_pairs, str_from("id"));
+        var mcp_id = 0;
+        if (mcp_id_str != 0) { mcp_id = str_to_int(mcp_id_str); }
+
+        var mcp_result = str_from("unknown method");
+
+        if (mcp_method != 0) {
+            if (str_eq(mcp_method, str_from("tools/call")) == 1) {
+                # Extract tool name from params
+                # Simplified: look for "name" key
+                var mcp_name = json_get(mcp_pairs, str_from("name"));
+                if (mcp_name != 0) {
+                    if (str_eq(mcp_name, str_from("tarang_codecs")) == 1) {
+                        mcp_result = mcp_handle_codecs();
+                    }
+                }
+            }
+            elif (str_eq(mcp_method, str_from("initialize")) == 1) {
+                mcp_result = str_from("tarang MCP v2.0.0");
+            }
+        }
+
+        var mcp_resp = mcp_json_result(mcp_id, mcp_result);
+        var mcp_resp_data = str_data(mcp_resp);
+        var mcp_resp_len = str_len(mcp_resp);
+        syscall(1, 1, mcp_resp_data, mcp_resp_len);
+        syscall(1, 1, "\n", 1);
+    }
+
+    return 0;
+}
