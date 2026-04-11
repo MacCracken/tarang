@@ -1,0 +1,326 @@
+# tarang/ai/fingerprint -- Chromaprint-style audio fingerprinting
+#
+# Minimal radix-2 FFT + chroma binning + differential hashing.
+#
+# Algorithm:
+#   1. Extract mono channel from audio
+#   2. Windowed FFT (Hann window, 4096 frame, 2048 hop)
+#   3. Map FFT magnitudes to 12 chroma bands (60–5000 Hz)
+#   4. Normalize each chroma frame
+#   5. Hash consecutive frame pairs: bit = 1 if band energy increased
+
+# ================================================================
+# Minimal radix-2 Cooley-Tukey FFT (forward only, power-of-2)
+# re/im are alloc'd buffers of n*8 bytes (f64 bit patterns)
+# ================================================================
+
+fn fft_bit_reverse(re, im, n) {
+    var j = 0;
+    var i = 0;
+    while (i < n) {
+        if (i < j) {
+            # Swap re[i] and re[j]
+            var tmp_r = load64(re + i * 8);
+            store64(re + i * 8, load64(re + j * 8));
+            store64(re + j * 8, tmp_r);
+            var tmp_i = load64(im + i * 8);
+            store64(im + i * 8, load64(im + j * 8));
+            store64(im + j * 8, tmp_i);
+        }
+        var m = n / 2;
+        while (m >= 1) {
+            if (j < m) { break; }
+            j = j - m;
+            m = m / 2;
+        }
+        j = j + m;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn fft_forward(re, im, n) {
+    fft_bit_reverse(re, im, n);
+    var PI = f64_mul(f64_from(4), f64_atan(F64_ONE));
+    var NEG_TWO_PI = f64_neg(f64_mul(F64_TWO, PI));
+
+    var len = 2;
+    while (len <= n) {
+        var half = len / 2;
+        var angle_step = f64_div(NEG_TWO_PI, f64_from(len));
+        var k = 0;
+        while (k < half) {
+            var angle = f64_mul(angle_step, f64_from(k));
+            var wr = f64_cos(angle);
+            var wi = f64_sin(angle);
+            var i = k;
+            while (i < n) {
+                var j = i + half;
+                var tr = f64_sub(f64_mul(wr, load64(re + j * 8)), f64_mul(wi, load64(im + j * 8)));
+                var ti = f64_add(f64_mul(wr, load64(im + j * 8)), f64_mul(wi, load64(re + j * 8)));
+                store64(re + j * 8, f64_sub(load64(re + i * 8), tr));
+                store64(im + j * 8, f64_sub(load64(im + i * 8), ti));
+                store64(re + i * 8, f64_add(load64(re + i * 8), tr));
+                store64(im + i * 8, f64_add(load64(im + i * 8), ti));
+                i = i + len;
+            }
+            k = k + 1;
+        }
+        len = len * 2;
+    }
+    return 0;
+}
+
+# ================================================================
+# Fingerprint config defaults
+# ================================================================
+
+var FP_SAMPLE_RATE = 16000;
+var FP_FRAME_SIZE = 4096;
+var FP_HOP_SIZE = 2048;
+var FP_NUM_BANDS = 12;
+
+# ================================================================
+# AudioFingerprint struct
+#   Layout: 24 bytes
+#     +0: hashes (vec of u32)
+#     +8: num_hashes
+#     +16: duration_secs (f64 bits)
+# ================================================================
+
+fn fingerprint_new(hashes, duration_secs) {
+    var fp = alloc(24);
+    store64(fp, hashes);
+    store64(fp + 8, vec_len(hashes));
+    store64(fp + 16, duration_secs);
+    return fp;
+}
+
+fn fp_hashes(fp)    { return load64(fp); }
+fn fp_num_hashes(fp){ return load64(fp + 8); }
+fn fp_duration(fp)  { return load64(fp + 16); }
+
+# ================================================================
+# Hann window generation
+# ================================================================
+
+fn make_hann_window(size) {
+    var win = vec_new();
+    var pi2 = f64_mul(F64_TWO, f64_mul(f64_from(4), f64_atan(F64_ONE)));  # 2*PI
+    var f_size = f64_from(size);
+    var i = 0;
+    while (i < size) {
+        var fi = f64_from(i);
+        var cos_val = f64_cos(f64_div(f64_mul(pi2, fi), f_size));
+        var w = f64_mul(F64_HALF, f64_sub(F64_ONE, cos_val));
+        vec_push(win, w);
+        i = i + 1;
+    }
+    return win;
+}
+
+# ================================================================
+# Compute chroma frames from mono f64 samples
+# Returns vec of vecs (each inner vec = 12 chroma band energies)
+# ================================================================
+
+fn compute_chroma_frames(samples, num_samples, sr, frame_size, hop_size, num_bands) {
+    var win = make_hann_window(frame_size);
+    var half = frame_size / 2;
+    var f_sr = f64_from(sr);
+    var freq_per_bin = f64_div(f_sr, f64_from(frame_size));
+
+    # Pre-compute frequency->band lookup
+    var band_lut = vec_new();  # -1 = skip, else band index
+    var f_440 = f64_from(440);
+    var f_12 = f64_from(12);
+    var f_60 = f64_from(60);
+    var f_5000 = f64_from(5000);
+    var bi = 0;
+    while (bi < half) {
+        var freq = f64_mul(f64_from(bi), freq_per_bin);
+        if (bi == 0) { vec_push(band_lut, 0 - 1); }
+        elif (f64_lt(freq, f_60) == 1) { vec_push(band_lut, 0 - 1); }
+        elif (f64_gt(freq, f_5000) == 1) { vec_push(band_lut, 0 - 1); }
+        else {
+            var ratio = f64_div(freq, f_440);
+            var log_r = f64_log2(ratio);
+            var note = f64_mul(f_12, log_r);
+            var int_note = f64_to(note);
+            var band = int_note % num_bands;
+            if (band < 0) { band = band + num_bands; }
+            vec_push(band_lut, band);
+        }
+        bi = bi + 1;
+    }
+
+    # FFT buffers (real + imaginary interleaved)
+    var re = alloc(frame_size * 8);
+    var im = alloc(frame_size * 8);
+
+    var frames = vec_new();
+    var pos = 0;
+    while (pos + frame_size <= num_samples) {
+        # Apply Hann window to real part, zero imaginary
+        var fi = 0;
+        while (fi < frame_size) {
+            var sample_idx = pos + fi;
+            var s = vec_get(samples, sample_idx);
+            var w = vec_get(win, fi);
+            var windowed = f64_mul(s, w);
+            store64(re + fi * 8, windowed);
+            store64(im + fi * 8, F64_ZERO);
+            fi = fi + 1;
+        }
+
+        # Forward FFT (radix-2 in-place)
+        fft_forward(re, im, frame_size);
+
+        # Map magnitudes to chroma bands
+        var chroma = vec_new();
+        var ci = 0;
+        while (ci < num_bands) { vec_push(chroma, F64_ZERO); ci = ci + 1; }
+
+        var mi = 0;
+        while (mi < half) {
+            var band = vec_get(band_lut, mi);
+            if (band >= 0) {
+                var r = load64(re + mi * 8);
+                var im_val = load64(im + mi * 8);
+                var mag = f64_sqrt(f64_add(f64_mul(r, r), f64_mul(im_val, im_val)));
+                var old = vec_get(chroma, band);
+                vec_set(chroma, band, f64_add(old, mag));
+            }
+            mi = mi + 1;
+        }
+
+        # Normalize
+        var max_val = F64_ZERO;
+        ci = 0;
+        while (ci < num_bands) {
+            var v = vec_get(chroma, ci);
+            if (f64_gt(v, max_val) == 1) { max_val = v; }
+            ci = ci + 1;
+        }
+        if (f64_gt(max_val, F64_ZERO) == 1) {
+            ci = 0;
+            while (ci < num_bands) {
+                vec_set(chroma, ci, f64_div(vec_get(chroma, ci), max_val));
+                ci = ci + 1;
+            }
+        }
+
+        vec_push(frames, chroma);
+        pos = pos + hop_size;
+    }
+
+    return frames;
+}
+
+# ================================================================
+# Hash chroma frames -- differential hashing
+# ================================================================
+
+fn hash_chroma_frames(frames) {
+    var num_frames = vec_len(frames);
+    if (num_frames < 2) { return vec_new(); }
+
+    var hashes = vec_new();
+    var fi = 1;
+    while (fi < num_frames) {
+        var curr = vec_get(frames, fi);
+        var prev = vec_get(frames, fi - 1);
+        var hash = 0;
+        var band = 0;
+        while (band < 12) {
+            if (band >= 32) { break; }
+            var c = vec_get(curr, band);
+            var p = vec_get(prev, band);
+            if (f64_gt(c, p) == 1) {
+                hash = hash | (1 << band);
+            }
+            band = band + 1;
+        }
+        vec_push(hashes, hash);
+        fi = fi + 1;
+    }
+    return hashes;
+}
+
+# ================================================================
+# Compute fingerprint from a vec of mono f64 samples
+# ================================================================
+
+fn compute_fingerprint(samples, num_samples, sr) {
+    if (num_samples < FP_FRAME_SIZE) {
+        var dur = f64_div(f64_from(num_samples), f64_from(sr));
+        return fingerprint_new(vec_new(), dur);
+    }
+
+    var chroma_frames = compute_chroma_frames(samples, num_samples, sr, FP_FRAME_SIZE, FP_HOP_SIZE, FP_NUM_BANDS);
+    var hashes = hash_chroma_frames(chroma_frames);
+    var dur = f64_div(f64_from(num_samples), f64_from(sr));
+
+    return fingerprint_new(hashes, dur);
+}
+
+# ================================================================
+# Fingerprint matching -- sliding window bit comparison
+# ================================================================
+
+fn popcount32(x) {
+    # Brian Kernighan's bit counting
+    var count = 0;
+    var v = x & 0xFFFFFFFF;
+    while (v != 0) {
+        v = v & (v - 1);
+        count = count + 1;
+    }
+    return count;
+}
+
+fn fingerprint_match(fp_a, fp_b) {
+    var ha = fp_hashes(fp_a);
+    var hb = fp_hashes(fp_b);
+    var la = vec_len(ha);
+    var lb = vec_len(hb);
+
+    if (la == 0) { return F64_ZERO; }
+    if (lb == 0) { return F64_ZERO; }
+
+    # Ensure shorter/longer
+    var shorter = ha;
+    var longer = hb;
+    var sl = la;
+    var ll = lb;
+    if (la > lb) { shorter = hb; longer = ha; sl = lb; ll = la; }
+
+    var best_score = F64_ZERO;
+    var max_offset = ll - sl;
+    if (max_offset > sl) { max_offset = sl; }
+
+    var off = 0;
+    while (off <= max_offset) {
+        var matching_bits = 0;
+        var total_bits = 0;
+        var i = 0;
+        while (i < sl) {
+            if (off + i < ll) {
+                var xa = vec_get(shorter, i);
+                var xb = vec_get(longer, off + i);
+                var xor_val = (xa ^ xb) & 0xFFFFFFFF;
+                matching_bits = matching_bits + 32 - popcount32(xor_val);
+                total_bits = total_bits + 32;
+            }
+            i = i + 1;
+        }
+
+        if (total_bits > 0) {
+            var score = f64_div(f64_from(matching_bits), f64_from(total_bits));
+            if (f64_gt(score, best_score) == 1) { best_score = score; }
+        }
+        off = off + 1;
+    }
+
+    return best_score;
+}

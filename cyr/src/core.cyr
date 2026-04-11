@@ -11,6 +11,40 @@
 #   - Vec used for stream lists, metadata stored in hashmap
 
 # ================================================================
+# f64 constants — needed by shravan codec libs (resample, dither, etc.)
+# F64_ONE and F64_TWO are in math.cyr
+# ================================================================
+
+var F64_ZERO       = 0;
+var F64_HALF       = 0;
+var F64_NEG_HALF   = 0;
+var F64_NEG_ONE    = 0;
+var F64_128        = 0;
+var F64_255        = 0;
+var F64_32768      = 0;
+var F64_32767      = 0;
+var F64_8388608    = 0;
+var F64_8388607    = 0;
+var F64_2147483648 = 0;
+var F64_2147483647 = 0;
+
+fn tarang_init_constants() {
+    F64_ZERO       = f64_from(0);
+    F64_HALF       = f64_div(F64_ONE, F64_TWO);
+    F64_NEG_HALF   = f64_neg(F64_HALF);
+    F64_NEG_ONE    = f64_neg(F64_ONE);
+    F64_128        = f64_from(128);
+    F64_255        = f64_from(255);
+    F64_32768      = f64_from(32768);
+    F64_32767      = f64_from(32767);
+    F64_8388608    = f64_from(8388608);
+    F64_8388607    = f64_from(8388607);
+    F64_2147483648 = f64_mul(f64_from(32768), f64_from(65536));
+    F64_2147483647 = f64_sub(F64_2147483648, F64_ONE);
+    return 0;
+}
+
+# ================================================================
 # Byte read/write helpers (shared by all modules)
 # ================================================================
 
@@ -34,6 +68,15 @@ fn write_u32_le(buf, off, val) {
     store8(buf + off + 2, (val >> 16) & 0xFF);
     store8(buf + off + 3, (val >> 24) & 0xFF);
     return 0;
+}
+
+# Sign-extend a value from N bits to 64 bits
+fn sign_extend(val, bits) {
+    var half = 1 << (bits - 1);
+    if (val >= half) {
+        return val - (1 << bits);
+    }
+    return val;
 }
 
 fn read_u32_be(data, off) {

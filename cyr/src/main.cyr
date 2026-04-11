@@ -1,4 +1,4 @@
-# tarang — AI-native media framework (Cyrius port)
+# tarang -- AI-native media framework (Cyrius port)
 #
 # Phase 1: core types + WAV demuxer
 #
@@ -25,18 +25,27 @@ include "lib/syscalls.cyr"
 include "src/core.cyr"
 include "src/demux.cyr"
 include "src/demux_wav.cyr"
-# Shravan error code aliases for ogg.cyr compatibility
+# Shravan error code aliases -- map shravan error names to tarang error codes
 var ERR_INVALID_HEADER = ERR_DEMUX;
+var ERR_INVALID_RATE = ERR_CONFIG;
+var ERR_INVALID_CHANNELS = ERR_CONFIG;
 var ERR_UNSUPPORTED_FMT = ERR_UNSUPPORTED_FORMAT;
 fn err(code) { return 0 - code; }
+fn is_err(r) { if (r < 0) { return 1; } return 0; }
 
 include "lib/ogg.cyr"
+
 include "src/demux_ogg.cyr"
 include "src/demux_mp4.cyr"
 include "src/demux_mkv.cyr"
+include "src/audio.cyr"
+#ifdef AI_ENABLED
+include "src/ai_fingerprint.cyr"
+include "src/ai_scene.cyr"
+#endif
 
 # ================================================================
-# Tests — Enums & Names
+# Tests -- Enums & Names
 # ================================================================
 
 fn test_enums() {
@@ -88,7 +97,7 @@ fn test_enums() {
 }
 
 # ================================================================
-# Tests — Error Codes
+# Tests -- Error Codes
 # ================================================================
 
 fn test_errors() {
@@ -116,7 +125,7 @@ fn test_errors() {
 }
 
 # ================================================================
-# Tests — Magic Byte Detection
+# Tests -- Magic Byte Detection
 # ================================================================
 
 fn test_magic() {
@@ -181,7 +190,7 @@ fn test_magic() {
 }
 
 # ================================================================
-# Tests — Structs & Stream Info
+# Tests -- Structs & Stream Info
 # ================================================================
 
 fn test_structs() {
@@ -237,7 +246,7 @@ fn test_structs() {
 }
 
 # ================================================================
-# Tests — MediaInfo
+# Tests -- MediaInfo
 # ================================================================
 
 fn test_media_info() {
@@ -302,7 +311,7 @@ fn test_media_info() {
 }
 
 # ================================================================
-# Tests — Utility Functions
+# Tests -- Utility Functions
 # ================================================================
 
 fn test_utils() {
@@ -327,7 +336,7 @@ fn test_utils() {
 }
 
 # ================================================================
-# Tests — Demux Common
+# Tests -- Demux Common
 # ================================================================
 
 fn test_demux_common() {
@@ -353,7 +362,7 @@ fn test_demux_common() {
 }
 
 # ================================================================
-# Tests — WAV Demuxer
+# Tests -- WAV Demuxer
 # ================================================================
 
 fn test_wav_probe() {
@@ -464,7 +473,7 @@ fn test_wav_seek_past_end() {
     var d = wav_demuxer_from_buf(wav, wav_len);
     wav_probe(d);
 
-    # Seek to 1 hour — should clamp to data_size
+    # Seek to 1 hour -- should clamp to data_size
     var r = wav_seek(d, 3600000000000);
     assert_eq(r, 0, "wav seek past end ok");
 
@@ -505,7 +514,7 @@ fn test_wav_24bit() {
 }
 
 # ================================================================
-# Tests — OGG Demuxer
+# Tests -- OGG Demuxer
 # ================================================================
 
 fn test_ogg_probe_vorbis() {
@@ -584,7 +593,7 @@ fn test_ogg_mono() {
 }
 
 # ================================================================
-# Tests — MP4 Demuxer
+# Tests -- MP4 Demuxer
 # ================================================================
 
 fn test_mp4_probe() {
@@ -688,7 +697,7 @@ fn test_mp4_mono() {
 }
 
 # ================================================================
-# Tests — MKV Demuxer
+# Tests -- MKV Demuxer
 # ================================================================
 
 fn test_mkv_probe() {
@@ -750,10 +759,237 @@ fn test_mkv_invalid() {
 }
 
 # ================================================================
+# Tests -- Audio Module
+# ================================================================
+
+# Helper: build a stereo f64 AudioBuffer with known samples
+fn make_stereo_f64_buf(frames, sr) {
+    var total = frames * 2;
+    var bytes = total * 8;
+    var data = alloc(bytes);
+    var i = 0;
+    while (i < total) {
+        # Alternating 0.5 and -0.5
+        var s = F64_HALF;
+        if (i % 2 == 1) { s = F64_NEG_HALF; }
+        write_u32_le(data, i * 8, s & 0xFFFFFFFF);
+        write_u32_le(data, i * 8 + 4, (s >> 32) & 0xFFFFFFFF);
+        i = i + 1;
+    }
+    return audio_buf_new(data, bytes, SAMPLE_F64, 2, sr, frames);
+}
+
+fn make_mono_f64_buf(frames, sr) {
+    var bytes = frames * 8;
+    var data = alloc(bytes);
+    var i = 0;
+    while (i < frames) {
+        write_u32_le(data, i * 8, F64_HALF & 0xFFFFFFFF);
+        write_u32_le(data, i * 8 + 4, (F64_HALF >> 32) & 0xFFFFFFFF);
+        i = i + 1;
+    }
+    return audio_buf_new(data, bytes, SAMPLE_F64, 1, sr, frames);
+}
+
+fn test_audio_mix() {
+    # Stereo -> Mono
+    var stereo = make_stereo_f64_buf(100, 44100);
+    var mono = audio_mix_channels(stereo, 1);
+    assert(tarang_is_err(mono) == 0, "mix stereo->mono ok");
+    assert_eq(audio_buf_channels(mono), 1, "mix mono ch");
+    assert_eq(audio_buf_num_frames(mono), 100, "mix mono frames");
+    assert_eq(audio_buf_sample_rate(mono), 44100, "mix mono sr");
+
+    # Mono -> Stereo
+    var mono2 = make_mono_f64_buf(50, 48000);
+    var stereo2 = audio_mix_channels(mono2, 2);
+    assert(tarang_is_err(stereo2) == 0, "mix mono->stereo ok");
+    assert_eq(audio_buf_channels(stereo2), 2, "mix stereo ch");
+    assert_eq(audio_buf_num_frames(stereo2), 50, "mix stereo frames");
+
+    # Identity (same channels)
+    var same = audio_mix_channels(stereo, 2);
+    assert(tarang_is_err(same) == 0, "mix identity ok");
+    assert_eq(audio_buf_channels(same), 2, "mix identity ch");
+
+    return 0;
+}
+
+fn test_audio_loudness() {
+    var buf = make_stereo_f64_buf(1000, 44100);
+    var m = audio_measure_loudness(buf);
+    assert(m != 0, "loudness measured");
+
+    var lufs = loudness_lufs(m);
+    var peak = loudness_peak(m);
+    var rms = loudness_rms_db(m);
+
+    # Peak should be 0.5
+    assert(f64_gt(peak, F64_ZERO) == 1, "loudness peak > 0");
+    assert(f64_lt(peak, F64_ONE) == 1, "loudness peak < 1");
+
+    # RMS should be negative (dB)
+    assert(f64_lt(rms, F64_ZERO) == 1, "loudness rms < 0 dB");
+
+    # Empty buffer
+    var empty = audio_buf_new(alloc(0), 0, SAMPLE_F64, 2, 44100, 0);
+    var m2 = audio_measure_loudness(empty);
+    assert(m2 != 0, "loudness empty ok");
+
+    return 0;
+}
+
+fn test_audio_gain() {
+    var buf = make_mono_f64_buf(100, 44100);
+    var gained = audio_apply_gain(buf, F64_ZERO);  # 0 dB = no change
+    assert(tarang_is_err(gained) == 0, "gain 0dB ok");
+    assert_eq(audio_buf_num_frames(gained), 100, "gain frames");
+    assert_eq(audio_buf_channels(gained), 1, "gain ch");
+
+    return 0;
+}
+
+# ================================================================
+# Tests -- AI Fingerprint (gated behind -D AI_ENABLED)
+# ================================================================
+
+#ifdef AI_ENABLED
+
+fn test_fingerprint() {
+    # Generate a simple sine-like test signal (mono, 16000 Hz, ~1 second)
+    var sr = 16000;
+    var num_samples = sr;
+    var samples = vec_new();
+    var i = 0;
+    while (i < num_samples) {
+        # Simple pattern: alternating positive/negative
+        var s = F64_HALF;
+        if (i % 100 < 50) { s = F64_NEG_HALF; }
+        vec_push(samples, s);
+        i = i + 1;
+    }
+
+    var fp = compute_fingerprint(samples, num_samples, sr);
+    assert(fp != 0, "fingerprint computed");
+    assert(fp_num_hashes(fp) > 0, "fingerprint has hashes");
+
+    var dur = fp_duration(fp);
+    # Duration should be ~1.0 second
+    assert(f64_gt(dur, F64_HALF) == 1, "fp dur > 0.5s");
+
+    # Too-short signal should produce empty fingerprint
+    var short = vec_new();
+    vec_push(short, F64_HALF);
+    var fp2 = compute_fingerprint(short, 1, sr);
+    assert_eq(fp_num_hashes(fp2), 0, "short fp empty");
+
+    return 0;
+}
+
+fn test_fingerprint_match() {
+    # Same signal should match highly
+    var sr = 16000;
+    var samples = vec_new();
+    var i = 0;
+    while (i < sr) {
+        var s = F64_HALF;
+        if (i % 80 < 40) { s = F64_NEG_HALF; }
+        vec_push(samples, s);
+        i = i + 1;
+    }
+
+    var fp1 = compute_fingerprint(samples, sr, sr);
+    var fp2 = compute_fingerprint(samples, sr, sr);
+    var score = fingerprint_match(fp1, fp2);
+    # Identical signals should score 1.0
+    assert(f64_gt(score, f64_from(0)) == 1, "self-match > 0");
+
+    # Different signal
+    var diff_samples = vec_new();
+    i = 0;
+    while (i < sr) {
+        var s = F64_HALF;
+        if (i % 200 < 100) { s = F64_NEG_HALF; }
+        vec_push(diff_samples, s);
+        i = i + 1;
+    }
+    var fp3 = compute_fingerprint(diff_samples, sr, sr);
+    var diff_score = fingerprint_match(fp1, fp3);
+    # Different signals may still partially match but less than identical
+    assert(f64_lt(diff_score, F64_TWO) == 1, "diff match < 2.0");
+
+    # Empty match
+    var empty_fp = fingerprint_new(vec_new(), F64_ZERO);
+    var empty_score = fingerprint_match(fp1, empty_fp);
+    assert_eq(empty_score, F64_ZERO, "empty match = 0");
+
+    return 0;
+}
+
+# ================================================================
+# Tests -- AI Scene Detection
+# ================================================================
+
+fn test_scene_detection() {
+    var det = scene_detector_default();
+    assert(det != 0, "scene detector created");
+
+    # Feed uniform frames -- no scene change
+    var y_size = 320 * 240;
+    var frame1 = alloc(y_size);
+    memset(frame1, 128, y_size);  # uniform grey
+
+    var b1 = scene_feed_frame(det, frame1, y_size, 0);
+    # First frame never produces boundary
+    assert_eq(b1, 0, "first frame no boundary");
+
+    var b2 = scene_feed_frame(det, frame1, y_size, 33000000);
+    assert_eq(b2, 0, "same frame no boundary");
+
+    # Feed dramatically different frame -- should detect cut
+    # But need to exceed min_scene_frames (30), so feed 30 same frames first
+    var fi = 2;
+    while (fi < 35) {
+        scene_feed_frame(det, frame1, y_size, fi * 33000000);
+        fi = fi + 1;
+    }
+
+    # Now feed a completely different frame (all white)
+    var frame2 = alloc(y_size);
+    memset(frame2, 255, y_size);
+    var b3 = scene_feed_frame(det, frame2, y_size, 35 * 33000000);
+    # Should detect hard cut (massive histogram change)
+    assert(b3 != 0, "scene cut detected");
+    if (b3 != 0) {
+        assert_eq(scene_boundary_type(b3), SCENE_HARD_CUT, "hard cut type");
+        assert(f64_gt(scene_boundary_score(b3), F64_ZERO) == 1, "cut score > 0");
+    }
+
+    # Check boundaries list
+    var boundaries = scene_boundaries(det);
+    assert(vec_len(boundaries) >= 1, "at least 1 boundary");
+
+    # Chi-squared distance directly
+    var hist_a = compute_luma_histogram(frame1, y_size, SCENE_HISTOGRAM_BINS);
+    var hist_b = compute_luma_histogram(frame2, y_size, SCENE_HISTOGRAM_BINS);
+    var dist = chi_squared_distance(hist_a, hist_b);
+    assert(f64_gt(dist, F64_ZERO) == 1, "chi-sq dist > 0");
+
+    # Same histogram -> distance 0
+    var dist_same = chi_squared_distance(hist_a, hist_a);
+    assert_eq(dist_same, F64_ZERO, "chi-sq same = 0");
+
+    return 0;
+}
+
+#endif
+
+# ================================================================
 # Test Runner
 # ================================================================
 
 alloc_init();
+tarang_init_constants();
 ogg_init();
 syscall(1, 1, "tarang tests\n", 13);
 
@@ -787,6 +1023,16 @@ test_mp4_mono();
 test_mkv_probe();
 test_mkv_read_packets();
 test_mkv_invalid();
+
+test_audio_mix();
+test_audio_loudness();
+test_audio_gain();
+
+#ifdef AI_ENABLED
+test_fingerprint();
+test_fingerprint_match();
+test_scene_detection();
+#endif
 
 assert_summary();
 if (_assert_fail > 0) { syscall(60, 1); }

@@ -1,0 +1,166 @@
+# tarang/ai/scene -- Scene detection via luminance histograms
+#
+# Chi-squared distance on Y-plane histograms for hard cut detection.
+# Rolling std-dev of frame differences for gradual transition detection.
+#
+# Works on raw pixel data (YUV420p Y-plane or RGB24 luminance).
+
+# ================================================================
+# Scene boundary types
+# ================================================================
+
+enum SceneBoundaryType {
+    SCENE_HARD_CUT = 0;
+    SCENE_GRADUAL = 1;
+}
+
+# ================================================================
+# SceneBoundary struct
+#   Layout: 32 bytes
+#     +0: timestamp_ns
+#     +8: frame_index
+#     +16: change_score (f64 bits)
+#     +24: boundary_type
+# ================================================================
+
+fn scene_boundary_new(ts_ns, frame_idx, score, btype) {
+    var b = alloc(32);
+    store64(b, ts_ns);
+    store64(b + 8, frame_idx);
+    store64(b + 16, score);
+    store64(b + 24, btype);
+    return b;
+}
+
+fn scene_boundary_ts(b)     { return load64(b); }
+fn scene_boundary_frame(b)  { return load64(b + 8); }
+fn scene_boundary_score(b)  { return load64(b + 16); }
+fn scene_boundary_type(b)   { return load64(b + 24); }
+
+# ================================================================
+# Scene detection config defaults
+# ================================================================
+
+var SCENE_HARD_THRESHOLD = 0;     # f64 bits, init in tarang_init_constants or inline
+var SCENE_GRADUAL_THRESHOLD = 0;
+var SCENE_HISTOGRAM_BINS = 64;
+var SCENE_MIN_SCENE_FRAMES = 30;  # ~1 second at 30fps
+
+# ================================================================
+# Compute luminance histogram from Y-plane data
+# Returns vec of f64 (normalized, SCENE_HISTOGRAM_BINS entries)
+# ================================================================
+
+fn compute_luma_histogram(y_data, y_len, num_bins) {
+    var hist = vec_new();
+    var bi = 0;
+    while (bi < num_bins) { vec_push(hist, F64_ZERO); bi = bi + 1; }
+
+    if (y_len == 0) { return hist; }
+
+    var bin_scale = f64_div(f64_from(num_bins), f64_from(256));
+    var i = 0;
+    while (i < y_len) {
+        var luma = load8(y_data + i);
+        var bin = f64_to(f64_mul(f64_from(luma), bin_scale));
+        if (bin >= num_bins) { bin = num_bins - 1; }
+        vec_set(hist, bin, f64_add(vec_get(hist, bin), F64_ONE));
+        i = i + 1;
+    }
+
+    # Normalize
+    var f_total = f64_from(y_len);
+    bi = 0;
+    while (bi < num_bins) {
+        vec_set(hist, bi, f64_div(vec_get(hist, bi), f_total));
+        bi = bi + 1;
+    }
+
+    return hist;
+}
+
+# ================================================================
+# Chi-squared distance between two histograms
+# ================================================================
+
+fn chi_squared_distance(hist_a, hist_b) {
+    var bins = vec_len(hist_a);
+    var dist = F64_ZERO;
+    var i = 0;
+    while (i < bins) {
+        var a = vec_get(hist_a, i);
+        var b = vec_get(hist_b, i);
+        var sum = f64_add(a, b);
+        if (f64_gt(sum, F64_ZERO) == 1) {
+            var diff = f64_sub(a, b);
+            dist = f64_add(dist, f64_div(f64_mul(diff, diff), sum));
+        }
+        i = i + 1;
+    }
+    return dist;
+}
+
+# ================================================================
+# SceneDetector state
+#   Layout: 48 bytes
+#     +0: prev_histogram (vec ptr, 0 if none)
+#     +8: frame_index
+#     +16: last_boundary_frame
+#     +24: boundaries (vec of SceneBoundary ptrs)
+#     +32: hard_threshold (f64 bits)
+#     +40: min_scene_frames
+# ================================================================
+
+fn scene_detector_new(hard_threshold, min_scene_frames) {
+    var d = alloc(48);
+    store64(d, 0);
+    store64(d + 8, 0);
+    store64(d + 16, 0);
+    store64(d + 24, vec_new());
+    store64(d + 32, hard_threshold);
+    store64(d + 40, min_scene_frames);
+    return d;
+}
+
+fn scene_detector_default() {
+    var threshold = f64_div(f64_from(4), f64_from(10));  # 0.4
+    return scene_detector_new(threshold, 30);
+}
+
+fn scene_boundaries(d) { return load64(d + 24); }
+
+# Feed a Y-plane frame to the detector.
+# y_data: pointer to luminance bytes, y_len: width*height
+# Returns SceneBoundary ptr if boundary detected, 0 otherwise.
+fn scene_feed_frame(d, y_data, y_len, ts_ns) {
+    var hist = compute_luma_histogram(y_data, y_len, SCENE_HISTOGRAM_BINS);
+
+    var frame_idx = load64(d + 8);
+    store64(d + 8, frame_idx + 1);
+
+    var prev = load64(d);
+    if (prev == 0) {
+        store64(d, hist);
+        return 0;
+    }
+
+    var distance = chi_squared_distance(prev, hist);
+    store64(d, hist);
+
+    # Check threshold
+    var threshold = load64(d + 32);
+    var last_boundary = load64(d + 16);
+    var min_frames = load64(d + 40);
+
+    if (frame_idx - last_boundary < min_frames) { return 0; }
+
+    if (f64_gt(distance, threshold) == 1) {
+        var b = scene_boundary_new(ts_ns, frame_idx, distance, SCENE_HARD_CUT);
+        var boundaries = load64(d + 24);
+        vec_push(boundaries, b);
+        store64(d + 16, frame_idx);
+        return b;
+    }
+
+    return 0;
+}

@@ -1,0 +1,240 @@
+# tarang/audio — Audio processing module
+#
+# Provides: resample, mix_channels, loudness measurement, gain adjustment.
+# Codec decode/encode is handled by demuxers + shravan libs (via deps).
+# Samples are f64 internally (matching shravan v2.1.1).
+
+# ================================================================
+# Resample — linear interpolation (fast, sufficient for playback)
+# For high-quality offline use, integrate shravan's windowed sinc.
+# ================================================================
+
+fn audio_resample(ab, target_rate) {
+    var sr = audio_buf_sample_rate(ab);
+    if (sr == target_rate) { return ab; }
+    if (target_rate == 0) { return tarang_err(ERR_CONFIG); }
+    if (sr == 0) { return tarang_err(ERR_CONFIG); }
+
+    var ch = audio_buf_channels(ab);
+    var frames = audio_buf_num_frames(ab);
+    if (ch == 0) { return tarang_err(ERR_CONFIG); }
+    if (frames == 0) { return tarang_err(ERR_CONFIG); }
+
+    var data = audio_buf_data(ab);
+    var ratio = f64_div(f64_from(target_rate), f64_from(sr));
+    var dst_frames = f64_to(f64_mul(f64_from(frames), ratio));
+    if (dst_frames == 0) { return tarang_err(ERR_CONFIG); }
+
+    var out_samples = dst_frames * ch;
+    var out_bytes = out_samples * 8;
+    var out = alloc(out_bytes);
+
+    var fi = 0;
+    while (fi < dst_frames) {
+        var src_pos = f64_div(f64_from(fi), ratio);
+        var src_idx = f64_to(src_pos);
+        var frac = f64_sub(src_pos, f64_from(src_idx));
+        var idx0 = src_idx;
+        var idx1 = src_idx + 1;
+        if (idx0 >= frames) { idx0 = frames - 1; }
+        if (idx1 >= frames) { idx1 = frames - 1; }
+
+        var ci = 0;
+        while (ci < ch) {
+            var off0 = (idx0 * ch + ci) * 8;
+            var off1 = (idx1 * ch + ci) * 8;
+            var lo0 = read_u32_le(data, off0);
+            var hi0 = read_u32_le(data, off0 + 4);
+            var s0 = lo0 | (hi0 << 32);
+            var lo1 = read_u32_le(data, off1);
+            var hi1 = read_u32_le(data, off1 + 4);
+            var s1 = lo1 | (hi1 << 32);
+            # Linear interpolation: s0 + frac * (s1 - s0)
+            var interp = f64_add(s0, f64_mul(frac, f64_sub(s1, s0)));
+            var out_off = (fi * ch + ci) * 8;
+            write_u32_le(out, out_off, interp & 0xFFFFFFFF);
+            write_u32_le(out, out_off + 4, (interp >> 32) & 0xFFFFFFFF);
+            ci = ci + 1;
+        }
+        fi = fi + 1;
+    }
+
+    return audio_buf_new(out, out_bytes, SAMPLE_F64, ch, target_rate, dst_frames);
+}
+
+# ================================================================
+# Channel mixing — stereo↔mono
+# ================================================================
+
+# Mix audio buffer to target channel count.
+# Supports: stereo→mono (average L+R), mono→stereo (duplicate).
+fn audio_mix_channels(ab, target_ch) {
+    var src_ch = audio_buf_channels(ab);
+    if (src_ch == target_ch) { return ab; }
+    if (src_ch == 0) { return tarang_err(ERR_CONFIG); }
+
+    var frames = audio_buf_num_frames(ab);
+    if (frames == 0) { return tarang_err(ERR_CONFIG); }
+
+    var data = audio_buf_data(ab);
+    var sr = audio_buf_sample_rate(ab);
+
+    # Stereo → Mono: average L and R
+    if (src_ch == 2) {
+        if (target_ch == 1) {
+            var out_bytes = frames * 8;
+            var out = alloc(out_bytes);
+            var fi = 0;
+            while (fi < frames) {
+                var l_off = fi * 16;
+                var r_off = fi * 16 + 8;
+                # Read L and R as f64 bit patterns
+                var l_lo = read_u32_le(data, l_off);
+                var l_hi = read_u32_le(data, l_off + 4);
+                var l_bits = l_lo | (l_hi << 32);
+                var r_lo = read_u32_le(data, r_off);
+                var r_hi = read_u32_le(data, r_off + 4);
+                var r_bits = r_lo | (r_hi << 32);
+                # Average: (L + R) / 2
+                var sum = f64_add(l_bits, r_bits);
+                var avg = f64_mul(sum, F64_HALF);
+                write_u32_le(out, fi * 8, avg & 0xFFFFFFFF);
+                write_u32_le(out, fi * 8 + 4, (avg >> 32) & 0xFFFFFFFF);
+                fi = fi + 1;
+            }
+            return audio_buf_new(out, out_bytes, SAMPLE_F64, 1, sr, frames);
+        }
+    }
+
+    # Mono → Stereo: duplicate
+    if (src_ch == 1) {
+        if (target_ch == 2) {
+            var out_bytes = frames * 16;
+            var out = alloc(out_bytes);
+            var fi = 0;
+            while (fi < frames) {
+                var s_off = fi * 8;
+                var lo = read_u32_le(data, s_off);
+                var hi = read_u32_le(data, s_off + 4);
+                # Write same sample to L and R
+                var d_off = fi * 16;
+                write_u32_le(out, d_off, lo);
+                write_u32_le(out, d_off + 4, hi);
+                write_u32_le(out, d_off + 8, lo);
+                write_u32_le(out, d_off + 12, hi);
+                fi = fi + 1;
+            }
+            return audio_buf_new(out, out_bytes, SAMPLE_F64, 2, sr, frames);
+        }
+    }
+
+    return tarang_err(ERR_CONFIG);
+}
+
+# ================================================================
+# Loudness measurement — simplified ITU-R BS.1770
+# ================================================================
+
+# LoudnessMetrics struct
+#   Layout: 24 bytes
+#     +0: integrated_lufs (f64 bits)
+#     +8: peak (f64 bits)
+#     +16: rms_db (f64 bits)
+
+fn loudness_new(lufs, peak, rms) {
+    var m = alloc(24);
+    store64(m, lufs);
+    store64(m + 8, peak);
+    store64(m + 16, rms);
+    return m;
+}
+
+fn loudness_lufs(m)  { return load64(m); }
+fn loudness_peak(m)  { return load64(m + 8); }
+fn loudness_rms_db(m){ return load64(m + 16); }
+
+# Measure loudness of an AudioBuffer (f64 samples).
+# Returns LoudnessMetrics.
+fn audio_measure_loudness(ab) {
+    var data = audio_buf_data(ab);
+    var data_len = audio_buf_data_len(ab);
+    var ch = audio_buf_channels(ab);
+    var frames = audio_buf_num_frames(ab);
+
+    if (frames == 0) {
+        return loudness_new(f64_from(0 - 70), F64_ZERO, f64_from(0 - 70));
+    }
+    if (ch == 0) {
+        return loudness_new(f64_from(0 - 70), F64_ZERO, f64_from(0 - 70));
+    }
+
+    var total_samples = frames * ch;
+    var sum_sq = F64_ZERO;
+    var peak = F64_ZERO;
+    var i = 0;
+    while (i < total_samples) {
+        var off = i * 8;
+        if (off + 8 > data_len) { break; }
+        var lo = read_u32_le(data, off);
+        var hi = read_u32_le(data, off + 4);
+        var s = lo | (hi << 32);
+        var abs_s = f64_abs(s);
+        if (f64_gt(abs_s, peak) == 1) { peak = abs_s; }
+        sum_sq = f64_add(sum_sq, f64_mul(s, s));
+        i = i + 1;
+    }
+
+    var f_count = f64_from(total_samples);
+    var mean_sq = f64_div(sum_sq, f_count);
+
+    # RMS in dB: 20 * log10(sqrt(mean_sq))
+    # = 10 * log10(mean_sq)
+    var rms_db = f64_from(0 - 70);
+    if (f64_gt(mean_sq, F64_ZERO) == 1) {
+        var log2_val = f64_log2(mean_sq);
+        # log10(x) = log2(x) / log2(10) ≈ log2(x) / 3.32193
+        var log10_val = f64_div(log2_val, f64_from(3));  # approximate
+        rms_db = f64_mul(f64_from(10), log10_val);
+    }
+
+    # LUFS ≈ RMS_dB - 0.691 (simplified K-weighting offset)
+    var lufs = f64_sub(rms_db, F64_ONE);
+
+    return loudness_new(lufs, peak, rms_db);
+}
+
+# Apply gain in dB to an AudioBuffer. Returns new buffer.
+fn audio_apply_gain(ab, gain_db) {
+    var data = audio_buf_data(ab);
+    var data_len = audio_buf_data_len(ab);
+    var ch = audio_buf_channels(ab);
+    var frames = audio_buf_num_frames(ab);
+    var sr = audio_buf_sample_rate(ab);
+    var total_samples = frames * ch;
+
+    # gain_linear = 10^(gain_db / 20) ≈ 2^(gain_db / 6.02)
+    # Use pow2: 2^(gain_db * log2(10) / 20) = 2^(gain_db * 0.166)
+    var f_gain = f64_mul(gain_db, f64_div(F64_ONE, f64_from(6)));
+    var gain_linear = f64_exp2(f_gain);
+
+    var out_bytes = total_samples * 8;
+    var out = alloc(out_bytes);
+
+    var i = 0;
+    while (i < total_samples) {
+        var off = i * 8;
+        if (off + 8 > data_len) { break; }
+        var lo = read_u32_le(data, off);
+        var hi = read_u32_le(data, off + 4);
+        var s = lo | (hi << 32);
+        var amplified = f64_mul(s, gain_linear);
+        # Clamp to [-1, 1]
+        if (f64_gt(amplified, F64_ONE) == 1) { amplified = F64_ONE; }
+        if (f64_lt(amplified, F64_NEG_ONE) == 1) { amplified = F64_NEG_ONE; }
+        write_u32_le(out, off, amplified & 0xFFFFFFFF);
+        write_u32_le(out, off + 4, (amplified >> 32) & 0xFFFFFFFF);
+        i = i + 1;
+    }
+
+    return audio_buf_new(out, out_bytes, SAMPLE_F64, ch, sr, frames);
+}
