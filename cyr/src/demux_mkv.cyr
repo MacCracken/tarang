@@ -1,0 +1,725 @@
+# tarang/demux/mkv — Matroska/WebM container demuxer
+#
+# EBML parser for Matroska. Parses: EBML header, Segment, Info,
+# Tracks, Clusters, SimpleBlocks. Codec detection for audio + video.
+# Seek via cluster timecode scanning.
+#
+# Works on file descriptors with read/lseek syscalls.
+
+# ================================================================
+# EBML Element IDs
+# ================================================================
+
+var EBML_HEADER_ID  = 0x1A45DFA3;
+var EBML_SEGMENT    = 0x18538067;
+var EBML_INFO       = 0x1549A966;
+var EBML_TC_SCALE   = 0x2AD7B1;
+var EBML_DURATION   = 0x4489;
+var EBML_TRACKS     = 0x1654AE6B;
+var EBML_TRACK_ENTRY= 0xAE;
+var EBML_TRACK_NUM  = 0xD7;
+var EBML_TRACK_TYPE = 0x83;
+var EBML_CODEC_ID   = 0x86;
+var EBML_AUDIO      = 0xE1;
+var EBML_SAMP_FREQ  = 0xB5;
+var EBML_CHANNELS   = 0x9F;
+var EBML_VIDEO      = 0xE0;
+var EBML_PIX_W      = 0xB0;
+var EBML_PIX_H      = 0xBA;
+var EBML_CLUSTER    = 0x1F43B675;
+var EBML_TIMECODE   = 0xE7;
+var EBML_SIMPLE_BLK = 0xA3;
+var EBML_DOC_TYPE   = 0x4282;
+
+var MKV_TRACK_AUDIO = 2;
+var MKV_TRACK_VIDEO = 1;
+
+# ================================================================
+# EBML reading primitives
+# ================================================================
+
+# Read EBML element ID from fd. Returns (id, bytes_consumed) via ret2.
+fn ebml_read_id(fd) {
+    var b = alloc(1);
+    var r = wav_read_exact(fd, b, 1);
+    if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+
+    var first = load8(b);
+    if (first == 0) { ret2(0, 0); return 0; }
+
+    # Count leading zeros to determine length
+    var len = 1;
+    if ((first & 0x80) != 0) { len = 1; }
+    elif ((first & 0x40) != 0) { len = 2; }
+    elif ((first & 0x20) != 0) { len = 3; }
+    elif ((first & 0x10) != 0) { len = 4; }
+    else { ret2(0, 0); return 0; }
+
+    var value = first;
+    var i = 1;
+    while (i < len) {
+        r = wav_read_exact(fd, b, 1);
+        if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+        value = (value << 8) | load8(b);
+        i = i + 1;
+    }
+
+    ret2(value, len);
+    return value;
+}
+
+# Read EBML variable-length size (VINT). Returns (value, bytes_consumed) via ret2.
+fn ebml_read_size(fd) {
+    var b = alloc(1);
+    var r = wav_read_exact(fd, b, 1);
+    if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+
+    var first = load8(b);
+    if (first == 0) { ret2(0, 0); return 0; }
+
+    var len = 1;
+    if ((first & 0x80) != 0) { len = 1; }
+    elif ((first & 0x40) != 0) { len = 2; }
+    elif ((first & 0x20) != 0) { len = 3; }
+    elif ((first & 0x10) != 0) { len = 4; }
+    elif ((first & 0x08) != 0) { len = 5; }
+    elif ((first & 0x04) != 0) { len = 6; }
+    elif ((first & 0x02) != 0) { len = 7; }
+    elif ((first & 0x01) != 0) { len = 8; }
+    else { ret2(0, 0); return 0; }
+
+    # Mask off the length bits
+    var mask = (1 << (8 - len)) - 1;
+    var value = first & mask;
+
+    var i = 1;
+    while (i < len) {
+        r = wav_read_exact(fd, b, 1);
+        if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+        value = (value << 8) | load8(b);
+        i = i + 1;
+    }
+
+    ret2(value, len);
+    return value;
+}
+
+# Read unsigned integer of n bytes (big-endian)
+fn ebml_read_uint(fd, size) {
+    var value = 0;
+    var b = alloc(1);
+    var i = 0;
+    while (i < size) {
+        wav_read_exact(fd, b, 1);
+        value = (value << 8) | load8(b);
+        i = i + 1;
+    }
+    return value;
+}
+
+# Read f64 from 8 bytes (big-endian IEEE 754)
+fn ebml_read_float(fd, size) {
+    if (size == 8) {
+        var buf = alloc(8);
+        wav_read_exact(fd, buf, 8);
+        # Reconstruct f64 from BE bytes
+        var hi = read_u32_be(buf, 0);
+        var lo = read_u32_be(buf, 4);
+        return (hi << 32) | lo;  # Return as raw f64 bit pattern
+    }
+    if (size == 4) {
+        # f32 → read as 4 bytes BE, convert via f64_from won't work directly
+        # For now return 0 — MKV typically uses f64 for sampling freq
+        var buf = alloc(4);
+        wav_read_exact(fd, buf, 4);
+        return 0;
+    }
+    return 0;
+}
+
+# Read string of n bytes
+fn ebml_read_string(fd, size) {
+    if (size > 65536) { return str_from(""); }
+    var buf = alloc(size + 1);
+    wav_read_exact(fd, buf, size);
+    store8(buf + size, 0);  # null terminate
+    # Strip trailing nulls
+    var end = size;
+    while (end > 0) {
+        if (load8(buf + end - 1) != 0) { break; }
+        end = end - 1;
+    }
+    return str_new(buf, end);
+}
+
+# ================================================================
+# Codec ID mapping
+# ================================================================
+
+fn mkv_map_audio_codec(codec_str) {
+    if (str_eq(codec_str, str_from("A_VORBIS")) == 1) { return AUDIO_VORBIS; }
+    if (str_eq(codec_str, str_from("A_OPUS")) == 1) { return AUDIO_OPUS; }
+    if (str_eq(codec_str, str_from("A_FLAC")) == 1) { return AUDIO_FLAC; }
+    if (str_eq(codec_str, str_from("A_AAC")) == 1) { return AUDIO_AAC; }
+    if (str_eq(codec_str, str_from("A_MPEG/L3")) == 1) { return AUDIO_MP3; }
+    if (str_eq(codec_str, str_from("A_PCM/INT/LIT")) == 1) { return AUDIO_PCM; }
+    if (str_eq(codec_str, str_from("A_ALAC")) == 1) { return AUDIO_ALAC; }
+    return 0 - 1;  # unknown
+}
+
+fn mkv_map_video_codec(codec_str) {
+    if (str_eq(codec_str, str_from("V_VP9")) == 1) { return VIDEO_VP9; }
+    if (str_eq(codec_str, str_from("V_VP8")) == 1) { return VIDEO_VP8; }
+    if (str_eq(codec_str, str_from("V_AV1")) == 1) { return VIDEO_AV1; }
+    if (str_eq(codec_str, str_from("V_MPEG4/ISO/AVC")) == 1) { return VIDEO_H264; }
+    if (str_eq(codec_str, str_from("V_MPEGH/ISO/HEVC")) == 1) { return VIDEO_H265; }
+    return 0 - 1;
+}
+
+# ================================================================
+# MkvTrack state
+#   Layout: 64 bytes
+#     +0:  track_number
+#     +8:  track_type (1=video, 2=audio)
+#     +16: codec_id (Str ptr)
+#     +24: sample_rate (f64 bit pattern)
+#     +32: channels
+#     +40: width (video)
+#     +48: height (video)
+#     +56: audio_codec / video_codec (resolved enum)
+# ================================================================
+
+fn mkv_track_new() {
+    var t = alloc(64);
+    memset(t, 0, 64);
+    return t;
+}
+
+# ================================================================
+# MkvDemuxer state
+#   Layout: 72 bytes
+#     +0:  fd
+#     +8:  tracks (vec of track ptrs)
+#     +16: timecode_scale (ns per unit, default 1000000)
+#     +24: duration_tc (f64 bits — duration in timecode units)
+#     +32: is_webm
+#     +40: cluster_offset
+#     +48: current_cluster_tc
+#     +56: segment_offset
+#     +64: segment_size
+# ================================================================
+
+fn mkv_demuxer_new(fd) {
+    var d = alloc(80);
+    store64(d,      fd);
+    store64(d + 8,  vec_new());
+    store64(d + 16, 1000000);  # default 1ms
+    store64(d + 24, 0);
+    store64(d + 32, 0);
+    store64(d + 40, 0);
+    store64(d + 48, 0);
+    store64(d + 56, 0);
+    store64(d + 64, 0);
+    store64(d + 72, 0);  # media_info
+    return d;
+}
+
+fn mkv_demux_fd(d) { return load64(d); }
+
+# ================================================================
+# mkv_demux_probe — parse EBML header + Segment children
+# ================================================================
+
+fn mkv_demux_probe(d) {
+    var fd = load64(d);
+    wav_lseek(fd, 0, SEEK_SET);
+
+    # Read EBML header
+    var id = ebml_read_id(fd);
+    var id_len = rethi();
+    if (id != EBML_HEADER_ID) { return tarang_err(ERR_UNSUPPORTED_FORMAT); }
+
+    var hdr_size = ebml_read_size(fd);
+    var hdr_end = wav_lseek(fd, 0, SEEK_CUR) + hdr_size;
+
+    # Check DocType for webm
+    while (wav_lseek(fd, 0, SEEK_CUR) < hdr_end) {
+        var eid = ebml_read_id(fd);
+        var elen = rethi();
+        if (eid == 0) { break; }
+        var esize = ebml_read_size(fd);
+        if (eid == EBML_DOC_TYPE) {
+            var dt = ebml_read_string(fd, esize);
+            if (str_eq(dt, str_from("webm")) == 1) { store64(d + 32, 1); }
+        } else {
+            wav_lseek(fd, esize, SEEK_CUR);
+        }
+    }
+
+    # Read Segment
+    var seg_id = ebml_read_id(fd);
+    if (seg_id != EBML_SEGMENT) { return tarang_err(ERR_UNSUPPORTED_FORMAT); }
+    var seg_size = ebml_read_size(fd);
+    var seg_start = wav_lseek(fd, 0, SEEK_CUR);
+    store64(d + 56, seg_start);
+    store64(d + 64, seg_size);
+    var seg_end = seg_start + seg_size;
+
+    # Parse Segment children until we find Cluster
+    while (wav_lseek(fd, 0, SEEK_CUR) < seg_end) {
+        var cid = ebml_read_id(fd);
+        var cid_len = rethi();
+        if (cid == 0) { break; }
+        var csize = ebml_read_size(fd);
+        var cstart = wav_lseek(fd, 0, SEEK_CUR);
+        var cend = cstart + csize;
+
+        if (cid == EBML_INFO) {
+            # Parse Info — extract timecode_scale and duration
+            while (wav_lseek(fd, 0, SEEK_CUR) < cend) {
+                var iid = ebml_read_id(fd);
+                var isize = ebml_read_size(fd);
+                if (iid == EBML_TC_SCALE) {
+                    store64(d + 16, ebml_read_uint(fd, isize));
+                }
+                elif (iid == EBML_DURATION) {
+                    store64(d + 24, ebml_read_float(fd, isize));
+                }
+                else { wav_lseek(fd, isize, SEEK_CUR); }
+            }
+        }
+        elif (cid == EBML_TRACKS) {
+            # Parse Tracks
+            while (wav_lseek(fd, 0, SEEK_CUR) < cend) {
+                var tid = ebml_read_id(fd);
+                var tsize = ebml_read_size(fd);
+                if (tid == EBML_TRACK_ENTRY) {
+                    var tend = wav_lseek(fd, 0, SEEK_CUR) + tsize;
+                    var trk = mkv_track_new();
+                    while (wav_lseek(fd, 0, SEEK_CUR) < tend) {
+                        var fid = ebml_read_id(fd);
+                        var fsize = ebml_read_size(fd);
+                        if (fid == EBML_TRACK_NUM) { store64(trk, ebml_read_uint(fd, fsize)); }
+                        elif (fid == EBML_TRACK_TYPE) { store64(trk + 8, ebml_read_uint(fd, fsize)); }
+                        elif (fid == EBML_CODEC_ID) { store64(trk + 16, ebml_read_string(fd, fsize)); }
+                        elif (fid == EBML_AUDIO) {
+                            var aend = wav_lseek(fd, 0, SEEK_CUR) + fsize;
+                            while (wav_lseek(fd, 0, SEEK_CUR) < aend) {
+                                var aid = ebml_read_id(fd);
+                                var asize = ebml_read_size(fd);
+                                if (aid == EBML_SAMP_FREQ) { store64(trk + 24, ebml_read_float(fd, asize)); }
+                                elif (aid == EBML_CHANNELS) { store64(trk + 32, ebml_read_uint(fd, asize)); }
+                                else { wav_lseek(fd, asize, SEEK_CUR); }
+                            }
+                        }
+                        elif (fid == EBML_VIDEO) {
+                            var vend = wav_lseek(fd, 0, SEEK_CUR) + fsize;
+                            while (wav_lseek(fd, 0, SEEK_CUR) < vend) {
+                                var vid = ebml_read_id(fd);
+                                var vsize = ebml_read_size(fd);
+                                if (vid == EBML_PIX_W) { store64(trk + 40, ebml_read_uint(fd, vsize)); }
+                                elif (vid == EBML_PIX_H) { store64(trk + 48, ebml_read_uint(fd, vsize)); }
+                                else { wav_lseek(fd, vsize, SEEK_CUR); }
+                            }
+                        }
+                        else { wav_lseek(fd, fsize, SEEK_CUR); }
+                    }
+                    var tracks = load64(d + 8);
+                    vec_push(tracks, trk);
+                } else {
+                    wav_lseek(fd, tsize, SEEK_CUR);
+                }
+            }
+        }
+        elif (cid == EBML_CLUSTER) {
+            # First cluster found — record offset and stop
+            # Back up to cluster start (before id+size)
+            store64(d + 40, cstart - cid_len - 1);  # approximate
+            # Actually re-compute: cluster element starts before its id bytes
+            var cluster_start = cstart - csize;  # wrong, let's just store cstart
+            store64(d + 40, wav_lseek(fd, 0, SEEK_CUR) - csize);
+            break;
+        }
+        else {
+            wav_lseek(fd, cend, SEEK_SET);
+        }
+    }
+
+    # Build MediaInfo from tracks
+    var tracks = load64(d + 8);
+    var num_tracks = vec_len(tracks);
+    if (num_tracks == 0) { return tarang_err(ERR_DEMUX); }
+
+    var streams = vec_new();
+    var i = 0;
+    while (i < num_tracks) {
+        var trk = vec_get(tracks, i);
+        var ttype = load64(trk + 8);
+        var codec_str = load64(trk + 16);
+
+        if (ttype == MKV_TRACK_AUDIO) {
+            var ac = mkv_map_audio_codec(codec_str);
+            if (ac >= 0) {
+                # sample_rate is f64 bit pattern
+                var sr_bits = load64(trk + 24);
+                var sr = f64_to(sr_bits);
+                var ch = load64(trk + 32);
+                store64(trk + 56, ac);
+                var dur_ns = 0;
+                var tc_scale = load64(d + 16);
+                var dur_tc = load64(d + 24);  # f64 bits
+                if (dur_tc != 0) {
+                    if (tc_scale != 0) {
+                        dur_ns = f64_to(f64_mul(dur_tc, f64_from(tc_scale)));
+                    }
+                }
+                var as_info = audio_stream_new(ac, sr, ch, SAMPLE_F32, 0, dur_ns);
+                vec_push(streams, stream_audio(as_info));
+            }
+        }
+        elif (ttype == MKV_TRACK_VIDEO) {
+            var vc = mkv_map_video_codec(codec_str);
+            if (vc >= 0) {
+                var w = load64(trk + 40);
+                var h = load64(trk + 48);
+                store64(trk + 56, vc);
+                var vs_info = video_stream_new(vc, w, h, PIX_YUV420P, 0, 0, 0);
+                vec_push(streams, stream_video(vs_info));
+            }
+        }
+        i = i + 1;
+    }
+
+    if (vec_len(streams) == 0) { return tarang_err(ERR_DEMUX); }
+
+    var fmt = FMT_MKV;
+    if (load64(d + 32) == 1) { fmt = FMT_WEBM; }
+    var mi = media_info_new(fmt, streams);
+
+    # Duration
+    var tc_scale = load64(d + 16);
+    var dur_tc = load64(d + 24);
+    if (dur_tc != 0) {
+        if (tc_scale != 0) {
+            var dur_ns = f64_to(f64_mul(dur_tc, f64_from(tc_scale)));
+            media_info_set_duration_ns(mi, dur_ns);
+        }
+    }
+
+    store64(d + 72, mi);
+
+    # Seek to cluster start for packet reading
+    var cluster_off = load64(d + 40);
+    if (cluster_off > 0) { wav_lseek(fd, cluster_off, SEEK_SET); }
+
+    return mi;
+}
+
+# ================================================================
+# mkv_demux_next_packet — read next SimpleBlock from clusters
+# ================================================================
+
+fn mkv_demux_next_packet(d) {
+    var fd = load64(d);
+    var seg_end = load64(d + 56) + load64(d + 64);
+
+    while (wav_lseek(fd, 0, SEEK_CUR) < seg_end) {
+        var eid = ebml_read_id(fd);
+        var eid_len = rethi();
+        if (eid == 0) { return tarang_err(ERR_END_OF_STREAM); }
+        var esize = ebml_read_size(fd);
+
+        if (eid == EBML_CLUSTER) {
+            # Enter cluster — parse children
+            continue;
+        }
+        elif (eid == EBML_TIMECODE) {
+            store64(d + 48, ebml_read_uint(fd, esize));
+            continue;
+        }
+        elif (eid == EBML_SIMPLE_BLK) {
+            # Parse SimpleBlock
+            # Track number (VINT)
+            var track_num = ebml_read_size(fd);
+            var vint_len = rethi();
+
+            # Relative timecode (i16 BE)
+            var tc_buf = alloc(2);
+            wav_read_exact(fd, tc_buf, 2);
+            var rel_tc = (load8(tc_buf) << 8) | load8(tc_buf + 1);
+            # Sign extend i16
+            if (rel_tc >= 32768) { rel_tc = rel_tc - 65536; }
+
+            # Flags
+            var flags_buf = alloc(1);
+            wav_read_exact(fd, flags_buf, 1);
+            var is_kf = 0;
+            if ((load8(flags_buf) & 0x80) != 0) { is_kf = 1; }
+
+            var header_size = vint_len + 3;
+            if (esize < header_size) {
+                wav_lseek(fd, esize - header_size, SEEK_CUR);
+                continue;
+            }
+            var data_size = esize - header_size;
+            if (data_size > 67108864) {
+                wav_lseek(fd, data_size, SEEK_CUR);
+                continue;
+            }
+
+            var buf = alloc(data_size);
+            wav_read_exact(fd, buf, data_size);
+
+            # Compute absolute timestamp
+            var cluster_tc = load64(d + 48);
+            var abs_tc = cluster_tc + rel_tc;
+            if (abs_tc < 0) { abs_tc = 0; }
+            var tc_scale = load64(d + 16);
+            var ts_ns = abs_tc * tc_scale;
+
+            return packet_new(0, buf, data_size, ts_ns, is_kf);
+        }
+        else {
+            wav_lseek(fd, esize, SEEK_CUR);
+        }
+    }
+    return tarang_err(ERR_END_OF_STREAM);
+}
+
+# ================================================================
+# mkv_demux_seek — scan clusters for target timestamp
+# ================================================================
+
+fn mkv_demux_seek(d, ts_ns) {
+    var fd = load64(d);
+    var cluster_off = load64(d + 40);
+    var tc_scale = load64(d + 16);
+    if (tc_scale == 0) { return tarang_err(ERR_DEMUX); }
+
+    wav_lseek(fd, cluster_off, SEEK_SET);
+    var seg_end = load64(d + 56) + load64(d + 64);
+    var last_cluster_pos = cluster_off;
+
+    while (wav_lseek(fd, 0, SEEK_CUR) < seg_end) {
+        var pos = wav_lseek(fd, 0, SEEK_CUR);
+        var eid = ebml_read_id(fd);
+        if (eid == 0) { break; }
+        var esize = ebml_read_size(fd);
+
+        if (eid == EBML_CLUSTER) {
+            # Peek at cluster timecode
+            var tc_pos = wav_lseek(fd, 0, SEEK_CUR);
+            var tc_id = ebml_read_id(fd);
+            var tc_size = ebml_read_size(fd);
+            if (tc_id == EBML_TIMECODE) {
+                var tc = ebml_read_uint(fd, tc_size);
+                var cluster_ns = tc * tc_scale;
+                if (cluster_ns > ts_ns) {
+                    wav_lseek(fd, last_cluster_pos, SEEK_SET);
+                    return 0;
+                }
+                store64(d + 48, tc);
+                last_cluster_pos = pos;
+            }
+            wav_lseek(fd, tc_pos, SEEK_SET);
+            continue;
+        }
+        wav_lseek(fd, esize, SEEK_CUR);
+    }
+
+    wav_lseek(fd, last_cluster_pos, SEEK_SET);
+    return 0;
+}
+
+# ================================================================
+# Helper: create MKV demuxer from buffer (testing)
+# ================================================================
+
+fn mkv_demuxer_from_buf(data, len) {
+    var path = "/tmp/tarang_mkv_test.mkv";
+    var fd = syscall(2, path, 577, 0x1A4);
+    if (fd < 0) { return 0; }
+    syscall(1, fd, data, len);
+    syscall(3, fd);
+    var rfd = syscall(2, path, 0, 0);
+    if (rfd < 0) { return 0; }
+    return mkv_demuxer_new(rfd);
+}
+
+# ================================================================
+# EBML writing helpers (for test fixture construction)
+# ================================================================
+
+fn ebml_write_id(buf, id) {
+    if (id >= 0x10000000) {
+        vec_push(buf, (id >> 24) & 0xFF);
+        vec_push(buf, (id >> 16) & 0xFF);
+        vec_push(buf, (id >> 8) & 0xFF);
+        vec_push(buf, id & 0xFF);
+    }
+    elif (id >= 0x200000) {
+        vec_push(buf, (id >> 16) & 0xFF);
+        vec_push(buf, (id >> 8) & 0xFF);
+        vec_push(buf, id & 0xFF);
+    }
+    elif (id >= 0x4000) {
+        vec_push(buf, (id >> 8) & 0xFF);
+        vec_push(buf, id & 0xFF);
+    }
+    else {
+        vec_push(buf, id & 0xFF);
+    }
+    return 0;
+}
+
+fn ebml_write_vint(buf, value) {
+    if (value < 0x7F) {
+        vec_push(buf, 0x80 | value);
+    }
+    elif (value < 0x3FFF) {
+        vec_push(buf, 0x40 | ((value >> 8) & 0xFF));
+        vec_push(buf, value & 0xFF);
+    }
+    elif (value < 0x1FFFFF) {
+        vec_push(buf, 0x20 | ((value >> 16) & 0xFF));
+        vec_push(buf, (value >> 8) & 0xFF);
+        vec_push(buf, value & 0xFF);
+    }
+    else {
+        vec_push(buf, 0x10 | ((value >> 24) & 0xFF));
+        vec_push(buf, (value >> 16) & 0xFF);
+        vec_push(buf, (value >> 8) & 0xFF);
+        vec_push(buf, value & 0xFF);
+    }
+    return 0;
+}
+
+fn ebml_write_uint_element(buf, id, value) {
+    ebml_write_id(buf, id);
+    if (value <= 0xFF) {
+        ebml_write_vint(buf, 1);
+        vec_push(buf, value & 0xFF);
+    }
+    elif (value <= 0xFFFF) {
+        ebml_write_vint(buf, 2);
+        vec_push(buf, (value >> 8) & 0xFF);
+        vec_push(buf, value & 0xFF);
+    }
+    else {
+        ebml_write_vint(buf, 4);
+        push_u32_be(buf, value);
+    }
+    return 0;
+}
+
+fn ebml_write_float_element(buf, id, value_bits) {
+    ebml_write_id(buf, id);
+    ebml_write_vint(buf, 8);
+    # Write f64 as 8 BE bytes
+    var i = 7;
+    while (i >= 0) {
+        vec_push(buf, (value_bits >> (i * 8)) & 0xFF);
+        i = i - 1;
+    }
+    return 0;
+}
+
+fn ebml_write_string_element(buf, id, s) {
+    ebml_write_id(buf, id);
+    var slen = str_len(s);
+    ebml_write_vint(buf, slen);
+    var sdata = str_data(s);
+    var i = 0;
+    while (i < slen) {
+        vec_push(buf, load8(sdata + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Write a master element. Returns start offset for size patching.
+fn ebml_write_master_start(buf, id) {
+    ebml_write_id(buf, id);
+    var off = vec_len(buf);
+    # 4-byte size placeholder
+    vec_push(buf, 0x10); vec_push(buf, 0); vec_push(buf, 0); vec_push(buf, 0);
+    return off;
+}
+
+fn ebml_patch_master_size(buf, off) {
+    var size = vec_len(buf) - off - 4;
+    vec_set(buf, off, 0x10 | ((size >> 24) & 0x0F));
+    vec_set(buf, off + 1, (size >> 16) & 0xFF);
+    vec_set(buf, off + 2, (size >> 8) & 0xFF);
+    vec_set(buf, off + 3, size & 0xFF);
+    return 0;
+}
+
+# Build minimal MKV file with one audio track (Vorbis) + data
+fn make_mkv_vorbis(sample_rate, channels, num_blocks, block_size) {
+    var buf = vec_new();
+    var sr_bits = f64_from(sample_rate);  # f64 bit pattern for sample_rate
+
+    # EBML header
+    var ebml_hdr = ebml_write_master_start(buf, EBML_HEADER_ID);
+    ebml_write_string_element(buf, EBML_DOC_TYPE, str_from("matroska"));
+    ebml_patch_master_size(buf, ebml_hdr);
+
+    # Segment
+    var seg = ebml_write_master_start(buf, EBML_SEGMENT);
+
+    # Info
+    var info = ebml_write_master_start(buf, EBML_INFO);
+    ebml_write_uint_element(buf, EBML_TC_SCALE, 1000000);  # 1ms
+    ebml_write_float_element(buf, EBML_DURATION, f64_from(1000));  # 1000 tc units = 1s
+    ebml_patch_master_size(buf, info);
+
+    # Tracks
+    var tracks = ebml_write_master_start(buf, EBML_TRACKS);
+    var entry = ebml_write_master_start(buf, EBML_TRACK_ENTRY);
+    ebml_write_uint_element(buf, EBML_TRACK_NUM, 1);
+    ebml_write_uint_element(buf, EBML_TRACK_TYPE, MKV_TRACK_AUDIO);
+    ebml_write_string_element(buf, EBML_CODEC_ID, str_from("A_VORBIS"));
+    # Audio settings
+    var audio = ebml_write_master_start(buf, EBML_AUDIO);
+    ebml_write_float_element(buf, EBML_SAMP_FREQ, sr_bits);
+    ebml_write_uint_element(buf, EBML_CHANNELS, channels);
+    ebml_patch_master_size(buf, audio);
+    ebml_patch_master_size(buf, entry);
+    ebml_patch_master_size(buf, tracks);
+
+    # Cluster with SimpleBlocks
+    var cluster = ebml_write_master_start(buf, EBML_CLUSTER);
+    ebml_write_uint_element(buf, EBML_TIMECODE, 0);
+
+    var bi = 0;
+    while (bi < num_blocks) {
+        ebml_write_id(buf, EBML_SIMPLE_BLK);
+        var blk_size = 1 + 2 + 1 + block_size;  # track_vint(1) + tc(2) + flags(1) + data
+        ebml_write_vint(buf, blk_size);
+        vec_push(buf, 0x81);  # track 1 (vint)
+        var rel_tc = bi * 20;  # 20ms apart
+        vec_push(buf, (rel_tc >> 8) & 0xFF);
+        vec_push(buf, rel_tc & 0xFF);
+        vec_push(buf, 0x80);  # keyframe flag
+        var di = 0;
+        while (di < block_size) {
+            vec_push(buf, 0xCD);
+            di = di + 1;
+        }
+        bi = bi + 1;
+    }
+    ebml_patch_master_size(buf, cluster);
+    ebml_patch_master_size(buf, seg);
+
+    # Copy vec to contiguous buffer
+    var total = vec_len(buf);
+    var out = alloc(total);
+    var i = 0;
+    while (i < total) {
+        store8(out + i, vec_get(buf, i));
+        i = i + 1;
+    }
+    ret2(out, total);
+    return out;
+}
