@@ -32,6 +32,7 @@ fn err(code) { return 0 - code; }
 
 include "lib/ogg.cyr"
 include "src/demux_ogg.cyr"
+include "src/demux_mp4.cyr"
 
 # ================================================================
 # Tests — Enums & Names
@@ -582,6 +583,110 @@ fn test_ogg_mono() {
 }
 
 # ================================================================
+# Tests — MP4 Demuxer
+# ================================================================
+
+fn test_mp4_probe() {
+    # 10 samples * 128 bytes each, 44100 Hz stereo
+    var mp4 = make_mp4_aac(10, 128, 44100, 2);
+    var mp4_len = rethi();
+    var d = mp4_demuxer_from_buf(mp4, mp4_len);
+    assert(d != 0, "mp4 demuxer created");
+
+    var mi = mp4_demux_probe(d);
+    assert(tarang_is_err(mi) == 0, "mp4 probe ok");
+    assert_eq(media_info_format(mi), FMT_MP4, "mp4 format");
+    assert_eq(media_info_has_audio(mi), 1, "mp4 has_audio");
+    assert_eq(media_info_has_video(mi), 0, "mp4 no video");
+    assert_eq(media_info_audio_count(mi), 1, "mp4 1 audio");
+
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_codec(a), AUDIO_AAC, "mp4 codec aac");
+    assert_eq(audio_stream_sample_rate(a), 44100, "mp4 sr 44100");
+    assert_eq(audio_stream_channels(a), 2, "mp4 ch 2");
+
+    # Duration: 10 * 1024 / 44100 ≈ 0.232s
+    var dur = media_info_duration_ns(mi);
+    assert(dur > 200000000, "mp4 dur > 200ms");
+    assert(dur < 260000000, "mp4 dur < 260ms");
+
+    syscall(3, mp4_demux_fd(d));
+    return 0;
+}
+
+fn test_mp4_read_packets() {
+    var mp4 = make_mp4_aac(5, 64, 44100, 2);
+    var mp4_len = rethi();
+    var d = mp4_demuxer_from_buf(mp4, mp4_len);
+    mp4_demux_probe(d);
+
+    var count = 0;
+    var total_bytes = 0;
+    while (1 == 1) {
+        var p = mp4_demux_next_packet(d);
+        if (tarang_is_err(p) == 1) { break; }
+        assert_eq(packet_stream_index(p), 0, "mp4 pkt idx");
+        assert_eq(packet_data_len(p), 64, "mp4 pkt size");
+        assert_eq(packet_is_keyframe(p), 1, "mp4 pkt kf");
+        # Verify data content
+        assert_eq(load8(packet_data(p)), 0xAB, "mp4 pkt data");
+        total_bytes = total_bytes + packet_data_len(p);
+        count = count + 1;
+    }
+    assert_eq(count, 5, "mp4 read 5 pkts");
+    assert_eq(total_bytes, 320, "mp4 total 320 bytes");
+
+    syscall(3, mp4_demux_fd(d));
+    return 0;
+}
+
+fn test_mp4_seek() {
+    # 100 samples, 1024 delta each at 44100 Hz
+    # Total duration = 100 * 1024 / 44100 ≈ 2.32s
+    var mp4 = make_mp4_aac(100, 32, 44100, 2);
+    var mp4_len = rethi();
+    var d = mp4_demuxer_from_buf(mp4, mp4_len);
+    mp4_demux_probe(d);
+
+    # Seek to 1 second = 1_000_000_000 ns
+    var r = mp4_demux_seek(d, 1000000000);
+    assert_eq(r, 0, "mp4 seek ok");
+
+    var p = mp4_demux_next_packet(d);
+    assert(tarang_is_err(p) == 0, "mp4 pkt after seek");
+    # At 1s, sample ≈ 44100/1024 ≈ 43. Timestamp ≈ 43*1024/44100 ≈ 0.998s
+    var ts = packet_timestamp_ns(p);
+    assert(ts > 900000000, "mp4 seek ts > 900ms");
+    assert(ts < 1100000000, "mp4 seek ts < 1100ms");
+
+    syscall(3, mp4_demux_fd(d));
+    return 0;
+}
+
+fn test_mp4_invalid() {
+    var garbage = alloc(100);
+    memset(garbage, 0, 100);
+    var d = mp4_demuxer_from_buf(garbage, 100);
+    var r = mp4_demux_probe(d);
+    assert_eq(tarang_is_err(r), 1, "mp4 invalid rejected");
+    syscall(3, mp4_demux_fd(d));
+    return 0;
+}
+
+fn test_mp4_mono() {
+    var mp4 = make_mp4_aac(5, 64, 48000, 1);
+    var mp4_len = rethi();
+    var d = mp4_demuxer_from_buf(mp4, mp4_len);
+    var mi = mp4_demux_probe(d);
+    assert(tarang_is_err(mi) == 0, "mp4 mono probe ok");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_channels(a), 1, "mp4 mono ch");
+    assert_eq(audio_stream_sample_rate(a), 48000, "mp4 mono sr");
+    syscall(3, mp4_demux_fd(d));
+    return 0;
+}
+
+# ================================================================
 # Test Runner
 # ================================================================
 
@@ -609,6 +714,12 @@ test_ogg_probe_vorbis();
 test_ogg_read_packets();
 test_ogg_invalid();
 test_ogg_mono();
+
+test_mp4_probe();
+test_mp4_read_packets();
+test_mp4_seek();
+test_mp4_invalid();
+test_mp4_mono();
 
 assert_summary();
 if (_assert_fail > 0) { syscall(60, 1); }

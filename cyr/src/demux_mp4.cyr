@@ -1,0 +1,925 @@
+# tarang/demux/mp4 — MP4/M4A (ISOBMFF) container demuxer
+#
+# Parses ISO Base Media File Format boxes: ftyp, moov, trak, mdia, minf, stbl.
+# Sample tables: stts, stsc, stsz, stco/co64.
+# Supports AAC, ALAC, FLAC, Opus, MP3 audio tracks.
+# Non-fragmented MP4 only (fMP4 support later).
+#
+# Works on file descriptors with read/lseek syscalls.
+
+# Max entries in sample tables to prevent runaway allocation
+var MP4_MAX_TABLE_ENTRIES = 50000000;
+
+# ================================================================
+# Mp4Track — parsed audio track metadata
+#   Layout: 88 bytes
+#     +0:  codec (AudioCodec)
+#     +8:  sample_rate
+#     +16: channels
+#     +24: bitrate (0 if unknown)
+#     +32: timescale
+#     +40: duration_in_timescale
+#     +48: sample_sizes (vec of u32 values)
+#     +56: chunk_offsets (vec of u64 values)
+#     +64: sample_to_chunk (vec of {first_chunk, samples_per_chunk, desc_idx} triples)
+#     +72: time_to_sample (vec of {count, delta} pairs)
+#     +80: default_sample_size
+# ================================================================
+
+fn mp4_track_new() {
+    var t = alloc(88);
+    store64(t,      AUDIO_AAC);
+    store64(t + 8,  0);
+    store64(t + 16, 0);
+    store64(t + 24, 0);
+    store64(t + 32, 0);
+    store64(t + 40, 0);
+    store64(t + 48, vec_new());
+    store64(t + 56, vec_new());
+    store64(t + 64, vec_new());
+    store64(t + 72, vec_new());
+    store64(t + 80, 0);
+    return t;
+}
+
+fn mp4_track_codec(t)      { return load64(t); }
+fn mp4_track_sr(t)         { return load64(t + 8); }
+fn mp4_track_ch(t)         { return load64(t + 16); }
+fn mp4_track_timescale(t)  { return load64(t + 32); }
+fn mp4_track_dur_ts(t)     { return load64(t + 40); }
+fn mp4_track_sizes(t)      { return load64(t + 48); }
+fn mp4_track_offsets(t)    { return load64(t + 56); }
+fn mp4_track_stsc(t)       { return load64(t + 64); }
+fn mp4_track_stts(t)       { return load64(t + 72); }
+
+fn mp4_track_total_samples(t) {
+    var sizes = load64(t + 48);
+    var n = vec_len(sizes);
+    if (n > 0) { return n; }
+    # Sum from stts
+    var stts = load64(t + 72);
+    var total = 0;
+    var i = 0;
+    var len = vec_len(stts);
+    while (i < len) {
+        # Each entry is a pair stored as two consecutive values
+        var count = vec_get(stts, i);
+        total = total + count;
+        i = i + 2;
+    }
+    return total;
+}
+
+fn mp4_track_duration_ns(t) {
+    var ts = load64(t + 32);
+    var dur = load64(t + 40);
+    if (ts == 0) { return 0; }
+    if (dur == 0) { return 0; }
+    var f_dur = f64_from(dur);
+    var f_ts = f64_from(ts);
+    var f_b = f64_from(1000000000);
+    return f64_to(f64_div(f64_mul(f_dur, f_b), f_ts));
+}
+
+# ================================================================
+# Box header parsing
+# ================================================================
+
+# Read a 4-byte big-endian type + size box header from fd.
+# Returns: box_type (4 bytes at returned ptr), size, data_offset via struct.
+#   Layout: 24 bytes
+#     +0: box_type[4] (as 4 bytes)
+#     +8: total_size (0 = extends to EOF)
+#     +16: data_offset
+fn mp4_read_box(fd) {
+    var buf = alloc(8);
+    var r = wav_read_exact(fd, buf, 8);
+    if (tarang_is_err(r) == 1) { return 0; }
+
+    var pos = wav_lseek(fd, 0, SEEK_CUR) - 8;
+    var size = read_u32_be(buf, 0);
+    var header_size = 8;
+
+    # Extended size
+    if (size == 1) {
+        var ext = alloc(8);
+        r = wav_read_exact(fd, ext, 8);
+        if (tarang_is_err(r) == 1) { return 0; }
+        # Read 64-bit BE size
+        var hi = read_u32_be(ext, 0);
+        var lo = read_u32_be(ext, 4);
+        size = (hi << 32) | lo;
+        header_size = 16;
+    }
+
+    var bh = alloc(24);
+    # Store box_type bytes
+    store8(bh, load8(buf + 4));
+    store8(bh + 1, load8(buf + 5));
+    store8(bh + 2, load8(buf + 6));
+    store8(bh + 3, load8(buf + 7));
+    store64(bh + 8, size);
+    store64(bh + 16, pos + header_size);
+    return bh;
+}
+
+fn box_type_eq(bh, s) {
+    if (load8(bh) != load8(s)) { return 0; }
+    if (load8(bh + 1) != load8(s + 1)) { return 0; }
+    if (load8(bh + 2) != load8(s + 2)) { return 0; }
+    if (load8(bh + 3) != load8(s + 3)) { return 0; }
+    return 1;
+}
+
+fn box_data_offset(bh) { return load64(bh + 16); }
+fn box_size(bh) { return load64(bh + 8); }
+fn box_data_size(bh) {
+    var s = load64(bh + 8);
+    if (s == 0) { return 0x100000000; }  # cap for size-0 boxes
+    var hdr = 8;
+    if (s > 0x100000000) { hdr = 16; }
+    if (s < hdr) { return 0; }
+    return s - hdr;
+}
+fn box_end(bh) {
+    var s = load64(bh + 8);
+    var off = load64(bh + 16);
+    if (s == 0) { return off + 0x100000000; }
+    return off + box_data_size(bh);
+}
+
+fn mp4_skip_box(fd, bh) {
+    wav_lseek(fd, box_end(bh), SEEK_SET);
+    return 0;
+}
+
+# ================================================================
+# Parse mvhd — movie header (timescale + duration)
+# ================================================================
+
+fn mp4_parse_mvhd(fd, bh, demuxer) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var buf = alloc(4);
+    wav_read_exact(fd, buf, 4);
+    var version = load8(buf);
+
+    if (version == 0) {
+        wav_lseek(fd, 8, SEEK_CUR);  # skip create/modify time
+        var ts_buf = alloc(8);
+        wav_read_exact(fd, ts_buf, 8);
+        store64(demuxer + 16, read_u32_be(ts_buf, 0));  # movie_timescale
+        store64(demuxer + 24, read_u32_be(ts_buf, 4));  # movie_duration
+    } else {
+        wav_lseek(fd, 16, SEEK_CUR);
+        var ts_buf = alloc(12);
+        wav_read_exact(fd, ts_buf, 12);
+        store64(demuxer + 16, read_u32_be(ts_buf, 0));
+        var dur_hi = read_u32_be(ts_buf, 4);
+        var dur_lo = read_u32_be(ts_buf, 8);
+        store64(demuxer + 24, (dur_hi << 32) | dur_lo);
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse hdlr — handler type (soun/vide/sbtl)
+# ================================================================
+
+fn mp4_parse_hdlr(fd, bh) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var buf = alloc(12);
+    wav_read_exact(fd, buf, 12);
+    # handler_type at offset 8..12
+    if (memeq(buf + 8, "soun", 4) == 1) { return 1; }  # audio
+    if (memeq(buf + 8, "vide", 4) == 1) { return 2; }  # video
+    return 0;  # other
+}
+
+# ================================================================
+# Parse mdhd — media header (timescale + duration for track)
+# ================================================================
+
+fn mp4_parse_mdhd(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var buf = alloc(4);
+    wav_read_exact(fd, buf, 4);
+    var version = load8(buf);
+
+    if (version == 0) {
+        wav_lseek(fd, 8, SEEK_CUR);
+        var tb = alloc(8);
+        wav_read_exact(fd, tb, 8);
+        store64(track + 32, read_u32_be(tb, 0));  # timescale
+        store64(track + 40, read_u32_be(tb, 4));  # duration
+    } else {
+        wav_lseek(fd, 16, SEEK_CUR);
+        var tb = alloc(12);
+        wav_read_exact(fd, tb, 12);
+        store64(track + 32, read_u32_be(tb, 0));
+        var dur_hi = read_u32_be(tb, 4);
+        var dur_lo = read_u32_be(tb, 8);
+        store64(track + 40, (dur_hi << 32) | dur_lo);
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse stsd — sample description (codec, sample_rate, channels)
+# ================================================================
+
+fn mp4_parse_stsd(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(8);
+    wav_read_exact(fd, hdr, 8);
+    var entry_count = read_u32_be(hdr, 4);
+    if (entry_count == 0) { return 0; }
+
+    # Read first entry box header
+    var entry = mp4_read_box(fd);
+    if (entry == 0) { return 0; }
+
+    # Identify codec from box type
+    if (box_type_eq(entry, "mp4a") == 1) { store64(track, AUDIO_AAC); }
+    elif (box_type_eq(entry, "alac") == 1) { store64(track, AUDIO_ALAC); }
+    elif (box_type_eq(entry, "fLaC") == 1) { store64(track, AUDIO_FLAC); }
+    elif (box_type_eq(entry, "Opus") == 1) { store64(track, AUDIO_OPUS); }
+    elif (box_type_eq(entry, ".mp3") == 1) { store64(track, AUDIO_MP3); }
+    else { return 0; }
+
+    # Audio sample entry: skip reserved(6)+data_ref_index(2), then read 20 bytes
+    wav_lseek(fd, 8, SEEK_CUR);
+    var ae = alloc(20);
+    wav_read_exact(fd, ae, 20);
+    # channels at offset 8..10 (BE)
+    var ch = (load8(ae + 8) << 8) | load8(ae + 9);
+    store64(track + 16, ch);
+    # sample_rate is 16.16 fixed point at offset 16..20
+    var sr_fixed = read_u32_be(ae, 16);
+    store64(track + 8, sr_fixed >> 16);
+    return 0;
+}
+
+# ================================================================
+# Parse stts — time-to-sample table
+# ================================================================
+
+fn mp4_parse_stts(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(8);
+    wav_read_exact(fd, hdr, 8);
+    var count = read_u32_be(hdr, 4);
+    if (count > MP4_MAX_TABLE_ENTRIES) { return tarang_err(ERR_DEMUX); }
+
+    var stts = load64(track + 72);
+    var i = 0;
+    var ebuf = alloc(8);
+    while (i < count) {
+        wav_read_exact(fd, ebuf, 8);
+        vec_push(stts, read_u32_be(ebuf, 0));  # sample_count
+        vec_push(stts, read_u32_be(ebuf, 4));  # sample_delta
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse stsc — sample-to-chunk table
+# ================================================================
+
+fn mp4_parse_stsc(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(8);
+    wav_read_exact(fd, hdr, 8);
+    var count = read_u32_be(hdr, 4);
+    if (count > MP4_MAX_TABLE_ENTRIES) { return tarang_err(ERR_DEMUX); }
+
+    var stsc = load64(track + 64);
+    var i = 0;
+    var ebuf = alloc(12);
+    while (i < count) {
+        wav_read_exact(fd, ebuf, 12);
+        vec_push(stsc, read_u32_be(ebuf, 0));  # first_chunk (1-based)
+        vec_push(stsc, read_u32_be(ebuf, 4));  # samples_per_chunk
+        vec_push(stsc, read_u32_be(ebuf, 8));  # desc_index
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse stsz — sample size table
+# ================================================================
+
+fn mp4_parse_stsz(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(12);
+    wav_read_exact(fd, hdr, 12);
+    var default_size = read_u32_be(hdr, 4);
+    var count = read_u32_be(hdr, 8);
+    if (count > MP4_MAX_TABLE_ENTRIES) { return tarang_err(ERR_DEMUX); }
+
+    store64(track + 80, default_size);
+
+    if (default_size == 0) {
+        var sizes = load64(track + 48);
+        var i = 0;
+        var ebuf = alloc(4);
+        while (i < count) {
+            wav_read_exact(fd, ebuf, 4);
+            vec_push(sizes, read_u32_be(ebuf, 0));
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse stco — chunk offset table (32-bit)
+# ================================================================
+
+fn mp4_parse_stco(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(8);
+    wav_read_exact(fd, hdr, 8);
+    var count = read_u32_be(hdr, 4);
+    if (count > MP4_MAX_TABLE_ENTRIES) { return tarang_err(ERR_DEMUX); }
+
+    var offsets = load64(track + 56);
+    var i = 0;
+    var ebuf = alloc(4);
+    while (i < count) {
+        wav_read_exact(fd, ebuf, 4);
+        vec_push(offsets, read_u32_be(ebuf, 0));
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse co64 — chunk offset table (64-bit)
+# ================================================================
+
+fn mp4_parse_co64(fd, bh, track) {
+    wav_lseek(fd, box_data_offset(bh), SEEK_SET);
+    var hdr = alloc(8);
+    wav_read_exact(fd, hdr, 8);
+    var count = read_u32_be(hdr, 4);
+    if (count > MP4_MAX_TABLE_ENTRIES) { return tarang_err(ERR_DEMUX); }
+
+    var offsets = load64(track + 56);
+    var i = 0;
+    var ebuf = alloc(8);
+    while (i < count) {
+        wav_read_exact(fd, ebuf, 8);
+        var hi = read_u32_be(ebuf, 0);
+        var lo = read_u32_be(ebuf, 4);
+        vec_push(offsets, (hi << 32) | lo);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# Parse stbl children (sample table box)
+# ================================================================
+
+fn mp4_parse_stbl(fd, end, track) {
+    while (wav_lseek(fd, 0, SEEK_CUR) < end) {
+        var child = mp4_read_box(fd);
+        if (child == 0) { break; }
+        var child_end = box_end(child);
+        if (child_end > end) { child_end = end; }
+
+        if (box_type_eq(child, "stsd") == 1) { mp4_parse_stsd(fd, child, track); }
+        elif (box_type_eq(child, "stts") == 1) { mp4_parse_stts(fd, child, track); }
+        elif (box_type_eq(child, "stsc") == 1) { mp4_parse_stsc(fd, child, track); }
+        elif (box_type_eq(child, "stsz") == 1) { mp4_parse_stsz(fd, child, track); }
+        elif (box_type_eq(child, "stco") == 1) { mp4_parse_stco(fd, child, track); }
+        elif (box_type_eq(child, "co64") == 1) { mp4_parse_co64(fd, child, track); }
+
+        wav_lseek(fd, child_end, SEEK_SET);
+    }
+    return 0;
+}
+
+# Parse minf children
+fn mp4_parse_minf(fd, end, track) {
+    while (wav_lseek(fd, 0, SEEK_CUR) < end) {
+        var child = mp4_read_box(fd);
+        if (child == 0) { break; }
+        var child_end = box_end(child);
+        if (child_end > end) { child_end = end; }
+        if (box_type_eq(child, "stbl") == 1) { mp4_parse_stbl(fd, child_end, track); }
+        wav_lseek(fd, child_end, SEEK_SET);
+    }
+    return 0;
+}
+
+# Parse mdia children — find hdlr, mdhd, minf
+fn mp4_parse_mdia(fd, end, track) {
+    var is_audio = 0;
+    while (wav_lseek(fd, 0, SEEK_CUR) < end) {
+        var child = mp4_read_box(fd);
+        if (child == 0) { break; }
+        var child_end = box_end(child);
+        if (child_end > end) { child_end = end; }
+
+        if (box_type_eq(child, "hdlr") == 1) {
+            var htype = mp4_parse_hdlr(fd, child);
+            if (htype == 1) { is_audio = 1; }
+        }
+        elif (box_type_eq(child, "mdhd") == 1) { mp4_parse_mdhd(fd, child, track); }
+        elif (box_type_eq(child, "minf") == 1) {
+            if (is_audio == 1) { mp4_parse_minf(fd, child_end, track); }
+        }
+
+        wav_lseek(fd, child_end, SEEK_SET);
+    }
+    return is_audio;
+}
+
+# Parse trak — find mdia, check if audio
+fn mp4_parse_trak(fd, end) {
+    var track = mp4_track_new();
+    var is_audio = 0;
+
+    while (wav_lseek(fd, 0, SEEK_CUR) < end) {
+        var child = mp4_read_box(fd);
+        if (child == 0) { break; }
+        var child_end = box_end(child);
+        if (child_end > end) { child_end = end; }
+
+        if (box_type_eq(child, "mdia") == 1) {
+            is_audio = mp4_parse_mdia(fd, child_end, track);
+        }
+
+        wav_lseek(fd, child_end, SEEK_SET);
+    }
+
+    if (is_audio == 1) {
+        if (mp4_track_sr(track) > 0) { return track; }
+    }
+    return 0;
+}
+
+# ================================================================
+# Resolve sample offset — map sample index → file byte offset
+# ================================================================
+
+fn mp4_resolve_offset(track, sample_index) {
+    var offsets = load64(track + 56);
+    var stsc = load64(track + 64);
+    var num_chunks = vec_len(offsets);
+    var num_stsc = vec_len(stsc) / 3;
+
+    if (num_chunks == 0) { return 0; }
+    if (num_stsc == 0) { return 0; }
+
+    var sample_cursor = 0;
+    var i = 0;
+    while (i < num_stsc) {
+        var first_chunk = vec_get(stsc, i * 3) - 1;  # convert 1-based to 0-based
+        var spc = vec_get(stsc, i * 3 + 1);
+        if (spc == 0) { i = i + 1; continue; }
+
+        var end_chunk = num_chunks;
+        if (i + 1 < num_stsc) {
+            end_chunk = vec_get(stsc, (i + 1) * 3) - 1;
+        }
+
+        var chunks_in_run = end_chunk - first_chunk;
+        var samples_in_run = chunks_in_run * spc;
+
+        if (sample_index < sample_cursor + samples_in_run) {
+            var sample_in_run = sample_index - sample_cursor;
+            var chunk_in_run = sample_in_run / spc;
+            var sample_in_chunk = sample_in_run % spc;
+
+            var chunk_idx = first_chunk + chunk_in_run;
+            if (chunk_idx >= num_chunks) { return 0; }
+
+            var offset = vec_get(offsets, chunk_idx);
+
+            # Add sizes of preceding samples in chunk
+            var sizes = load64(track + 48);
+            var first_sample = sample_cursor + chunk_in_run * spc;
+            var si = first_sample;
+            while (si < first_sample + sample_in_chunk) {
+                if (si < vec_len(sizes)) {
+                    offset = offset + vec_get(sizes, si);
+                }
+                si = si + 1;
+            }
+            return offset;
+        }
+
+        sample_cursor = sample_cursor + samples_in_run;
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Get timestamp for sample index via stts table
+fn mp4_sample_timestamp_ns(track, sample_index) {
+    var stts = load64(track + 72);
+    var len = vec_len(stts);
+    var ts = 0;
+    var remaining = sample_index;
+    var i = 0;
+    while (i < len) {
+        var count = vec_get(stts, i);
+        var delta = vec_get(stts, i + 1);
+        if (remaining <= count) {
+            ts = ts + remaining * delta;
+            break;
+        }
+        ts = ts + count * delta;
+        remaining = remaining - count;
+        i = i + 2;
+    }
+
+    var timescale = load64(track + 32);
+    if (timescale == 0) { return 0; }
+    var f_ts = f64_from(ts);
+    var f_tc = f64_from(timescale);
+    var f_b = f64_from(1000000000);
+    return f64_to(f64_div(f64_mul(f_ts, f_b), f_tc));
+}
+
+# ================================================================
+# Mp4Demuxer state
+#   Layout: 48 bytes
+#     +0:  fd
+#     +8:  track (first audio track ptr, 0 if none)
+#     +16: movie_timescale
+#     +24: movie_duration (in timescale units)
+#     +32: current_sample (playback cursor)
+#     +40: media_info ptr
+# ================================================================
+
+fn mp4_demuxer_new(fd) {
+    var d = alloc(48);
+    store64(d,      fd);
+    store64(d + 8,  0);
+    store64(d + 16, 0);
+    store64(d + 24, 0);
+    store64(d + 32, 0);
+    store64(d + 40, 0);
+    return d;
+}
+
+fn mp4_demux_fd(d) { return load64(d); }
+
+# ================================================================
+# mp4_demux_probe — parse top-level boxes
+# ================================================================
+
+fn mp4_demux_probe(d) {
+    var fd = load64(d);
+    wav_lseek(fd, 0, SEEK_SET);
+    var file_size = wav_lseek(fd, 0, 2);  # SEEK_END
+    wav_lseek(fd, 0, SEEK_SET);
+
+    var found_moov = 0;
+    var track = 0;
+
+    while (wav_lseek(fd, 0, SEEK_CUR) < file_size) {
+        var bh = mp4_read_box(fd);
+        if (bh == 0) { break; }
+
+        if (box_type_eq(bh, "moov") == 1) {
+            found_moov = 1;
+            var moov_end = box_end(bh);
+
+            while (wav_lseek(fd, 0, SEEK_CUR) < moov_end) {
+                var child = mp4_read_box(fd);
+                if (child == 0) { break; }
+                var child_end = box_end(child);
+                if (child_end > moov_end) { child_end = moov_end; }
+
+                if (box_type_eq(child, "mvhd") == 1) { mp4_parse_mvhd(fd, child, d); }
+                elif (box_type_eq(child, "trak") == 1) {
+                    if (track == 0) {
+                        track = mp4_parse_trak(fd, child_end);
+                    }
+                }
+                wav_lseek(fd, child_end, SEEK_SET);
+            }
+        } else {
+            mp4_skip_box(fd, bh);
+        }
+    }
+
+    if (found_moov == 0) { return tarang_err(ERR_UNSUPPORTED_FORMAT); }
+    if (track == 0) { return tarang_err(ERR_DEMUX); }
+
+    store64(d + 8, track);
+
+    # Build MediaInfo
+    var dur_ns = mp4_track_duration_ns(track);
+    var movie_ts = load64(d + 16);
+    var movie_dur = load64(d + 24);
+    if (movie_ts > 0) {
+        if (movie_dur > 0) {
+            var f_d = f64_from(movie_dur);
+            var f_t = f64_from(movie_ts);
+            var f_b = f64_from(1000000000);
+            dur_ns = f64_to(f64_div(f64_mul(f_d, f_b), f_t));
+        }
+    }
+
+    var codec = mp4_track_codec(track);
+    var sr = mp4_track_sr(track);
+    var ch = mp4_track_ch(track);
+    var as_info = audio_stream_new(codec, sr, ch, SAMPLE_F32, 0, dur_ns);
+    var streams = vec_new();
+    vec_push(streams, stream_audio(as_info));
+    var mi = media_info_new(FMT_MP4, streams);
+    media_info_set_duration_ns(mi, dur_ns);
+    media_info_set_file_size(mi, file_size);
+    store64(d + 40, mi);
+    store64(d + 32, 0);  # reset playback cursor
+
+    return mi;
+}
+
+# ================================================================
+# mp4_demux_next_packet
+# ================================================================
+
+fn mp4_demux_next_packet(d) {
+    var fd = load64(d);
+    var track = load64(d + 8);
+    if (track == 0) { return tarang_err(ERR_PIPELINE); }
+
+    var sample_idx = load64(d + 32);
+    var total = mp4_track_total_samples(track);
+    if (sample_idx >= total) { return tarang_err(ERR_END_OF_STREAM); }
+
+    # Get sample size
+    var sizes = load64(track + 48);
+    var sample_size = load64(track + 80);  # default
+    if (sample_idx < vec_len(sizes)) {
+        sample_size = vec_get(sizes, sample_idx);
+    }
+
+    # Resolve file offset
+    var file_offset = mp4_resolve_offset(track, sample_idx);
+    if (file_offset == 0) { return tarang_err(ERR_DEMUX); }
+
+    # Get timestamp
+    var ts_ns = mp4_sample_timestamp_ns(track, sample_idx);
+
+    # Read sample data
+    wav_lseek(fd, file_offset, SEEK_SET);
+    var buf = alloc(sample_size);
+    var r = wav_read_exact(fd, buf, sample_size);
+    if (tarang_is_err(r) == 1) { return tarang_err(ERR_DEMUX); }
+
+    store64(d + 32, sample_idx + 1);
+
+    return packet_new(0, buf, sample_size, ts_ns, 1);
+}
+
+# ================================================================
+# mp4_demux_seek — seek to timestamp (nanoseconds)
+# ================================================================
+
+fn mp4_demux_seek(d, ts_ns) {
+    var track = load64(d + 8);
+    if (track == 0) { return tarang_err(ERR_PIPELINE); }
+
+    var timescale = load64(track + 32);
+    if (timescale == 0) { return tarang_err(ERR_DEMUX); }
+
+    # Convert ns → timescale units
+    var f_ts = f64_from(ts_ns);
+    var f_tc = f64_from(timescale);
+    var f_b = f64_from(1000000000);
+    var target_ts = f64_to(f64_div(f64_mul(f_ts, f_tc), f_b));
+
+    # Walk stts to find target sample
+    var stts = load64(track + 72);
+    var len = vec_len(stts);
+    var sample = 0;
+    var ts = 0;
+    var i = 0;
+    while (i < len) {
+        var count = vec_get(stts, i);
+        var delta = vec_get(stts, i + 1);
+        if (delta == 0) { sample = sample + count; i = i + 2; continue; }
+        var run_dur = count * delta;
+        if (ts + run_dur > target_ts) {
+            var samples_in = (target_ts - ts) / delta;
+            sample = sample + samples_in;
+            break;
+        }
+        ts = ts + run_dur;
+        sample = sample + count;
+        i = i + 2;
+    }
+
+    store64(d + 32, sample);
+    return 0;
+}
+
+# ================================================================
+# Helper: create MP4 demuxer from in-memory buffer (for testing)
+# ================================================================
+
+fn mp4_demuxer_from_buf(data, len) {
+    var path = "/tmp/tarang_mp4_test.mp4";
+    var fd = syscall(2, path, 577, 0x1A4);
+    if (fd < 0) { return 0; }
+    syscall(1, fd, data, len);
+    syscall(3, fd);
+    var rfd = syscall(2, path, 0, 0);
+    if (rfd < 0) { return 0; }
+    return mp4_demuxer_new(rfd);
+}
+
+# ================================================================
+# Helper: build a minimal MP4/AAC file for testing
+#
+# Produces: ftyp + moov(mvhd + trak(mdia(mdhd + hdlr + minf(stbl(stsd+stts+stsc+stsz+stco))))) + mdat
+# ================================================================
+
+fn write_box_start(buf, box_type) {
+    # Write placeholder size (4 bytes BE) + type (4 bytes)
+    var off = vec_len(buf);
+    vec_push(buf, 0); vec_push(buf, 0); vec_push(buf, 0); vec_push(buf, 0);
+    vec_push(buf, load8(box_type));
+    vec_push(buf, load8(box_type + 1));
+    vec_push(buf, load8(box_type + 2));
+    vec_push(buf, load8(box_type + 3));
+    return off;
+}
+
+fn patch_box_size(buf, off) {
+    var size = vec_len(buf) - off;
+    vec_set(buf, off, (size >> 24) & 0xFF);
+    vec_set(buf, off + 1, (size >> 16) & 0xFF);
+    vec_set(buf, off + 2, (size >> 8) & 0xFF);
+    vec_set(buf, off + 3, size & 0xFF);
+    return 0;
+}
+
+fn push_u32_be(buf, val) {
+    vec_push(buf, (val >> 24) & 0xFF);
+    vec_push(buf, (val >> 16) & 0xFF);
+    vec_push(buf, (val >> 8) & 0xFF);
+    vec_push(buf, val & 0xFF);
+    return 0;
+}
+
+fn push_u16_be(buf, val) {
+    vec_push(buf, (val >> 8) & 0xFF);
+    vec_push(buf, val & 0xFF);
+    return 0;
+}
+
+fn push_zeros(buf, n) {
+    var i = 0;
+    while (i < n) { vec_push(buf, 0); i = i + 1; }
+    return 0;
+}
+
+fn make_mp4_aac(num_samples, sample_size, sample_rate, channels) {
+    var buf = vec_new();
+
+    # ftyp box
+    var ftyp = write_box_start(buf, "ftyp");
+    vec_push(buf, 0x69); vec_push(buf, 0x73); vec_push(buf, 0x6F); vec_push(buf, 0x6D);  # isom
+    push_u32_be(buf, 0);  # minor version
+    patch_box_size(buf, ftyp);
+
+    # moov box
+    var moov = write_box_start(buf, "moov");
+
+    # mvhd
+    var mvhd = write_box_start(buf, "mvhd");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 0);  # create time
+    push_u32_be(buf, 0);  # modify time
+    push_u32_be(buf, sample_rate);  # timescale
+    var total_dur = num_samples * 1024;  # AAC frame = 1024 samples
+    push_u32_be(buf, total_dur);  # duration
+    push_zeros(buf, 80);  # rest of mvhd (rate, volume, matrix, etc)
+    patch_box_size(buf, mvhd);
+
+    # trak
+    var trak = write_box_start(buf, "trak");
+
+    # mdia
+    var mdia = write_box_start(buf, "mdia");
+
+    # mdhd
+    var mdhd = write_box_start(buf, "mdhd");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 0);  # create time
+    push_u32_be(buf, 0);  # modify time
+    push_u32_be(buf, sample_rate);  # timescale
+    push_u32_be(buf, total_dur);  # duration
+    push_u32_be(buf, 0);  # language + pre_defined
+    patch_box_size(buf, mdhd);
+
+    # hdlr
+    var hdlr = write_box_start(buf, "hdlr");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 0);  # pre_defined
+    vec_push(buf, 0x73); vec_push(buf, 0x6F); vec_push(buf, 0x75); vec_push(buf, 0x6E);  # soun
+    push_zeros(buf, 12);  # reserved
+    push_zeros(buf, 1);  # name (null-terminated)
+    patch_box_size(buf, hdlr);
+
+    # minf
+    var minf = write_box_start(buf, "minf");
+
+    # stbl
+    var stbl = write_box_start(buf, "stbl");
+
+    # stsd
+    var stsd = write_box_start(buf, "stsd");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 1);  # entry count
+    # mp4a entry
+    var mp4a = write_box_start(buf, "mp4a");
+    push_zeros(buf, 6);  # reserved
+    push_u16_be(buf, 1);  # data_ref_index
+    push_zeros(buf, 8);  # reserved
+    push_u16_be(buf, channels);  # channel count
+    push_u16_be(buf, 16);  # sample size
+    push_u16_be(buf, 0);  # pre_defined
+    push_u16_be(buf, 0);  # reserved
+    push_u16_be(buf, sample_rate);  # sample rate (16.16 fixed, high word)
+    push_u16_be(buf, 0);  # low word
+    patch_box_size(buf, mp4a);
+    patch_box_size(buf, stsd);
+
+    # stts
+    var stts = write_box_start(buf, "stts");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 1);  # entry count
+    push_u32_be(buf, num_samples);  # sample count
+    push_u32_be(buf, 1024);  # delta (AAC frame)
+    patch_box_size(buf, stts);
+
+    # stsc
+    var stsc = write_box_start(buf, "stsc");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, 1);  # entry count
+    push_u32_be(buf, 1);  # first_chunk
+    push_u32_be(buf, num_samples);  # samples_per_chunk
+    push_u32_be(buf, 1);  # desc_index
+    patch_box_size(buf, stsc);
+
+    # stsz
+    var stsz_start = write_box_start(buf, "stsz");
+    push_u32_be(buf, 0);  # version + flags
+    push_u32_be(buf, sample_size);  # default sample size
+    push_u32_be(buf, num_samples);  # count
+    patch_box_size(buf, stsz_start);
+
+    # stco — one chunk, offset will be patched
+    var stco = write_box_start(buf, "stco");
+    push_u32_be(buf, 0);
+    push_u32_be(buf, 1);  # one chunk
+    var stco_offset_pos = vec_len(buf);
+    push_u32_be(buf, 0);  # placeholder — will patch
+    patch_box_size(buf, stco);
+
+    patch_box_size(buf, stbl);
+    patch_box_size(buf, minf);
+    patch_box_size(buf, mdia);
+    patch_box_size(buf, trak);
+    patch_box_size(buf, moov);
+
+    # mdat
+    var mdat_offset = vec_len(buf) + 8;  # after mdat header
+    # Patch stco to point here
+    vec_set(buf, stco_offset_pos, (mdat_offset >> 24) & 0xFF);
+    vec_set(buf, stco_offset_pos + 1, (mdat_offset >> 16) & 0xFF);
+    vec_set(buf, stco_offset_pos + 2, (mdat_offset >> 8) & 0xFF);
+    vec_set(buf, stco_offset_pos + 3, mdat_offset & 0xFF);
+
+    var data_size = num_samples * sample_size;
+    var mdat = write_box_start(buf, "mdat");
+    var i = 0;
+    while (i < data_size) {
+        vec_push(buf, 0xAB);
+        i = i + 1;
+    }
+    patch_box_size(buf, mdat);
+
+    # Copy vec to contiguous buffer
+    var total = vec_len(buf);
+    var out = alloc(total);
+    i = 0;
+    while (i < total) {
+        store8(out + i, vec_get(buf, i));
+        i = i + 1;
+    }
+
+    ret2(out, total);
+    return out;
+}
