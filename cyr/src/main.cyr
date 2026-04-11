@@ -25,6 +25,13 @@ include "lib/syscalls.cyr"
 include "src/core.cyr"
 include "src/demux.cyr"
 include "src/demux_wav.cyr"
+# Shravan error code aliases for ogg.cyr compatibility
+var ERR_INVALID_HEADER = ERR_DEMUX;
+var ERR_UNSUPPORTED_FMT = ERR_UNSUPPORTED_FORMAT;
+fn err(code) { return 0 - code; }
+
+include "lib/ogg.cyr"
+include "src/demux_ogg.cyr"
 
 # ================================================================
 # Tests — Enums & Names
@@ -496,10 +503,90 @@ fn test_wav_24bit() {
 }
 
 # ================================================================
+# Tests — OGG Demuxer
+# ================================================================
+
+fn test_ogg_probe_vorbis() {
+    var ogg = make_ogg_vorbis(44100, 2, 128);
+    var ogg_len = rethi();
+    var d = ogg_demuxer_from_buf(ogg, ogg_len);
+    assert(d != 0, "ogg demuxer created");
+
+    var mi = ogg_demux_probe(d);
+    assert(tarang_is_err(mi) == 0, "ogg probe ok");
+    assert_eq(media_info_format(mi), FMT_OGG, "ogg format");
+    assert_eq(media_info_has_audio(mi), 1, "ogg has_audio");
+    assert_eq(media_info_has_video(mi), 0, "ogg no video");
+    assert_eq(media_info_audio_count(mi), 1, "ogg 1 audio");
+
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_codec(a), AUDIO_VORBIS, "ogg codec vorbis");
+    assert_eq(audio_stream_sample_rate(a), 44100, "ogg sr 44100");
+    assert_eq(audio_stream_channels(a), 2, "ogg ch 2");
+
+    # Duration should be ~1 second
+    var dur = media_info_duration_ns(mi);
+    assert(dur > 900000000, "ogg dur > 900ms");
+    assert(dur < 1100000000, "ogg dur < 1100ms");
+
+    syscall(3, ogg_demux_fd(d));
+    return 0;
+}
+
+fn test_ogg_read_packets() {
+    var ogg = make_ogg_vorbis(44100, 1, 256);
+    var ogg_len = rethi();
+    var d = ogg_demuxer_from_buf(ogg, ogg_len);
+    ogg_demux_probe(d);
+
+    var p = ogg_demux_next_packet(d);
+    assert(tarang_is_err(p) == 0, "ogg read pkt ok");
+    assert_eq(packet_stream_index(p), 0, "ogg pkt idx 0");
+    assert(packet_data_len(p) > 0, "ogg pkt has data");
+    assert_eq(packet_is_keyframe(p), 1, "ogg pkt keyframe");
+
+    # Should eventually hit EOS
+    var count = 1;
+    while (1 == 1) {
+        var np = ogg_demux_next_packet(d);
+        if (tarang_is_err(np) == 1) { break; }
+        count = count + 1;
+    }
+    assert(count >= 1, "ogg read at least 1 pkt");
+
+    syscall(3, ogg_demux_fd(d));
+    return 0;
+}
+
+fn test_ogg_invalid() {
+    var garbage = alloc(100);
+    memset(garbage, 0, 100);
+    var d = ogg_demuxer_from_buf(garbage, 100);
+    var r = ogg_demux_probe(d);
+    assert_eq(tarang_is_err(r), 1, "ogg invalid rejected");
+    syscall(3, ogg_demux_fd(d));
+    return 0;
+}
+
+fn test_ogg_mono() {
+    var ogg = make_ogg_vorbis(48000, 1, 64);
+    var ogg_len = rethi();
+    var d = ogg_demuxer_from_buf(ogg, ogg_len);
+    var mi = ogg_demux_probe(d);
+    assert(tarang_is_err(mi) == 0, "ogg mono probe ok");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_channels(a), 1, "ogg mono ch");
+    assert_eq(audio_stream_sample_rate(a), 48000, "ogg mono sr");
+    syscall(3, ogg_demux_fd(d));
+    return 0;
+}
+
+# ================================================================
 # Test Runner
 # ================================================================
 
 alloc_init();
+ogg_init();
 syscall(1, 1, "tarang tests\n", 13);
 
 test_enums();
@@ -517,6 +604,11 @@ test_wav_seek();
 test_wav_seek_past_end();
 test_wav_invalid();
 test_wav_24bit();
+
+test_ogg_probe_vorbis();
+test_ogg_read_packets();
+test_ogg_invalid();
+test_ogg_mono();
 
 assert_summary();
 if (_assert_fail > 0) { syscall(60, 1); }

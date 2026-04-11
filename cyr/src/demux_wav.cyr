@@ -64,18 +64,7 @@ fn wav_read_exact(fd, buf, n) {
     return 0;
 }
 
-# Read a little-endian u16 from buf at offset
-fn read_le16(buf, off) {
-    return load8(buf + off) | (load8(buf + off + 1) << 8);
-}
-
-# Read a little-endian u32 from buf at offset
-fn read_le32(buf, off) {
-    return load8(buf + off)
-         | (load8(buf + off + 1) << 8)
-         | (load8(buf + off + 2) << 16)
-         | (load8(buf + off + 3) << 24);
-}
+# Byte helpers: read_u16_le, read_u32_le, write_u32_le defined in core.cyr
 
 # ================================================================
 # wav_probe — parse RIFF WAVE header, find fmt + data chunks
@@ -103,7 +92,7 @@ fn wav_probe(d) {
         var cr = wav_read_exact(fd, chunk_hdr, 8);
         if (tarang_is_err(cr) == 1) { break; }
 
-        var chunk_size = read_le32(chunk_hdr, 4);
+        var chunk_size = read_u32_le(chunk_hdr, 4);
 
         # fmt chunk
         if (memeq(chunk_hdr, "fmt ", 4) == 1) {
@@ -111,9 +100,9 @@ fn wav_probe(d) {
             var fr = wav_read_exact(fd, fmt_buf, 16);
             if (tarang_is_err(fr) == 1) { return tarang_err(ERR_DEMUX); }
 
-            store64(d + 40, read_le16(fmt_buf, 2));   # channels
-            store64(d + 32, read_le32(fmt_buf, 4));    # sample_rate
-            store64(d + 48, read_le16(fmt_buf, 14));   # bits_per_sample
+            store64(d + 40, read_u16_le(fmt_buf, 2));   # channels
+            store64(d + 32, read_u32_le(fmt_buf, 4));    # sample_rate
+            store64(d + 48, read_u16_le(fmt_buf, 14));   # bits_per_sample
             found_fmt = 1;
 
             # Skip extra fmt bytes

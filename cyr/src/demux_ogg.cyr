@@ -1,0 +1,498 @@
+# tarang/demux/ogg — OGG container demuxer
+#
+# Uses shravan's ogg.cyr for page parsing, CRC-32, packet extraction.
+# Adds: codec identification (Vorbis/Opus/FLAC), fd-based streaming,
+# duration scanning, bisection seek.
+#
+# Works on file descriptors with read/lseek syscalls.
+
+# ================================================================
+# OGG page reading from fd
+# ================================================================
+
+# Read a full OGG page from fd into a buffer.
+# Returns pointer to page buffer, or 0 on EOF/error.
+# Sets page length via ret2.
+fn ogg_read_page_from_fd(fd) {
+    # Read 27-byte fixed header
+    var hdr = alloc(27);
+    var r = wav_read_exact(fd, hdr, 27);
+    if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+
+    # Validate "OggS"
+    if (memeq(hdr, "OggS", 4) != 1) { ret2(0, 0); return 0; }
+
+    var num_segments = load8(hdr + 26);
+
+    # Read segment table
+    var seg_table = alloc(num_segments);
+    r = wav_read_exact(fd, seg_table, num_segments);
+    if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+
+    # Sum body size
+    var body_size = 0;
+    var si = 0;
+    while (si < num_segments) {
+        body_size = body_size + load8(seg_table + si);
+        si = si + 1;
+    }
+
+    # Read body
+    var body = alloc(body_size);
+    if (body_size > 0) {
+        r = wav_read_exact(fd, body, body_size);
+        if (tarang_is_err(r) == 1) { ret2(0, 0); return 0; }
+    }
+
+    # Assemble full page into single buffer for CRC + parsing
+    var total = 27 + num_segments + body_size;
+    var page = alloc(total);
+    memcpy(page, hdr, 27);
+    memcpy(page + 27, seg_table, num_segments);
+    if (body_size > 0) {
+        memcpy(page + 27 + num_segments, body, body_size);
+    }
+
+    # Verify CRC
+    var stored_crc = read_u32_le(page, 22);
+    var computed_crc = ogg_crc32_page(page, total);
+    if (stored_crc != computed_crc) { ret2(0, 0); return 0; }
+
+    ret2(page, total);
+    return page;
+}
+
+# ================================================================
+# Codec identification from BOS packet
+# ================================================================
+
+# OGG stream state
+#   Layout: 48 bytes
+#     +0:  codec (AudioCodec enum)
+#     +8:  sample_rate
+#     +16: channels
+#     +24: bitrate (0 if unknown)
+#     +32: pre_skip (Opus only)
+#     +40: last_granule
+var OGG_STREAM_SIZE = 48;
+
+fn ogg_stream_new(codec, sr, ch, bitrate, pre_skip) {
+    var s = alloc(OGG_STREAM_SIZE);
+    store64(s,      codec);
+    store64(s + 8,  sr);
+    store64(s + 16, ch);
+    store64(s + 24, bitrate);
+    store64(s + 32, pre_skip);
+    store64(s + 40, 0);
+    return s;
+}
+
+# Identify codec from first BOS packet data.
+# Returns ogg_stream ptr or 0 if unrecognized.
+fn ogg_identify_codec(pkt_data, pkt_len) {
+    # Vorbis: 0x01 + "vorbis" + version(4) + channels(1) + sample_rate(4) + bitrates
+    if (pkt_len >= 30) {
+        if (load8(pkt_data) == 0x01) {
+            if (memeq(pkt_data + 1, "vorbis", 6) == 1) {
+                var ch = load8(pkt_data + 11);
+                var sr = read_u32_le(pkt_data, 12);
+                var br_nom = read_u32_le(pkt_data, 20);
+                var bitrate = 0;
+                if (br_nom > 0) { bitrate = br_nom; }
+                return ogg_stream_new(AUDIO_VORBIS, sr, ch, bitrate, 0);
+            }
+        }
+    }
+
+    # Opus: "OpusHead" + version(1) + channels(1) + pre_skip(2) + sample_rate(4)
+    if (pkt_len >= 19) {
+        if (memeq(pkt_data, "OpusHead", 8) == 1) {
+            var ch = load8(pkt_data + 9);
+            var pre_skip = read_u16_le(pkt_data, 10);
+            var sr = read_u32_le(pkt_data, 12);
+            return ogg_stream_new(AUDIO_OPUS, sr, ch, 0, pre_skip);
+        }
+    }
+
+    # FLAC in OGG: 0x7F + "FLAC" + ... + "fLaC" + STREAMINFO
+    if (pkt_len >= 51) {
+        if (load8(pkt_data) == 0x7F) {
+            if (memeq(pkt_data + 1, "FLAC", 4) == 1) {
+                # STREAMINFO at offset 13
+                var si_off = 13;
+                var sr_bits = read_u32_be(pkt_data, si_off + 10);
+                var sr = sr_bits >> 12;
+                var ch = ((sr_bits >> 9) & 0x07) + 1;
+                return ogg_stream_new(AUDIO_FLAC, sr, ch, 0, 0);
+            }
+        }
+    }
+
+    return 0;
+}
+
+# Is this a header packet to skip? (not audio data)
+fn ogg_is_header_packet(codec, pkt_data, pkt_len) {
+    if (pkt_len == 0) { return 1; }
+
+    # Vorbis: header packets have odd type byte + "vorbis" magic
+    if (codec == AUDIO_VORBIS) {
+        if (pkt_len >= 7) {
+            if ((load8(pkt_data) & 1) != 0) {
+                if (memeq(pkt_data + 1, "vorbis", 6) == 1) { return 1; }
+            }
+        }
+    }
+
+    # Opus: "OpusHead" or "OpusTags"
+    if (codec == AUDIO_OPUS) {
+        if (pkt_len >= 8) {
+            if (memeq(pkt_data, "OpusHead", 8) == 1) { return 1; }
+            if (memeq(pkt_data, "OpusTags", 8) == 1) { return 1; }
+        }
+    }
+
+    # FLAC: header has 0x7F + "FLAC"
+    if (codec == AUDIO_FLAC) {
+        if (pkt_len >= 5) {
+            if (load8(pkt_data) == 0x7F) {
+                if (memeq(pkt_data + 1, "FLAC", 4) == 1) { return 1; }
+            }
+        }
+    }
+
+    return 0;
+}
+
+# ================================================================
+# OggDemuxer state
+#   Layout: 56 bytes
+#     +0:  fd
+#     +8:  stream (ogg_stream ptr, first audio stream found)
+#     +16: serial (serial number of the tracked stream)
+#     +24: media_info (ptr, 0 if not probed)
+#     +32: duration_ns
+#     +40: file_size (for seeking)
+#     +48: probed (1 if done)
+# ================================================================
+
+fn ogg_demuxer_new(fd) {
+    var d = alloc(56);
+    store64(d,      fd);
+    store64(d + 8,  0);
+    store64(d + 16, 0);
+    store64(d + 24, 0);
+    store64(d + 32, 0);
+    store64(d + 40, 0);
+    store64(d + 48, 0);
+    return d;
+}
+
+fn ogg_demux_fd(d)         { return load64(d); }
+fn ogg_demux_stream(d)     { return load64(d + 8); }
+fn ogg_demux_serial(d)     { return load64(d + 16); }
+fn ogg_demux_info(d)       { return load64(d + 24); }
+fn ogg_demux_duration(d)   { return load64(d + 32); }
+
+# ================================================================
+# ogg_demux_probe — find BOS pages, identify codecs, scan duration
+# ================================================================
+
+fn ogg_demux_probe(d) {
+    var fd = ogg_demux_fd(d);
+
+    # Seek to start
+    wav_lseek(fd, 0, SEEK_SET);
+
+    # Read BOS pages
+    var found = 0;
+    while (found == 0) {
+        var page = ogg_read_page_from_fd(fd);
+        var page_len = rethi();
+        if (page == 0) { break; }
+
+        var header_type = load8(page + 5);
+        var serial = read_u32_le(page, 14);
+
+        # BOS flag = 0x02
+        if ((header_type & 0x02) != 0) {
+            # Extract first packet from page
+            var num_seg = load8(page + 26);
+            var body_start = 27 + num_seg;
+            # First packet: segments until one < 255
+            var pkt_len = 0;
+            var si = 0;
+            while (si < num_seg) {
+                var seg_sz = load8(page + 27 + si);
+                pkt_len = pkt_len + seg_sz;
+                if (seg_sz < 255) { break; }
+                si = si + 1;
+            }
+
+            var pkt_data = page + body_start;
+            var stream = ogg_identify_codec(pkt_data, pkt_len);
+            if (stream != 0) {
+                store64(d + 8, stream);
+                store64(d + 16, serial);
+                found = 1;
+            }
+        } else {
+            # First non-BOS page — done
+            break;
+        }
+    }
+
+    if (found == 0) { return tarang_err(ERR_DEMUX); }
+
+    # Scan duration: seek to end, find last page granule
+    var file_end = wav_lseek(fd, 0, 2);  # SEEK_END = 2
+    store64(d + 40, file_end);
+
+    var search_size = 65536;
+    if (file_end < search_size) { search_size = file_end; }
+    var search_start = file_end - search_size;
+    wav_lseek(fd, search_start, SEEK_SET);
+
+    var scan_buf = alloc(search_size);
+    var nr = syscall(0, fd, scan_buf, search_size);
+    if (nr > 0) {
+        # Find last "OggS" in buffer
+        var li = nr - 27;
+        while (li >= 0) {
+            if (memeq(scan_buf + li, "OggS", 4) == 1) {
+                if (li + 14 <= nr) {
+                    var granule = ogg_read_i64_le(scan_buf, li + 6);
+                    if (granule > 0) {
+                        var stream = ogg_demux_stream(d);
+                        var sr = load64(stream + 8);
+                        var codec = load64(stream);
+                        var pre_skip = load64(stream + 32);
+                        if (codec == AUDIO_OPUS) { sr = 48000; }
+                        if (sr > 0) {
+                            var eff = granule - pre_skip;
+                            if (eff < 0) { eff = 0; }
+                            var f_eff = f64_from(eff);
+                            var f_sr = f64_from(sr);
+                            var f_b = f64_from(1000000000);
+                            var dur_ns = f64_to(f64_div(f64_mul(f_eff, f_b), f_sr));
+                            store64(d + 32, dur_ns);
+                        }
+                        break;
+                    }
+                }
+            }
+            li = li - 1;
+        }
+    }
+
+    # Build MediaInfo
+    var stream = ogg_demux_stream(d);
+    var codec = load64(stream);
+    var sr = load64(stream + 8);
+    var ch = load64(stream + 16);
+    var bitrate = load64(stream + 24);
+    var dur_ns = ogg_demux_duration(d);
+
+    var as_info = audio_stream_new(codec, sr, ch, SAMPLE_F32, bitrate, dur_ns);
+    var streams = vec_new();
+    vec_push(streams, stream_audio(as_info));
+    var mi = media_info_new(FMT_OGG, streams);
+    media_info_set_duration_ns(mi, dur_ns);
+    store64(d + 24, mi);
+    store64(d + 48, 1);
+
+    # Seek back to start for packet reading
+    wav_lseek(fd, 0, SEEK_SET);
+
+    return mi;
+}
+
+# ================================================================
+# ogg_demux_next_packet — read next audio data packet
+# ================================================================
+
+fn ogg_demux_next_packet(d) {
+    var fd = ogg_demux_fd(d);
+    var target_serial = ogg_demux_serial(d);
+    var stream = ogg_demux_stream(d);
+    var codec = load64(stream);
+
+    while (1 == 1) {
+        var page = ogg_read_page_from_fd(fd);
+        var page_len = rethi();
+        if (page == 0) { return tarang_err(ERR_END_OF_STREAM); }
+
+        var serial = read_u32_le(page, 14);
+        if (serial != target_serial) { continue; }
+
+        var granule = ogg_read_i64_le(page, 6);
+        if (granule >= 0) { store64(stream + 40, granule); }
+
+        # Extract packets from page segments
+        var num_seg = load8(page + 26);
+        var body_start = 27 + num_seg;
+        var body_off = 0;
+        var si = 0;
+        var pkt_start = 0;
+        var pkt_len = 0;
+
+        while (si < num_seg) {
+            var seg_sz = load8(page + 27 + si);
+            pkt_len = pkt_len + seg_sz;
+            si = si + 1;
+
+            if (seg_sz < 255) {
+                # Complete packet
+                var pkt_data = page + body_start + pkt_start;
+
+                if (ogg_is_header_packet(codec, pkt_data, pkt_len) == 0) {
+                    if (pkt_len > 0) {
+                        # Compute timestamp
+                        var last_gran = load64(stream + 40);
+                        var pre_skip = load64(stream + 32);
+                        var sr = load64(stream + 8);
+                        if (codec == AUDIO_OPUS) { sr = 48000; }
+                        var ts_ns = 0;
+                        if (last_gran > 0) {
+                            if (sr > 0) {
+                                var eff = last_gran - pre_skip;
+                                if (eff < 0) { eff = 0; }
+                                var f_eff = f64_from(eff);
+                                var f_sr = f64_from(sr);
+                                var f_b = f64_from(1000000000);
+                                ts_ns = f64_to(f64_div(f64_mul(f_eff, f_b), f_sr));
+                            }
+                        }
+
+                        # Copy packet data to own buffer
+                        var out = alloc(pkt_len);
+                        memcpy(out, pkt_data, pkt_len);
+                        return packet_new(0, out, pkt_len, ts_ns, 1);
+                    }
+                }
+                pkt_start = pkt_start + pkt_len;
+                pkt_len = 0;
+            }
+        }
+        # No data packets on this page — continue to next
+    }
+    return tarang_err(ERR_END_OF_STREAM);
+}
+
+# ================================================================
+# ogg_demux_seek — seek to timestamp (nanoseconds) via bisection
+# ================================================================
+
+fn ogg_demux_seek(d, ts_ns) {
+    var fd = ogg_demux_fd(d);
+    var stream = ogg_demux_stream(d);
+    var codec = load64(stream);
+    var sr = load64(stream + 8);
+    if (codec == AUDIO_OPUS) { sr = 48000; }
+    if (sr == 0) { return tarang_err(ERR_DEMUX); }
+
+    var target_secs = f64_div(f64_from(ts_ns), f64_from(1000000000));
+    var file_end = load64(d + 40);
+    var lo = 0;
+    var hi = file_end;
+    var best = 0;
+
+    # Bisection: 64 iterations max
+    var iter = 0;
+    while (iter < 64) {
+        if (hi - lo < 8192) { break; }
+        var mid = lo + (hi - lo) / 2;
+        wav_lseek(fd, mid, SEEK_SET);
+
+        # Scan forward for "OggS"
+        var scan = alloc(4096);
+        var nr = syscall(0, fd, scan, 4096);
+        if (nr <= 4) { hi = mid; iter = iter + 1; continue; }
+
+        var found_page = 0;
+        var fi = 0;
+        while (fi < nr - 4) {
+            if (memeq(scan + fi, "OggS", 4) == 1) {
+                if (fi + 14 <= nr) {
+                    var gran = ogg_read_i64_le(scan, fi + 6);
+                    if (gran >= 0) {
+                        var page_secs = f64_div(f64_from(gran), f64_from(sr));
+                        if (f64_lt(page_secs, target_secs) == 1) {
+                            lo = mid + fi;
+                            best = lo;
+                        } else {
+                            hi = mid + fi;
+                        }
+                        found_page = 1;
+                        break;
+                    }
+                }
+            }
+            fi = fi + 1;
+        }
+        if (found_page == 0) { hi = mid; }
+        iter = iter + 1;
+    }
+
+    wav_lseek(fd, best, SEEK_SET);
+    return 0;
+}
+
+# ================================================================
+# Helper: create OGG demuxer from in-memory buffer (for testing)
+# ================================================================
+
+fn ogg_demuxer_from_buf(data, len) {
+    var path = "/tmp/tarang_ogg_test.ogg";
+    var fd = syscall(2, path, 577, 0x1A4);
+    if (fd < 0) { return 0; }
+    syscall(1, fd, data, len);
+    syscall(3, fd);
+    var rfd = syscall(2, path, 0, 0);
+    if (rfd < 0) { return 0; }
+    return ogg_demuxer_new(rfd);
+}
+
+# ================================================================
+# Helper: build a minimal OGG/Vorbis file for testing
+# ================================================================
+
+fn make_ogg_vorbis(sample_rate, channels, num_data_bytes) {
+    # Build Vorbis identification header packet
+    var id_pkt_len = 30;
+    var id_pkt = alloc(id_pkt_len);
+    memset(id_pkt, 0, id_pkt_len);
+    store8(id_pkt, 0x01);  # type = identification
+    memcpy(id_pkt + 1, "vorbis", 6);
+    # version = 0 (already zero)
+    store8(id_pkt + 11, channels);
+    write_u32_le(id_pkt, 12, sample_rate);
+    # bitrates = 0
+
+    # ogg_build_page returns a Str (data+len) — use str_data/str_len
+    var bos_str = ogg_build_page(0x02, 0, 0x12345678, 0, id_pkt, id_pkt_len);
+    var bos_data = str_data(bos_str);
+    var bos_len = str_len(bos_str);
+
+    # Build data page with dummy audio data
+    var data_payload = alloc(num_data_bytes);
+    memset(data_payload, 0x42, num_data_bytes);
+    var granule = sample_rate;  # 1 second worth
+    var data_str = ogg_build_page(0x00, granule, 0x12345678, 1, data_payload, num_data_bytes);
+    var data_data = str_data(data_str);
+    var data_len = str_len(data_str);
+
+    # Build EOS page (empty)
+    var eos_str = ogg_build_page(0x04, granule, 0x12345678, 2, data_payload, 0);
+    var eos_data = str_data(eos_str);
+    var eos_len = str_len(eos_str);
+
+    var total = bos_len + data_len + eos_len;
+    var buf = alloc(total);
+    memcpy(buf, bos_data, bos_len);
+    memcpy(buf + bos_len, data_data, data_len);
+    memcpy(buf + bos_len + data_len, eos_data, eos_len);
+
+    ret2(buf, total);
+    return buf;
+}

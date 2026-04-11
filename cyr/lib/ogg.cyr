@@ -1,0 +1,834 @@
+# ================================================================
+# ogg.cyr — Ogg container parser and muxer
+# ================================================================
+#
+# Parses Ogg pages, extracts packets, builds pages, muxes packets.
+# CRC-32 with polynomial 0x04C11DB7 (direct, no reflection).
+#
+# Requires: alloc, vec, string, assert helpers from main.cyr
+
+# ================================================================
+# CRC-32 table (polynomial 0x04C11DB7, init 0, no reflection)
+# ================================================================
+
+var ogg_crc32_table = 0;
+
+fn ogg_init() {
+    ogg_crc32_table = alloc(256 * 8);
+    var i = 0;
+    while (i < 256) {
+        var crc = (i << 24) & 0xFFFFFFFF;
+        var bit = 0;
+        while (bit < 8) {
+            if ((crc & 0x80000000) != 0) {
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF;
+            } else {
+                crc = (crc << 1) & 0xFFFFFFFF;
+            }
+            bit = bit + 1;
+        }
+        store64(ogg_crc32_table + i * 8, crc & 0xFFFFFFFF);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Compute CRC-32 over a raw byte buffer
+fn ogg_crc32(data, len) {
+    var crc = 0;
+    var i = 0;
+    while (i < len) {
+        var idx = ((crc >> 24) ^ load8(data + i)) & 0xFF;
+        crc = ((crc << 8) ^ load64(ogg_crc32_table + idx * 8)) & 0xFFFFFFFF;
+        i = i + 1;
+    }
+    return crc;
+}
+
+# Compute CRC-32 over a page, treating bytes 22..25 (CRC field) as zero
+fn ogg_crc32_page(data, len) {
+    var crc = 0;
+    var i = 0;
+    while (i < len) {
+        var byte = load8(data + i);
+        if (i >= 22) {
+            if (i <= 25) {
+                byte = 0;
+            }
+        }
+        var idx = ((crc >> 24) ^ byte) & 0xFF;
+        crc = ((crc << 8) ^ load64(ogg_crc32_table + idx * 8)) & 0xFFFFFFFF;
+        i = i + 1;
+    }
+    return crc;
+}
+
+# ================================================================
+# Read helpers (little-endian i64 for granule position)
+# ================================================================
+
+fn ogg_read_i64_le(data, off) {
+    var lo = read_u32_le(data, off);
+    var hi = read_u32_le(data, off + 4);
+    return lo | (hi << 32);
+}
+
+fn ogg_write_i64_le(buf, off, val) {
+    write_u32_le(buf, off, val & 0xFFFFFFFF);
+    write_u32_le(buf, off + 4, (val >> 32) & 0xFFFFFFFF);
+    return 0;
+}
+
+# ================================================================
+# OggPage — heap-allocated struct
+# ================================================================
+# Layout (40 bytes + segment table buffer + body buffer):
+#   +0:  header_type     (i64)
+#   +8:  granule_position (i64)
+#   +16: serial           (i64)
+#   +24: page_seq         (i64)
+#   +32: num_segments     (i64)
+#   +40: segments_ptr     (pointer to byte buffer)
+#   +48: body_ptr         (pointer to byte buffer)
+#   +56: body_size        (i64)
+
+fn ogg_page_new() {
+    var p = alloc(64);
+    memset(p, 0, 64);
+    return p;
+}
+
+fn ogg_page_header_type(p)  { return load64(p); }
+fn ogg_page_granule(p)      { return load64(p + 8); }
+fn ogg_page_serial(p)       { return load64(p + 16); }
+fn ogg_page_seq(p)          { return load64(p + 24); }
+fn ogg_page_num_segments(p) { return load64(p + 32); }
+fn ogg_page_segments(p)     { return load64(p + 40); }
+fn ogg_page_body(p)         { return load64(p + 48); }
+fn ogg_page_body_size(p)    { return load64(p + 56); }
+
+# ================================================================
+# Page parsing
+# ================================================================
+
+# Parse a single Ogg page starting at data[pos].
+# Returns page pointer on success, or err() on failure.
+# Also stores the end offset at *out_end.
+fn ogg_parse_page(data, len, pos, out_end) {
+    # Minimum page header: 27 bytes
+    if (pos + 27 > len) { return err(ERR_END_OF_STREAM); }
+
+    # Check "OggS" magic
+    if (load8(data + pos) != 0x4F)     { return err(ERR_INVALID_HEADER); }
+    if (load8(data + pos + 1) != 0x67) { return err(ERR_INVALID_HEADER); }
+    if (load8(data + pos + 2) != 0x67) { return err(ERR_INVALID_HEADER); }
+    if (load8(data + pos + 3) != 0x53) { return err(ERR_INVALID_HEADER); }
+
+    # Version must be 0
+    var version = load8(data + pos + 4);
+    if (version != 0) { return err(ERR_INVALID_HEADER); }
+
+    var header_type = load8(data + pos + 5);
+    var granule = ogg_read_i64_le(data, pos + 6);
+    var serial = read_u32_le(data, pos + 14);
+    var page_seq = read_u32_le(data, pos + 18);
+    var expected_crc = read_u32_le(data, pos + 22);
+    var num_segments = load8(data + pos + 26);
+
+    var seg_table_start = pos + 27;
+    if (seg_table_start + num_segments > len) { return err(ERR_END_OF_STREAM); }
+
+    # Copy segment table
+    var segments = alloc(num_segments + 1);
+    var body_size = 0;
+    var si = 0;
+    while (si < num_segments) {
+        var lv = load8(data + seg_table_start + si);
+        store8(segments + si, lv);
+        body_size = body_size + lv;
+        si = si + 1;
+    }
+
+    var body_start = seg_table_start + num_segments;
+    if (body_start + body_size > len) { return err(ERR_END_OF_STREAM); }
+
+    # Copy body
+    var body = alloc(body_size + 1);
+    memcpy(body, data + body_start, body_size);
+
+    # CRC verification
+    var page_end = body_start + body_size;
+    var computed_crc = ogg_crc32_page(data + pos, page_end - pos);
+    if (computed_crc != (expected_crc & 0xFFFFFFFF)) {
+        return err(ERR_DECODE);
+    }
+
+    # Build page struct
+    var page = ogg_page_new();
+    store64(page,      header_type);
+    store64(page + 8,  granule);
+    store64(page + 16, serial);
+    store64(page + 24, page_seq);
+    store64(page + 32, num_segments);
+    store64(page + 40, segments);
+    store64(page + 48, body);
+    store64(page + 56, body_size);
+
+    store64(out_end, page_end);
+    return page;
+}
+
+# Parse all pages from data, returns vec of page pointers
+fn ogg_parse_pages(data, len) {
+    var pages = vec_new();
+    var pos = 0;
+    var end_buf = alloc(8);
+
+    while (pos + 4 <= len) {
+        # Check for OggS magic
+        if (load8(data + pos) != 0x4F) { break; }
+        if (load8(data + pos + 1) != 0x67) { break; }
+        if (load8(data + pos + 2) != 0x67) { break; }
+        if (load8(data + pos + 3) != 0x53) { break; }
+
+        var page = ogg_parse_page(data, len, pos, end_buf);
+        if (is_err(page) == 1) { return page; }
+        vec_push(pages, page);
+        pos = load64(end_buf);
+    }
+
+    return pages;
+}
+
+# ================================================================
+# Packet extraction
+# ================================================================
+
+# Extract logical packets from Ogg pages.
+# Returns a vec of vecs (each inner vec holds raw byte pointers + lengths).
+# Actually: returns a vec of Str objects (data+len pairs).
+fn ogg_extract_packets(data, len) {
+    var pages_result = ogg_parse_pages(data, len);
+    if (is_err(pages_result) == 1) { return pages_result; }
+    var pages = pages_result;
+
+    var packets = vec_new();
+
+    # Current packet accumulator: use a builder approach
+    var cur_buf = alloc(65536);
+    var cur_len = 0;
+    var cur_cap = 65536;
+
+    var pi = 0;
+    var num_pages = vec_len(pages);
+
+    while (pi < num_pages) {
+        var page = vec_get(pages, pi);
+        var ht = ogg_page_header_type(page);
+
+        # If NOT a continuation page and we have accumulated data, flush it
+        if ((ht & 0x01) == 0) {
+            if (cur_len > 0) {
+                var pkt = alloc(cur_len);
+                memcpy(pkt, cur_buf, cur_len);
+                vec_push(packets, str_new(pkt, cur_len));
+                cur_len = 0;
+            }
+        }
+
+        var segments = ogg_page_segments(page);
+        var nseg = ogg_page_num_segments(page);
+        var body = ogg_page_body(page);
+        var body_offset = 0;
+
+        var sj = 0;
+        while (sj < nseg) {
+            var lacing_value = load8(segments + sj);
+
+            if (body_offset + lacing_value > ogg_page_body_size(page)) {
+                return err(ERR_DECODE);
+            }
+
+            # Ensure capacity
+            if (cur_len + lacing_value > cur_cap) {
+                var new_cap = cur_cap * 2;
+                if (new_cap < cur_len + lacing_value) {
+                    new_cap = cur_len + lacing_value + 65536;
+                }
+                var new_buf = alloc(new_cap);
+                memcpy(new_buf, cur_buf, cur_len);
+                cur_buf = new_buf;
+                cur_cap = new_cap;
+            }
+
+            memcpy(cur_buf + cur_len, body + body_offset, lacing_value);
+            cur_len = cur_len + lacing_value;
+            body_offset = body_offset + lacing_value;
+
+            if (lacing_value < 255) {
+                # Packet boundary
+                var pkt = alloc(cur_len + 1);
+                memcpy(pkt, cur_buf, cur_len);
+                vec_push(packets, str_new(pkt, cur_len));
+                cur_len = 0;
+            }
+
+            sj = sj + 1;
+        }
+
+        pi = pi + 1;
+    }
+
+    # Flush remaining data
+    if (cur_len > 0) {
+        var pkt = alloc(cur_len);
+        memcpy(pkt, cur_buf, cur_len);
+        vec_push(packets, str_new(pkt, cur_len));
+    }
+
+    return packets;
+}
+
+# ================================================================
+# Page building / muxing
+# ================================================================
+
+# Header type flags
+var OGG_FLAG_CONTINUATION = 0x01;
+var OGG_FLAG_BOS          = 0x02;
+var OGG_FLAG_EOS          = 0x04;
+
+# Build a single Ogg page from a payload buffer.
+# Returns a Str (pointer + length) for the page bytes.
+fn ogg_build_page(header_type, granule, serial, page_seq, payload, payload_len) {
+    # Compute lacing values
+    var segments = alloc(256);
+    var num_segments = 0;
+    var remaining = payload_len;
+
+    while (remaining >= 255) {
+        store8(segments + num_segments, 255);
+        num_segments = num_segments + 1;
+        remaining = remaining - 255;
+        if (num_segments >= 255) { break; }
+    }
+    if (num_segments < 255) {
+        store8(segments + num_segments, remaining);
+        num_segments = num_segments + 1;
+    }
+
+    # Clamp to 255 segments max
+    if (num_segments > 255) { num_segments = 255; }
+
+    # Calculate actual payload covered
+    var actual_payload = 0;
+    var si = 0;
+    while (si < num_segments) {
+        actual_payload = actual_payload + load8(segments + si);
+        si = si + 1;
+    }
+
+    var page_size = 27 + num_segments + actual_payload;
+    var page = alloc(page_size);
+    memset(page, 0, page_size);
+
+    # Capture pattern: "OggS"
+    store8(page, 0x4F);
+    store8(page + 1, 0x67);
+    store8(page + 2, 0x67);
+    store8(page + 3, 0x53);
+
+    # Version
+    store8(page + 4, 0);
+
+    # Header type
+    store8(page + 5, header_type);
+
+    # Granule position (i64 LE)
+    ogg_write_i64_le(page, 6, granule);
+
+    # Serial number (u32 LE)
+    write_u32_le(page, 14, serial);
+
+    # Page sequence number (u32 LE)
+    write_u32_le(page, 18, page_seq);
+
+    # CRC placeholder (zeroed)
+    write_u32_le(page, 22, 0);
+
+    # Number of segments
+    store8(page + 26, num_segments);
+
+    # Segment table
+    var ti = 0;
+    while (ti < num_segments) {
+        store8(page + 27 + ti, load8(segments + ti));
+        ti = ti + 1;
+    }
+
+    # Body
+    memcpy(page + 27 + num_segments, payload, actual_payload);
+
+    # Compute and fill CRC
+    var crc = ogg_crc32_page(page, page_size);
+    write_u32_le(page, 22, crc);
+
+    return str_new(page, page_size);
+}
+
+# Mux packets into a complete Ogg bitstream.
+# packets: vec of Str (data+len), granules: pointer to i64 array,
+# serial: serial number, num_packets: count
+# Returns a Str (data+len) for the whole bitstream.
+fn ogg_mux_packets(packets, granules, serial, num_packets) {
+    # First pass: compute total output size (upper bound)
+    var total = 0;
+    var mi = 0;
+    while (mi < num_packets) {
+        var pkt = vec_get(packets, mi);
+        var plen = str_len(pkt);
+        # page overhead: 27 + ceil(plen/255) + 1
+        total = total + 27 + (plen / 255) + 1 + plen + 256;
+        mi = mi + 1;
+    }
+
+    var out = alloc(total);
+    var out_pos = 0;
+
+    mi = 0;
+    while (mi < num_packets) {
+        var pkt = vec_get(packets, mi);
+        var pdata = str_data(pkt);
+        var plen = str_len(pkt);
+        var granule = load64(granules + mi * 8);
+
+        var flags = 0;
+        if (mi == 0) {
+            flags = flags | OGG_FLAG_BOS;
+        }
+        if (mi == num_packets - 1) {
+            flags = flags | OGG_FLAG_EOS;
+        }
+
+        var page_str = ogg_build_page(flags, granule, serial, mi, pdata, plen);
+        var page_data = str_data(page_str);
+        var page_len = str_len(page_str);
+
+        memcpy(out + out_pos, page_data, page_len);
+        out_pos = out_pos + page_len;
+
+        mi = mi + 1;
+    }
+
+    return str_new(out, out_pos);
+}
+
+# ================================================================
+# ogg_decode — extract packets and dispatch to codec
+# ================================================================
+
+fn ogg_decode(data, len) {
+    var packets = ogg_extract_packets(data, len);
+    if (is_err(packets) == 1) { return packets; }
+    if (vec_len(packets) == 0) { return err(ERR_END_OF_STREAM); }
+
+    # Check first packet for OpusHead and delegate
+    var pkt0 = vec_get(packets, 0);
+    var pkt0_data = str_data(pkt0);
+    var pkt0_len = str_len(pkt0);
+    if (pkt0_len >= 8) {
+        if (load8(pkt0_data) == 0x4F) {
+            if (load8(pkt0_data + 1) == 0x70) {
+                if (load8(pkt0_data + 2) == 0x75) {
+                    if (load8(pkt0_data + 3) == 0x73) {
+                        if (load8(pkt0_data + 4) == 0x48) {
+                            if (load8(pkt0_data + 5) == 0x65) {
+                                if (load8(pkt0_data + 6) == 0x61) {
+                                    if (load8(pkt0_data + 7) == 0x64) {
+                                        return opus_decode_from_packets(packets, data, len);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return err(ERR_UNSUPPORTED_FMT);
+}
+
+# ================================================================
+# Tests
+# ================================================================
+
+# Helper: build a test Ogg page with given params (raw bytes)
+fn _test_build_ogg_page(header_type, granule, serial, page_seq, lacing, num_lacing, body, body_len) {
+    var page_size = 27 + num_lacing + body_len;
+    var page = alloc(page_size);
+    memset(page, 0, page_size);
+
+    # OggS
+    store8(page, 0x4F);
+    store8(page + 1, 0x67);
+    store8(page + 2, 0x67);
+    store8(page + 3, 0x53);
+    # Version 0
+    store8(page + 4, 0);
+    # Header type
+    store8(page + 5, header_type);
+    # Granule
+    ogg_write_i64_le(page, 6, granule);
+    # Serial
+    write_u32_le(page, 14, serial);
+    # Page seq
+    write_u32_le(page, 18, page_seq);
+    # CRC placeholder
+    write_u32_le(page, 22, 0);
+    # Num segments
+    store8(page + 26, num_lacing);
+    # Segment table
+    var li = 0;
+    while (li < num_lacing) {
+        store8(page + 27 + li, load8(lacing + li));
+        li = li + 1;
+    }
+    # Body
+    memcpy(page + 27 + num_lacing, body, body_len);
+
+    # Compute and fill CRC
+    var crc = ogg_crc32_page(page, page_size);
+    write_u32_le(page, 22, crc);
+
+    return str_new(page, page_size);
+}
+
+fn test_ogg_crc32_known_vectors() {
+    test_group("ogg: crc32 known vectors");
+
+    # CRC of empty data should be 0
+    var empty = alloc(1);
+    assert_eq(ogg_crc32(empty, 0), 0, "crc32 empty is 0");
+
+    # CRC of "OggS" should be deterministic and non-zero
+    var oggs = alloc(4);
+    store8(oggs, 0x4F); store8(oggs+1, 0x67); store8(oggs+2, 0x67); store8(oggs+3, 0x53);
+    var crc1 = ogg_crc32(oggs, 4);
+    var crc2 = ogg_crc32(oggs, 4);
+    assert_eq(crc1, crc2, "crc32 deterministic");
+    assert_neq(crc1, 0, "crc32 OggS non-zero");
+
+    # CRC of single zero byte
+    var z = alloc(1);
+    store8(z, 0);
+    var crc3 = ogg_crc32(z, 1);
+    assert_eq(crc3, ogg_crc32(z, 1), "crc32 single zero deterministic");
+
+    return 0;
+}
+
+fn test_ogg_page_parse_roundtrip() {
+    test_group("ogg: page parse roundtrip");
+
+    # Build a page via the build function
+    var payload = alloc(15);
+    memcpy(payload, "hello_ogg_muxer", 15);
+
+    var page_str = ogg_build_page(OGG_FLAG_BOS, 0, 42, 0, payload, 15);
+    var page_data = str_data(page_str);
+    var page_len = str_len(page_str);
+
+    # Parse it back
+    var end_buf = alloc(8);
+    var page = ogg_parse_page(page_data, page_len, 0, end_buf);
+    assert(is_ok(page) == 1, "parse built page ok");
+
+    var end = load64(end_buf);
+    assert_eq(end, page_len, "parse consumed all bytes");
+    assert_eq(ogg_page_header_type(page), OGG_FLAG_BOS, "header type BOS");
+    assert_eq(ogg_page_granule(page), 0, "granule 0");
+    assert_eq(ogg_page_serial(page), 42, "serial 42");
+    assert_eq(ogg_page_seq(page), 0, "page_seq 0");
+    assert_eq(ogg_page_body_size(page), 15, "body size 15");
+
+    # Verify body content
+    var body = ogg_page_body(page);
+    assert(memeq(body, "hello_ogg_muxer", 15) == 1, "body matches");
+
+    return 0;
+}
+
+fn test_ogg_reject_invalid_magic() {
+    test_group("ogg: reject invalid magic");
+    var bad = alloc(32);
+    memcpy(bad, "NotOggData1234567890123456789012", 31);
+    var end_buf = alloc(8);
+    var result = ogg_parse_page(bad, 32, 0, end_buf);
+    assert(is_err(result) == 1, "reject bad magic");
+    return 0;
+}
+
+fn test_ogg_reject_short_data() {
+    test_group("ogg: reject short data");
+    var short = alloc(4);
+    store8(short, 0x4F); store8(short+1, 0x67); store8(short+2, 0x67); store8(short+3, 0x53);
+    var end_buf = alloc(8);
+    var result = ogg_parse_page(short, 4, 0, end_buf);
+    assert(is_err(result) == 1, "reject short data");
+    return 0;
+}
+
+fn test_ogg_extract_single_packet() {
+    test_group("ogg: extract single packet");
+
+    var body = alloc(11);
+    memcpy(body, "packet_data", 11);
+    var lacing = alloc(1);
+    store8(lacing, 11);
+    var page_str = _test_build_ogg_page(0x02, 100, 1, 0, lacing, 1, body, 11);
+    var pd = str_data(page_str);
+    var pl = str_len(page_str);
+
+    var packets = ogg_extract_packets(pd, pl);
+    assert(is_ok(packets) == 1, "extract ok");
+    assert_eq(vec_len(packets), 1, "1 packet");
+
+    var pkt0 = vec_get(packets, 0);
+    assert_eq(str_len(pkt0), 11, "packet len 11");
+    assert(memeq(str_data(pkt0), "packet_data", 11) == 1, "packet content");
+
+    return 0;
+}
+
+fn test_ogg_extract_multi_packet() {
+    test_group("ogg: extract multi packets in one page");
+
+    # Two packets: "aaa" (3 bytes) and "bb" (2 bytes)
+    var body = alloc(5);
+    memcpy(body, "aaabb", 5);
+    var lacing = alloc(2);
+    store8(lacing, 3);
+    store8(lacing + 1, 2);
+    var page_str = _test_build_ogg_page(0x02, 100, 1, 0, lacing, 2, body, 5);
+    var pd = str_data(page_str);
+    var pl = str_len(page_str);
+
+    var packets = ogg_extract_packets(pd, pl);
+    assert(is_ok(packets) == 1, "multi extract ok");
+    assert_eq(vec_len(packets), 2, "2 packets");
+
+    var p0 = vec_get(packets, 0);
+    assert_eq(str_len(p0), 3, "pkt0 len 3");
+    assert(memeq(str_data(p0), "aaa", 3) == 1, "pkt0 = aaa");
+
+    var p1 = vec_get(packets, 1);
+    assert_eq(str_len(p1), 2, "pkt1 len 2");
+    assert(memeq(str_data(p1), "bb", 2) == 1, "pkt1 = bb");
+
+    return 0;
+}
+
+fn test_ogg_continuation_pages() {
+    test_group("ogg: continuation across pages");
+
+    # Page 1: 255 bytes of 0xAA, lacing [255] (continued)
+    var body1 = alloc(255);
+    memset(body1, 0xAA, 255);
+    var lacing1 = alloc(1);
+    store8(lacing1, 255);
+    var p1_str = _test_build_ogg_page(0x02, 0, 1, 0, lacing1, 1, body1, 255);
+
+    # Page 2: 10 bytes of 0xBB, continuation flag 0x01, lacing [10]
+    var body2 = alloc(10);
+    memset(body2, 0xBB, 10);
+    var lacing2 = alloc(1);
+    store8(lacing2, 10);
+    var p2_str = _test_build_ogg_page(0x01, 100, 1, 1, lacing2, 1, body2, 10);
+
+    # Concatenate pages
+    var total_len = str_len(p1_str) + str_len(p2_str);
+    var combined = alloc(total_len);
+    memcpy(combined, str_data(p1_str), str_len(p1_str));
+    memcpy(combined + str_len(p1_str), str_data(p2_str), str_len(p2_str));
+
+    var packets = ogg_extract_packets(combined, total_len);
+    assert(is_ok(packets) == 1, "continuation extract ok");
+    assert_eq(vec_len(packets), 1, "1 continued packet");
+
+    var pkt = vec_get(packets, 0);
+    assert_eq(str_len(pkt), 265, "continued packet len 265");
+
+    # Check first 255 bytes are 0xAA
+    var pdata = str_data(pkt);
+    var all_aa = 1;
+    var ci = 0;
+    while (ci < 255) {
+        if (load8(pdata + ci) != 0xAA) { all_aa = 0; }
+        ci = ci + 1;
+    }
+    assert(all_aa == 1, "first 255 bytes 0xAA");
+
+    # Check last 10 bytes are 0xBB
+    var all_bb = 1;
+    ci = 255;
+    while (ci < 265) {
+        if (load8(pdata + ci) != 0xBB) { all_bb = 0; }
+        ci = ci + 1;
+    }
+    assert(all_bb == 1, "last 10 bytes 0xBB");
+
+    return 0;
+}
+
+fn test_ogg_large_packet_lacing() {
+    test_group("ogg: large packet lacing roundtrip");
+
+    # A 600-byte packet
+    var big = alloc(600);
+    memset(big, 0xAA, 600);
+
+    var packets = vec_new();
+    vec_push(packets, str_new(big, 600));
+
+    var granules = alloc(8);
+    store64(granules, 0);
+
+    var stream = ogg_mux_packets(packets, granules, 1, 1);
+    var extracted = ogg_extract_packets(str_data(stream), str_len(stream));
+    assert(is_ok(extracted) == 1, "large packet extract ok");
+    assert_eq(vec_len(extracted), 1, "1 large packet");
+
+    var pkt = vec_get(extracted, 0);
+    assert_eq(str_len(pkt), 600, "large packet len 600");
+    assert(memeq(str_data(pkt), big, 600) == 1, "large packet content matches");
+
+    return 0;
+}
+
+fn test_ogg_mux_roundtrip() {
+    test_group("ogg: mux/demux roundtrip");
+
+    var packets = vec_new();
+    var p1 = alloc(12); memcpy(p1, "first_packet", 12);
+    var p2 = alloc(13); memcpy(p2, "second_packet", 13);
+    var p3 = alloc(12); memcpy(p3, "third_packet", 12);
+    vec_push(packets, str_new(p1, 12));
+    vec_push(packets, str_new(p2, 13));
+    vec_push(packets, str_new(p3, 12));
+
+    var granules = alloc(24);
+    store64(granules, 0);
+    store64(granules + 8, 960);
+    store64(granules + 16, 1920);
+
+    var stream = ogg_mux_packets(packets, granules, 1, 3);
+    var extracted = ogg_extract_packets(str_data(stream), str_len(stream));
+    assert(is_ok(extracted) == 1, "mux roundtrip extract ok");
+    assert_eq(vec_len(extracted), 3, "3 packets");
+
+    var e0 = vec_get(extracted, 0);
+    assert_eq(str_len(e0), 12, "pkt0 len");
+    assert(memeq(str_data(e0), "first_packet", 12) == 1, "pkt0 content");
+
+    var e1 = vec_get(extracted, 1);
+    assert_eq(str_len(e1), 13, "pkt1 len");
+    assert(memeq(str_data(e1), "second_packet", 13) == 1, "pkt1 content");
+
+    var e2 = vec_get(extracted, 2);
+    assert_eq(str_len(e2), 12, "pkt2 len");
+    assert(memeq(str_data(e2), "third_packet", 12) == 1, "pkt2 content");
+
+    return 0;
+}
+
+fn test_ogg_mux_single_has_bos_eos() {
+    test_group("ogg: single packet BOS+EOS");
+
+    var packets = vec_new();
+    var p1 = alloc(11); memcpy(p1, "only_packet", 11);
+    vec_push(packets, str_new(p1, 11));
+
+    var granules = alloc(8);
+    store64(granules, 0);
+
+    var stream = ogg_mux_packets(packets, granules, 1, 1);
+
+    # Parse the single page and check flags
+    var end_buf = alloc(8);
+    var page = ogg_parse_page(str_data(stream), str_len(stream), 0, end_buf);
+    assert(is_ok(page) == 1, "single page parse ok");
+
+    var ht = ogg_page_header_type(page);
+    assert_neq(ht & OGG_FLAG_BOS, 0, "has BOS");
+    assert_neq(ht & OGG_FLAG_EOS, 0, "has EOS");
+
+    return 0;
+}
+
+fn test_ogg_crc_mismatch() {
+    test_group("ogg: CRC mismatch detection");
+
+    var body = alloc(5);
+    memcpy(body, "hello", 5);
+    var lacing = alloc(1);
+    store8(lacing, 5);
+    var page_str = _test_build_ogg_page(0x02, 0, 1, 0, lacing, 1, body, 5);
+    var pd = str_data(page_str);
+    var pl = str_len(page_str);
+
+    # Corrupt last byte
+    store8(pd + pl - 1, load8(pd + pl - 1) ^ 0xFF);
+
+    var end_buf = alloc(8);
+    var result = ogg_parse_page(pd, pl, 0, end_buf);
+    assert(is_err(result) == 1, "CRC mismatch detected");
+
+    return 0;
+}
+
+fn test_ogg_multiple_pages() {
+    test_group("ogg: multiple pages");
+
+    var body1 = alloc(3); memcpy(body1, "abc", 3);
+    var lacing1 = alloc(1); store8(lacing1, 3);
+    var p1_str = _test_build_ogg_page(0x02, 0, 1, 0, lacing1, 1, body1, 3);
+
+    var body2 = alloc(2); memcpy(body2, "de", 2);
+    var lacing2 = alloc(1); store8(lacing2, 2);
+    var p2_str = _test_build_ogg_page(0x00, 100, 1, 1, lacing2, 1, body2, 2);
+
+    var total_len = str_len(p1_str) + str_len(p2_str);
+    var combined = alloc(total_len);
+    memcpy(combined, str_data(p1_str), str_len(p1_str));
+    memcpy(combined + str_len(p1_str), str_data(p2_str), str_len(p2_str));
+
+    var packets = ogg_extract_packets(combined, total_len);
+    assert(is_ok(packets) == 1, "multi page extract ok");
+    assert_eq(vec_len(packets), 2, "2 packets from 2 pages");
+
+    var pk0 = vec_get(packets, 0);
+    assert_eq(str_len(pk0), 3, "pkt0 len 3");
+    assert(memeq(str_data(pk0), "abc", 3) == 1, "pkt0 = abc");
+
+    var pk1 = vec_get(packets, 1);
+    assert_eq(str_len(pk1), 2, "pkt1 len 2");
+    assert(memeq(str_data(pk1), "de", 2) == 1, "pkt1 = de");
+
+    return 0;
+}
+
+fn test_ogg_decode_unsupported() {
+    test_group("ogg: decode returns unsupported");
+
+    var body = alloc(8);
+    memcpy(body, "NotOpus!", 8);
+    var lacing = alloc(1);
+    store8(lacing, 8);
+    var page_str = _test_build_ogg_page(0x02, 0, 1, 0, lacing, 1, body, 8);
+
+    var result = ogg_decode(str_data(page_str), str_len(page_str));
+    assert(is_err(result) == 1, "ogg_decode unsupported codec");
+
+    return 0;
+}

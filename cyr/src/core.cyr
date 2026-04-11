@@ -11,6 +11,36 @@
 #   - Vec used for stream lists, metadata stored in hashmap
 
 # ================================================================
+# Byte read/write helpers (shared by all modules)
+# ================================================================
+
+fn read_u16_le(data, off) {
+    return load8(data + off) | (load8(data + off + 1) << 8);
+}
+
+fn read_u32_le(data, off) {
+    return load8(data + off) | (load8(data + off + 1) << 8) | (load8(data + off + 2) << 16) | (load8(data + off + 3) << 24);
+}
+
+fn write_u16_le(buf, off, val) {
+    store8(buf + off, val & 0xFF);
+    store8(buf + off + 1, (val >> 8) & 0xFF);
+    return 0;
+}
+
+fn write_u32_le(buf, off, val) {
+    store8(buf + off, val & 0xFF);
+    store8(buf + off + 1, (val >> 8) & 0xFF);
+    store8(buf + off + 2, (val >> 16) & 0xFF);
+    store8(buf + off + 3, (val >> 24) & 0xFF);
+    return 0;
+}
+
+fn read_u32_be(data, off) {
+    return (load8(data + off) << 24) | (load8(data + off + 1) << 16) | (load8(data + off + 2) << 8) | load8(data + off + 3);
+}
+
+# ================================================================
 # Audio Codecs
 # ================================================================
 
