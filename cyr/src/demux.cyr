@@ -1,0 +1,48 @@
+# tarang/demux — Container demuxing common types
+#
+# Packet struct, demuxer vtable slots, format detection dispatch.
+# Individual demuxers (wav, ogg, mp4, mkv) include this file.
+
+# ================================================================
+# Packet — a raw packet extracted from a container
+#   Layout: 40 bytes
+#     +0:  stream_index
+#     +8:  data (pointer to byte buffer)
+#     +16: data_len
+#     +24: timestamp_ns (nanoseconds)
+#     +32: is_keyframe (1 or 0)
+# ================================================================
+
+fn packet_new(stream_index, data, data_len, ts_ns, is_keyframe) {
+    var p = alloc(40);
+    store64(p,      stream_index);
+    store64(p + 8,  data);
+    store64(p + 16, data_len);
+    store64(p + 24, ts_ns);
+    store64(p + 32, is_keyframe);
+    return p;
+}
+
+fn packet_stream_index(p) { return load64(p); }
+fn packet_data(p)         { return load64(p + 8); }
+fn packet_data_len(p)     { return load64(p + 16); }
+fn packet_timestamp_ns(p) { return load64(p + 24); }
+fn packet_is_keyframe(p)  { return load64(p + 32); }
+
+# ================================================================
+# Demuxer vtable slots (for trait-like dispatch)
+#   slot 0: probe(self) → media_info ptr or err
+#   slot 1: next_packet(self) → packet ptr or err
+#   slot 2: seek(self, ts_ns) → 0 or err
+# ================================================================
+
+var DEMUX_PROBE = 0;
+var DEMUX_NEXT_PACKET = 1;
+var DEMUX_SEEK = 2;
+
+# detect_format: wrapper around container_from_magic that returns error
+fn detect_format(data, len) {
+    var fmt = container_from_magic(data, len);
+    if (fmt < 0) { return tarang_err(ERR_UNSUPPORTED_FORMAT); }
+    return fmt;
+}

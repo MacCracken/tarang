@@ -1,12 +1,13 @@
 # tarang — AI-native media framework (Cyrius port)
 #
-# Phase 1: core types, enums, error codes, structs, magic detection
+# Phase 1: core types + WAV demuxer
 #
 # Design decisions:
 #   - All audio samples are f64 internally (matches shravan v2.0.0)
 #   - Packed Result: Ok >= 0, Err < 0 (bit 63 set)
 #   - Structs are heap-allocated with accessor functions
 #   - Vec for stream lists, hashmap for metadata tags
+#   - Demuxers work on file descriptors (syscall-based I/O)
 
 include "lib/string.cyr"
 include "lib/fmt.cyr"
@@ -19,8 +20,11 @@ include "lib/assert.cyr"
 include "lib/tagged.cyr"
 include "lib/math.cyr"
 include "lib/hashmap.cyr"
+include "lib/syscalls.cyr"
 
 include "src/core.cyr"
+include "src/demux.cyr"
+include "src/demux_wav.cyr"
 
 # ================================================================
 # Tests — Enums & Names
@@ -314,11 +318,189 @@ fn test_utils() {
 }
 
 # ================================================================
+# Tests — Demux Common
+# ================================================================
+
+fn test_demux_common() {
+    # Packet creation
+    var data = alloc(64);
+    memset(data, 0xAB, 64);
+    var p = packet_new(1, data, 64, 100000000, 1);
+    assert_eq(packet_stream_index(p), 1, "pkt stream_index");
+    assert_eq(packet_data_len(p), 64, "pkt data_len");
+    assert_eq(packet_timestamp_ns(p), 100000000, "pkt ts_ns");
+    assert_eq(packet_is_keyframe(p), 1, "pkt keyframe");
+    assert_eq(load8(packet_data(p)), 0xAB, "pkt data byte");
+
+    # detect_format wrapping container_from_magic
+    var wav_hdr = alloc(16);
+    memset(wav_hdr, 0, 16);
+    memcpy(wav_hdr, "RIFF", 4);
+    memcpy(wav_hdr + 8, "WAVE", 4);
+    assert_eq(detect_format(wav_hdr, 16), FMT_WAV, "detect wav");
+    assert_eq(tarang_is_err(detect_format(wav_hdr, 4)), 1, "detect too short");
+
+    return 0;
+}
+
+# ================================================================
+# Tests — WAV Demuxer
+# ================================================================
+
+fn test_wav_probe() {
+    # 44100 samples, stereo, 16-bit = 1 second of audio
+    var wav = make_wav(44100, 44100, 2, 16);
+    var wav_len = rethi();
+
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    assert(d != 0, "wav demuxer created");
+
+    var mi = wav_probe(d);
+    assert(tarang_is_err(mi) == 0, "wav probe ok");
+    assert_eq(media_info_format(mi), FMT_WAV, "wav format");
+    assert_eq(media_info_has_audio(mi), 1, "wav has_audio");
+    assert_eq(media_info_has_video(mi), 0, "wav no video");
+    assert_eq(media_info_audio_count(mi), 1, "wav 1 audio stream");
+
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_codec(a), AUDIO_PCM, "wav codec pcm");
+    assert_eq(audio_stream_sample_rate(a), 44100, "wav sr 44100");
+    assert_eq(audio_stream_channels(a), 2, "wav ch 2");
+
+    # Duration should be ~1 second (1_000_000_000 ns)
+    var dur = media_info_duration_ns(mi);
+    # Allow 1ms tolerance
+    assert(dur > 999000000, "wav dur > 999ms");
+    assert(dur < 1001000000, "wav dur < 1001ms");
+
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_probe_mono() {
+    var wav = make_wav(48000, 48000, 1, 16);
+    var wav_len = rethi();
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    var mi = wav_probe(d);
+    assert(tarang_is_err(mi) == 0, "wav mono probe ok");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_channels(a), 1, "wav mono ch");
+    assert_eq(audio_stream_sample_rate(a), 48000, "wav mono sr");
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_read_packets() {
+    # 1000 samples, mono, 16-bit = 2000 bytes of data
+    var wav = make_wav(1000, 44100, 1, 16);
+    var wav_len = rethi();
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    wav_probe(d);
+
+    var p = wav_next_packet(d);
+    assert(tarang_is_err(p) == 0, "wav read pkt ok");
+    assert_eq(packet_stream_index(p), 0, "wav pkt idx 0");
+    assert_eq(packet_is_keyframe(p), 1, "wav pkt keyframe");
+    assert(packet_data_len(p) > 0, "wav pkt has data");
+
+    # Read all packets and verify total bytes
+    var total = packet_data_len(p);
+    while (1 == 1) {
+        var np = wav_next_packet(d);
+        if (tarang_is_err(np) == 1) { break; }
+        total = total + packet_data_len(np);
+    }
+    assert_eq(total, 2000, "wav total bytes 2000");
+
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_seek() {
+    # 44100 samples at 44100 Hz = 1 second, stereo 16-bit
+    var wav = make_wav(44100, 44100, 2, 16);
+    var wav_len = rethi();
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    wav_probe(d);
+
+    # Seek to 500ms = 500_000_000 ns
+    var r = wav_seek(d, 500000000);
+    assert_eq(r, 0, "wav seek ok");
+
+    var p = wav_next_packet(d);
+    assert(tarang_is_err(p) == 0, "wav pkt after seek");
+    # Timestamp should be ~500ms (500_000_000 ns), allow some tolerance
+    var ts = packet_timestamp_ns(p);
+    assert(ts > 490000000, "wav seek ts > 490ms");
+    assert(ts < 510000000, "wav seek ts < 510ms");
+
+    # Read remaining and verify ~half the data
+    var remaining = packet_data_len(p);
+    while (1 == 1) {
+        var np = wav_next_packet(d);
+        if (tarang_is_err(np) == 1) { break; }
+        remaining = remaining + packet_data_len(np);
+    }
+    # Total data = 44100*2*2 = 176400, half = 88200
+    assert(remaining > 88100, "wav remaining > 88100");
+    assert(remaining < 88300, "wav remaining < 88300");
+
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_seek_past_end() {
+    var wav = make_wav(100, 44100, 2, 16);
+    var wav_len = rethi();
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    wav_probe(d);
+
+    # Seek to 1 hour — should clamp to data_size
+    var r = wav_seek(d, 3600000000000);
+    assert_eq(r, 0, "wav seek past end ok");
+
+    # Next packet should be end of stream
+    var p = wav_next_packet(d);
+    assert_eq(tarang_is_err(p), 1, "wav eos after seek past");
+    assert_eq(tarang_err_code(p), ERR_END_OF_STREAM, "wav eos code");
+
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_invalid() {
+    # Not a WAV file
+    var garbage = alloc(100);
+    memset(garbage, 0, 100);
+    var d = wav_demuxer_from_buf(garbage, 100);
+    var r = wav_probe(d);
+    assert_eq(tarang_is_err(r), 1, "wav invalid rejected");
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+fn test_wav_24bit() {
+    var wav = make_wav(100, 44100, 1, 24);
+    var wav_len = rethi();
+    var d = wav_demuxer_from_buf(wav, wav_len);
+    var mi = wav_probe(d);
+    assert(tarang_is_err(mi) == 0, "wav 24bit probe ok");
+    var a = media_info_audio_stream(mi, 0);
+    assert_eq(audio_stream_codec(a), AUDIO_PCM, "wav 24bit codec");
+    assert_eq(audio_stream_sample_rate(a), 44100, "wav 24bit sr");
+    assert_eq(audio_stream_channels(a), 1, "wav 24bit ch");
+    # Bitrate = 44100 * 1 * 24 = 1058400
+    assert_eq(audio_stream_bitrate(a), 1058400, "wav 24bit bitrate");
+    syscall(3, wav_fd(d));
+    return 0;
+}
+
+# ================================================================
 # Test Runner
 # ================================================================
 
 alloc_init();
-syscall(1, 1, "tarang core tests\n", 18);
+syscall(1, 1, "tarang tests\n", 13);
 
 test_enums();
 test_errors();
@@ -326,6 +508,15 @@ test_magic();
 test_structs();
 test_media_info();
 test_utils();
+
+test_demux_common();
+test_wav_probe();
+test_wav_probe_mono();
+test_wav_read_packets();
+test_wav_seek();
+test_wav_seek_past_end();
+test_wav_invalid();
+test_wav_24bit();
 
 assert_summary();
 if (_assert_fail > 0) { syscall(60, 1); }
